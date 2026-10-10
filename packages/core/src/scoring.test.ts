@@ -16,9 +16,17 @@ const jupSol: PoolAssessmentInput = {
 };
 
 describe('scorePool', () => {
-  it('matches the approved design for JUP / SOL (score 76, five components)', () => {
+  it('matches the approved design for JUP / SOL when fee and farm data are absent', () => {
     const r = scorePool(jupSol, DEFAULT_WEIGHTS.balanced);
-    expect(r.breakdown.map((c) => c.label)).toEqual(['Volume / TVL', 'Fee tier', 'Volatility', '7-day trend', 'Holder quality']);
+    expect(r.breakdown.map((c) => c.label)).toEqual([
+      'Volume / TVL',
+      'Fee tier',
+      'Volatility',
+      '7-day trend',
+      'Holder quality',
+      'Fees vs volatility',
+      'Farm rewards',
+    ]);
     expect(r.score).toBe(Math.round(30 + Math.min(40, (16.1 / 8.4) * 13) + 7.5 - 6.2 + 4.2 * 1.4 + 11));
   });
 

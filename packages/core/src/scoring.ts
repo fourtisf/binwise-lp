@@ -20,6 +20,13 @@ export interface ScoreWeights {
   trendMax: number;
   /** points at holderQuality = 1 */
   holder: number;
+  /** points per 1 bps/day of fee yield above volatility loss (LVR), clamped */
+  edge: number;
+  edgeMin: number;
+  edgeMax: number;
+  /** points per 1% farm reward APR, capped */
+  farm: number;
+  farmCap: number;
 }
 
 const BASE: ScoreWeights = {
@@ -32,6 +39,11 @@ const BASE: ScoreWeights = {
   trendMin: -25,
   trendMax: 12,
   holder: 11,
+  edge: 0.4,
+  edgeMin: -20,
+  edgeMax: 15,
+  farm: 0.1,
+  farmCap: 8,
 };
 
 export const DEFAULT_WEIGHTS: Record<RiskProfile, ScoreWeights> = {
@@ -51,6 +63,10 @@ export interface PoolMetrics {
   trend7d: number | null;
   /** 0 (worst) … 1 (clean holder distribution). null = not checked */
   holderQuality: number | null;
+  /** Real fees paid to LPs over 24h ÷ TVL, percent per day (includes DLMM's dynamic fee). null = unknown */
+  feeYieldDailyPct?: number | null;
+  /** Liquidity-mining reward APR, percent */
+  farmAprPct?: number | null;
 }
 
 export interface ScoreResult {
@@ -68,10 +84,27 @@ export function scorePool(m: PoolMetrics, w: ScoreWeights): ScoreResult {
     { label: 'Volatility', value: -w.volatility * m.volatilityPct },
     { label: '7-day trend', value: clamp(w.trend * (m.trend7d ?? 0), w.trendMin, w.trendMax) },
     { label: 'Holder quality', value: w.holder * (m.holderQuality ?? 0.5) },
+    { label: 'Fees vs volatility', value: m.feeYieldDailyPct == null ? 0 : clamp(w.edge * edgeBpsPerDay(m.feeYieldDailyPct, m.volatilityPct), w.edgeMin, w.edgeMax) },
+    { label: 'Farm rewards', value: Math.min(w.farmCap, w.farm * (m.farmAprPct ?? 0)) },
   ];
   const score = Math.round(clamp(30 + breakdown.reduce((s, c) => s + c.value, 0), 0, 100));
   return { score, breakdown };
 }
+
+/**
+ * Loss-versus-rebalancing (LVR) of a constant-product position, percent per day:
+ * σ²/8 with σ the daily volatility as a fraction. Fees and LVR scale the same way with
+ * concentration, so fee yield − LVR on the same liquidity is the pool's edge for an LP.
+ */
+export const lvrDailyPct = (volatilityDailyPct: number) => (volatilityDailyPct / 100) ** 2 / 8 * 100;
+
+/** Fee yield minus LVR, in basis points per day. Positive = fees outpace volatility losses. */
+export const edgeBpsPerDay = (feeYieldDailyPct: number, volatilityDailyPct: number) =>
+  (feeYieldDailyPct - lvrDailyPct(volatilityDailyPct)) * 100;
+
+/** Whether the EMA20/EMA50 signal counts, given the configured mode and the market regime. */
+export const emaSignal = (emaBearish: boolean, regime: 'range' | 'up' | 'down' | undefined, t: AgentThresholds = DEFAULT_THRESHOLDS) =>
+  emaBearish && (t.emaExitMode === 'always' || regime === 'down');
 
 export const feeAprPct = (volume24h: number, tvl: number, baseFeePct: number) =>
   tvl > 0 ? (volume24h / tvl) * baseFeePct * 365 : 0;
@@ -91,6 +124,30 @@ export interface AgentThresholds {
   netVsHoldExitPct: number;
   /** Holder quality below this fails the safety check */
   minHolderQuality: number;
+  /** Multiplies the profile's range width */
+  rangeMult: number;
+  minHalfWidth: number;
+  maxHalfWidth: number;
+  /** Rebalance only when expected 6h fees exceed this multiple of the move cost */
+  rebalanceFeeMultiple: number;
+  rebalanceCooldownMin: number;
+  /** balanced = swap back to 50/50; single = re-open one-sided with the token already held (no swap) */
+  rebalanceMode: 'balanced' | 'single';
+  /** Trending up → one-sided liquidity above price; trending down → no new deploys */
+  useRegime: boolean;
+  /** Efficiency ratio above which the market counts as trending (0–1) */
+  regimeEr: number;
+  /** Max share of the vault in any one non-stable token, percent */
+  maxTokenExposurePct: number;
+  /** Hours to wait before re-entering a pool after an exit */
+  reentryCooldownHours: number;
+  /** Abort a live open if new bin-array rent exceeds this share of the position, percent */
+  maxBinArrayCostPct: number;
+  /**
+   * EMA20 < EMA50 exit: 'always' (as in the brief) or 'trending' (only when the regime is a
+   * confirmed downtrend, which filters out whipsaws in choppy markets).
+   */
+  emaExitMode: 'always' | 'trending';
 }
 
 export const DEFAULT_THRESHOLDS: AgentThresholds = {
@@ -101,13 +158,33 @@ export const DEFAULT_THRESHOLDS: AgentThresholds = {
   maxPoolShare: 0.02,
   netVsHoldExitPct: -3,
   minHolderQuality: 0.5,
+  rangeMult: 1,
+  minHalfWidth: 0.01,
+  maxHalfWidth: 0.3,
+  rebalanceFeeMultiple: 1.5,
+  rebalanceCooldownMin: 30,
+  rebalanceMode: 'balanced',
+  useRegime: true,
+  regimeEr: 0.35,
+  maxTokenExposurePct: 60,
+  reentryCooldownHours: 6,
+  maxBinArrayCostPct: 2,
+  emaExitMode: 'always',
 };
+
+/** All tunable agent parameters (what the optimizer searches over). */
+export type AgentParams = AgentThresholds;
+export const DEFAULT_PARAMS = DEFAULT_THRESHOLDS;
 
 export interface PoolAssessmentInput extends PoolMetrics {
   /** Smallest market cap of the pair's non-stable tokens, $M (null if unknown) */
   mcapM: number | null;
   bothAllowed: boolean;
   emaBearish: boolean;
+  /** Plain-language risk signals (depeg, TVL drain, price deviation, unlock); any one blocks the pool */
+  riskFlags?: string[];
+  /** Market regime from hourly candles, when known */
+  regime?: 'range' | 'up' | 'down';
 }
 
 export interface PoolAssessment extends ScoreResult {
@@ -135,9 +212,10 @@ export function assessPool(
     reason,
     eligible,
   });
+  if (p.riskFlags?.length) return out('out', 'Avoid, risk', `${p.riskFlags.join(' ')} The agent stays out until it clears.`);
   if (p.trend7d != null && p.trend7d <= s.trendExitPct)
     return out('out', 'Avoid, downtrend', `7-day trend ${pct1(p.trend7d)} is below your ${s.trendExitPct}% exit rule. The agent won't farm a falling token.`);
-  if (p.emaBearish)
+  if (emaSignal(p.emaBearish, p.regime, t))
     return out('out', 'Avoid, downtrend', 'EMA20 is below EMA50 on the hourly chart. The agent waits for the trend to turn.');
   if (!p.bothAllowed) return out('watch', 'Not on allowlist', 'One of the tokens is not on the allowlist yet.');
   if (s.toggles.holderSafety && p.holderQuality != null && p.holderQuality < t.minHolderQuality)

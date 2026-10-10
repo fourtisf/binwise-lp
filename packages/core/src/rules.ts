@@ -1,4 +1,5 @@
 import type { LiquidityShape, RiskProfile } from './types';
+import type { Regime } from './indicators';
 import { DEFAULT_THRESHOLDS, type AgentThresholds } from './scoring';
 
 /**
@@ -21,11 +22,29 @@ export function shapeFor(profile: RiskProfile, stablePair: boolean, volatilityPc
 }
 
 /** Half-width of the range as a fraction of price. Scales with volatility. */
-export function rangeHalfWidth(profile: RiskProfile, volatilityPct: number, stablePair: boolean): number {
+export function rangeHalfWidth(profile: RiskProfile, volatilityPct: number, stablePair: boolean, t: AgentThresholds = DEFAULT_THRESHOLDS): number {
   if (stablePair) return 0.005;
-  const k = profile === 'conservative' ? 2 : profile === 'aggressive' ? 1 : 1.5;
-  return clamp((k * volatilityPct) / 100, 0.01, 0.3);
+  const k = (profile === 'conservative' ? 2 : profile === 'aggressive' ? 1 : 1.5) * t.rangeMult;
+  return clamp((k * volatilityPct) / 100, t.minHalfWidth, t.maxHalfWidth);
 }
+
+/** Which side(s) of the price to provide liquidity on. */
+export type LiquiditySide = 'both' | 'x' | 'y';
+
+/**
+ * Trending up: one-sided base token above price (keeps upside, sells into strength).
+ * Ranging: both sides. Trending down: no new liquidity (returns null).
+ */
+export function sideForRegime(regime: Regime, t: AgentThresholds = DEFAULT_THRESHOLDS): LiquiditySide | null {
+  if (!t.useRegime || regime === 'range') return 'both';
+  return regime === 'up' ? 'x' : null;
+}
+
+/**
+ * Side for a cheap ('single') rebalance: re-open with the token the closed position left us,
+ * so no swap is needed. Price above the range → we hold the quote → bid below; below → ask above.
+ */
+export const singleSidedAfterExit = (priceAboveRange: boolean): LiquiditySide => (priceAboveRange ? 'y' : 'x');
 
 /** Bins per side, capped so the whole range fits one DLMM position (≤ 69 bins). */
 export const MAX_BINS_EACH_SIDE = 34;
@@ -55,17 +74,23 @@ export interface RebalanceInput {
   costs: CostInputs;
   /** Strategy toggle: rebalance only when fees beat costs */
   onlyWhenProfitable: boolean;
+  feeMultiple?: number;
+  cooldownMin?: number;
 }
 
 export type RebalanceVerdict =
   | { act: true; reason: string; ratio: number }
   | { act: false; reason: string; ratio?: number };
 
-export const REBALANCE_COOLDOWN_MIN = 30;
-export const REBALANCE_FEE_MULTIPLE = 1.5;
+export const REBALANCE_COOLDOWN_MIN = DEFAULT_THRESHOLDS.rebalanceCooldownMin;
+export const REBALANCE_FEE_MULTIPLE = DEFAULT_THRESHOLDS.rebalanceFeeMultiple;
+const DEFAULT_COOLDOWN = REBALANCE_COOLDOWN_MIN;
+const DEFAULT_FEE_MULTIPLE = REBALANCE_FEE_MULTIPLE;
 
 /** Rebalance only after waiting a tick, outside cooldown, and when 6h fees > 1.5 × costs. */
 export function shouldRebalance(r: RebalanceInput): RebalanceVerdict {
+  const REBALANCE_COOLDOWN_MIN = r.cooldownMin ?? DEFAULT_COOLDOWN;
+  const REBALANCE_FEE_MULTIPLE = r.feeMultiple ?? DEFAULT_FEE_MULTIPLE;
   const cost = totalCost(r.costs);
   const ratio = cost > 0 ? r.expectedFees6hUsd / cost : Infinity;
   if (r.ticksOutOfRange < 1) return { act: false, reason: 'In range.' };
@@ -76,7 +101,7 @@ export function shouldRebalance(r: RebalanceInput): RebalanceVerdict {
     return {
       act: false,
       ratio,
-      reason: `Expected fees over 6h ($${r.expectedFees6hUsd.toFixed(2)}) don't cover 1.5× the move cost ($${cost.toFixed(2)}). Holding.`,
+      reason: `Expected fees over 6h ($${r.expectedFees6hUsd.toFixed(2)}) don't cover ${REBALANCE_FEE_MULTIPLE}× the move cost ($${cost.toFixed(2)}). Holding.`,
     };
   return {
     act: true,
@@ -113,3 +138,9 @@ export const shouldCompound = (claimableUsd: number, gasUsd: number, enabled = t
 /** Daily loss stop: true when the vault fell more than `stopPct` from its value 24h ago. */
 export const dailyStopHit = (valueNow: number, value24hAgo: number, stopPct: number) =>
   value24hAgo > 0 && (valueNow / value24hAgo - 1) * 100 <= -stopPct;
+
+/** Max extra USD that can go into `mint` without its share of the vault passing the cap (Infinity for stables). */
+export function exposureHeadroomUsd(currentTokenUsd: number, vaultValueUsd: number, capPct: number, isStable: boolean): number {
+  if (isStable || vaultValueUsd <= 0) return Infinity;
+  return Math.max(0, (vaultValueUsd * capPct) / 100 - currentTokenUsd);
+}

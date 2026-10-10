@@ -48,24 +48,26 @@ export function openPosition(
   binStep: number,
   binsEachSide: number,
   shape: LiquidityShape,
+  side: 'both' | 'x' | 'y' = 'both',
 ): PositionBins {
   const active = binIdForPrice(price, binStep);
+  // One-sided ranges use the same number of bins (2n+1) starting at the active bin and going up (x) or down (y).
   const count = binsEachSide * 2 + 1;
   const w = shapeWeights(shape, count);
   const sum = w.reduce((s, x) => s + x, 0);
-  const lowerBin = active - binsEachSide;
+  const lowerBin = side === 'both' ? active - binsEachSide : side === 'x' ? active : active - count + 1;
   // Weights split the deposit by value at today's price. Bins above hold X bought at `price`,
   // so their liquidity at bin price is x × P_bin; bins below hold Y. The active bin is half/half.
   const liquidity = w.map((x, i) => {
     const v = (valueY * x) / sum;
     const b = lowerBin + i;
-    if (b > active) return (v / price) * binPrice(b, binStep);
-    if (b < active) return v;
+    if (b > active || (b === active && side === 'x')) return (v / price) * binPrice(b, binStep);
+    if (b < active || (b === active && side === 'y')) return v;
     const pb = binPrice(b, binStep);
     // L = x·P + y with x = (v/2)/price and y = v/2
     return (v / 2 / price) * pb + v / 2;
   });
-  return { binStep, lowerBin, upperBin: active + binsEachSide, liquidity };
+  return { binStep, lowerBin, upperBin: lowerBin + count - 1, liquidity };
 }
 
 export const inRange = (pos: PositionBins, price: number) => {
@@ -135,3 +137,7 @@ export function feesEarnedUsd(args: {
   const share = ours / (poolActive + ours);
   return args.volumeUsd * (args.baseFeePct / 100) * (1 - m.protocolFeeShare) * share;
 }
+
+/** Liquidity-mining rewards for a period, USD. DLMM farms pay liquidity in the active bin, so only in range. */
+export const farmRewardsUsd = (positionValueUsd: number, farmAprPct: number, minutes: number, inRangeNow: boolean) =>
+  inRangeNow ? positionValueUsd * (farmAprPct / 100) * (minutes / 525_600) : 0;
