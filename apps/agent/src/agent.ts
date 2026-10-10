@@ -692,11 +692,44 @@ async function snapshotVault(deps: AgentDeps, vaultId: string, tokens: Map<strin
 
 export type ManualAction = 'claim' | 'close';
 
-/** Runs a user's manual Claim / Close from the Positions page, with the same executor and logging. */
-export async function runManualAction(deps: AgentDeps, vault: VaultWithStrategy, positionId: string, action: ManualAction, requestId: string) {
+/** Outcome of a manual request, for the person who made it (app or Telegram). */
+export interface ManualResult {
+  title: string;
+  text: string;
+}
+
+/** Records a manual action's decision, persists paper cash and streams it to the app. */
+async function recordManual(
+  deps: AgentDeps,
+  vault: VaultWithStrategy,
+  executor: Executor,
+  poolId: string,
+  type: 'deploy' | 'exit' | 'compound',
+  r: ExecResult,
+  key: string,
+  inputs: object,
+) {
+  const { db } = deps;
+  const d = await db.decision.create({
+    data: { vaultId: vault.id, poolId, type, title: r.title, reason: r.text, inputs: { manual: true, ...inputs }, idempotencyKey: key },
+  });
+  const txSig = executor.mode === 'paper' ? `sim-${d.id}` : r.txSigs.at(-1);
+  if (txSig) await db.decision.update({ where: { id: d.id }, data: { txSig } });
+  if (executor.mode === 'paper') await db.vault.update({ where: { id: vault.id }, data: { cash: (executor as unknown as { balances: Holdings }).balances } });
+  deps.emit(vault.id, { type: 'decision', decision: { id: d.id, vaultId: vault.id, poolId, ts: d.ts.getTime(), type: d.type, title: d.title, reason: d.reason, txSig } });
+}
+
+/** Runs a user's manual Claim / Close (Positions page or Telegram), with the same executor and logging. */
+export async function runManualAction(
+  deps: AgentDeps,
+  vault: VaultWithStrategy,
+  positionId: string,
+  action: ManualAction,
+  requestId: string,
+): Promise<ManualResult | null> {
   const { db } = deps;
   const pos = await db.position.findFirst({ where: { id: positionId, vaultId: vault.id, status: 'open' } });
-  if (!pos) return;
+  if (!pos) return null;
   const snap = await db.poolSnapshot.findFirst({ where: { poolId: pos.poolId }, orderBy: { ts: 'desc' }, include: { pool: true } });
   if (!snap) throw new Error('No market data for this pool yet.');
   const tokens = new Map((await db.token.findMany({ where: { mint: { in: [snap.pool.mintA, snap.pool.mintB] } } })).map((t) => [t.mint, t]));
@@ -704,18 +737,74 @@ export async function runManualAction(deps: AgentDeps, vault: VaultWithStrategy,
   const view = await poolView(snap, tokens, strategySettings(vault.strategy!), strategyWeights(vault.strategy!), params);
   if (!view) throw new Error('Token prices are missing for this pool.');
   const key = `${vault.id}:manual:${requestId}`;
-  if (!(await deps.claimKey(key))) return;
+  if (!(await deps.claimKey(key))) return null;
   const executor = await deps.executorFor(vault);
   const plan: Plan =
     action === 'close'
       ? { kind: 'exit', pos, view, reason: 'Manual close. Funds returned to your vault.', manual: true }
       : { kind: 'claim', pos, view, reason: 'Manual claim. Sent to your vault balance.' };
   const r = await execute(deps, vault, executor, plan, key, strategySettings(vault.strategy!), tokens, (deps.now ?? Date.now)(), params);
-  const d = await db.decision.create({
-    data: { vaultId: vault.id, poolId: pos.poolId, type: action === 'close' ? 'exit' : 'compound', title: r.title, reason: r.text, inputs: { manual: true }, idempotencyKey: key },
-  });
-  const txSig = executor.mode === 'paper' ? `sim-${d.id}` : r.txSigs.at(-1);
-  if (txSig) await db.decision.update({ where: { id: d.id }, data: { txSig } });
-  if (executor.mode === 'paper') await db.vault.update({ where: { id: vault.id }, data: { cash: (executor as unknown as { balances: Holdings }).balances } });
-  deps.emit(vault.id, { type: 'decision', decision: { id: d.id, vaultId: vault.id, poolId: pos.poolId, ts: d.ts.getTime(), type: d.type, title: d.title, reason: d.reason, txSig } });
+  await recordManual(deps, vault, executor, pos.poolId, action === 'close' ? 'exit' : 'compound', r, key, {});
+  return { title: r.title, text: r.text };
+}
+
+/**
+ * Adds liquidity to one pool on request (Telegram "Add LP"). Same safety as the agent's own
+ * deploys: the pool must pass every check right now, the size stays within the strategy's
+ * pool cap and the live limits, and the agent manages the position afterwards.
+ * `requestedUsd` 0 means "let the agent pick the size".
+ */
+export async function runManualDeploy(
+  deps: AgentDeps,
+  vault: VaultWithStrategy,
+  poolId: string,
+  requestedUsd: number,
+  requestId: string,
+): Promise<ManualResult | null> {
+  const { db } = deps;
+  const now = (deps.now ?? Date.now)();
+  // A repeated request (double tap) is dropped before anything else.
+  const key = `${vault.id}:manual:${requestId}`;
+  if (!(await deps.claimKey(key))) return null;
+  const snap = await db.poolSnapshot.findFirst({ where: { poolId }, orderBy: { ts: 'desc' }, include: { pool: true } });
+  if (!snap) throw new Error('No market data for this pool yet.');
+  if (now - snap.ts.getTime() > 10 * 60_000) throw new Error('Market data for this pool is out of date. Try again in a minute.');
+  const tokens = new Map((await db.token.findMany()).map((t) => [t.mint, t]));
+  const params = deps.params ? await deps.params() : await activeParams(db);
+  const s = strategySettings(vault.strategy!);
+  const view = await poolView(snap, tokens, s, strategyWeights(vault.strategy!), params);
+  if (!view) throw new Error('Token prices are missing for this pool.');
+  if (!view.a.eligible) throw new Error(`The agent won't enter this pool right now. ${view.a.reason}`);
+  const side = sideForRegime(view.regime, params, view.riskyIsY);
+  if (!side) throw new Error('This pool is in a downtrend. The agent waits for the trend to turn.');
+  const open = await db.position.findMany({ where: { vaultId: vault.id, status: 'open' } });
+  if (open.some((p) => p.poolId === poolId)) throw new Error('You already have a position in this pool.');
+
+  if (await deps.killSwitch.isKilled()) throw new Error('Trading is halted right now (kill switch).');
+  const executor = await deps.executorFor(vault);
+  const idleUsd = holdingsUsd(await executor.holdings(), tokens);
+  const positionsUsd = open.reduce((sum, p) => sum + p.valueUsd, 0);
+  let size = Math.min(positionSizeUsd(idleUsd + positionsUsd, s.maxAllocPct, view.ctx.tvlUsd, params), idleUsd * 0.98);
+  if (requestedUsd > 0) size = Math.min(size, requestedUsd);
+  if (executor.mode === 'live') {
+    const live = liveLimits();
+    if (open.length >= live.maxPositions) throw new Error(`Live vaults can hold ${live.maxPositions} position(s) for now (LIVE_MAX_POSITIONS).`);
+    size = Math.min(size, live.maxUsd - positionsUsd);
+  }
+  if (size < MIN_POSITION_USD) throw new Error(`Not enough idle funds within your limits: at least ${usd(MIN_POSITION_USD)} is needed.`);
+  const binsEachSide = Math.min(MAX_BINS_EACH_SIDE, binsForHalfWidth(rangeHalfWidth(s.profile, view.snap.volatility, view.stablePair, params), view.ctx.binStep));
+  const plan: Plan = {
+    kind: 'deploy',
+    view,
+    sizeUsd: size,
+    shape: shapeFor(s.profile, view.stablePair, view.snap.volatility),
+    binsEachSide,
+    side,
+    reason: view.a.reason,
+  };
+  const r = await execute(deps, vault, executor, plan, key, s, tokens, now, params);
+  const reduced = requestedUsd > 0 && size < requestedUsd - 1 ? ` Sized down from ${usd(requestedUsd)} to stay within your limits.` : '';
+  const result = { title: r.title, text: `${r.text}${reduced} Requested from Telegram; the agent manages it from here.` };
+  await recordManual(deps, vault, executor, poolId, 'deploy', { ...r, text: result.text }, key, { requestedUsd, sizeUsd: size });
+  return result;
 }

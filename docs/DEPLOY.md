@@ -50,6 +50,16 @@ bash install.sh binwise.org                 # update to the latest code (keeps .
 
 The site's NEXT_PUBLIC_* settings are baked in at build time; the install script rebuilds every time.
 
+## Telegram bot
+
+One bot does alerts and control: 📊 Status, ➕ Add LP, 💼 Positions (claim / close), ⏸ Pause / ▶️ Resume.
+Add LP only offers pools that pass the agent's checks right now, asks for confirmation, respects the live limits,
+and the agent manages the position afterwards. The bot only answers private chats linked from the app.
+
+1. In Telegram, open @BotFather → `/newbot` → pick a name and a username ending in `bot`. Copy the token.
+2. Put `TELEGRAM_BOT_TOKEN=<token>` and `TELEGRAM_BOT_USERNAME=<username without @>` in `.env`, then `sudo -u binwise pm2 restart all`.
+3. In the app: **Strategy** → turn on **Telegram alerts** → Telegram opens → press **Start**.
+
 ## 3. Backtest report (build step 4)
 
 ```bash

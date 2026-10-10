@@ -1,6 +1,7 @@
 import { JupiterClient } from '@binwise/chain';
 import { getDb } from '@binwise/db';
-import { CYCLE_MS, runManualAction, runVaultCycle, type ManualAction } from './agent';
+import { CYCLE_MS, runManualAction, runManualDeploy, runVaultCycle, type ManualResult } from './agent';
+import { BOT_COMMANDS, makeBot, resultMessage, type ManualRequest } from './bot';
 import { KEYS, makeRedis, publish, withVaultLock } from './redis';
 import { makeAgentDeps } from './runtime';
 import { Telegram } from './telegram';
@@ -54,7 +55,7 @@ const loop = async () => {
 };
 void loop();
 const cycleTimer = setInterval(loop, CYCLE_MS);
-/** Manual Claim / Close requests, picked up within a few seconds. */
+/** Manual Claim / Close (app or Telegram) and Add LP (Telegram) requests, picked up within a few seconds. */
 async function manualActions() {
   const keys = await redis.keys(KEYS.actions('*'));
   for (const k of keys) {
@@ -64,21 +65,41 @@ async function manualActions() {
       await redis.del(k);
       continue;
     }
-    await withVaultLock(redis, vaultId, 30_000, async () => {
+    // Long enough for a live open (funding swaps + deposit), so a cycle can't start mid-action.
+    await withVaultLock(redis, vaultId, 180_000, async () => {
       for (let raw = await redis.rpop(k); raw; raw = await redis.rpop(k)) {
-        const req = JSON.parse(raw) as { id: string; positionId: string; action: ManualAction };
+        const req = JSON.parse(raw) as ManualRequest;
+        let result: ManualResult | null = null;
+        let error: string | undefined;
         try {
-          await runManualAction(deps, vault, req.positionId, req.action, req.id);
+          result =
+            req.action === 'deploy'
+              ? await runManualDeploy(deps, vault, req.poolId!, req.usd ?? 0, req.id)
+              : await runManualAction(deps, vault, req.positionId!, req.action, req.id);
         } catch (e) {
-          await db.decision.create({ data: { vaultId, type: 'skip', title: `Couldn't ${req.action}`, reason: (e as Error).message, inputs: { manual: true } } });
+          error = (e as Error).message;
+          const verb = req.action === 'deploy' ? 'add LP' : req.action;
+          await db.decision.create({ data: { vaultId, poolId: req.poolId ?? null, type: 'skip', title: `Couldn't ${verb}`, reason: error, inputs: { manual: true } } });
         }
+        if (req.chatId && telegram) await telegram.send(req.chatId, resultMessage(result, error)).catch((e) => console.error(`[telegram] ${(e as Error).message}`));
       }
     });
   }
 }
 const manualTimer = setInterval(() => manualActions().catch((e) => console.error(`[manual] ${(e as Error).message}`)), 3_000);
 const tickTimer = setInterval(() => tickOnce(db, jupiter, deps.emit).catch((e) => console.error(`[ticker] ${(e as Error).message}`)), 10_000);
-if (telegram) void telegram.poll(db, console.log);
+if (telegram) {
+  const bot = makeBot({
+    db,
+    tg: telegram,
+    enqueue: async (vaultId, req) => void (await redis.lpush(KEYS.actions(vaultId), JSON.stringify(req))),
+    onPaused: async (v) => void (await publish(redis, v.id, { type: 'cycle', cycle: { cycle: v.cycle, step: -1, paused: true, intervalMs: CYCLE_MS, elapsedMs: 0, steps: [] } })),
+    appUrl: `https://${process.env.PUBLIC_DOMAIN || 'binwise.org'}`,
+  });
+  telegram.setCommands(BOT_COMMANDS).catch((e) => console.error(`[telegram] ${(e as Error).message}`));
+  void telegram.poll(bot, console.log);
+  console.log('[telegram] bot running');
+}
 
 const stop = async () => {
   clearInterval(cycleTimer);
