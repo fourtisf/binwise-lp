@@ -57,13 +57,16 @@ apt-get install -y -qq ca-certificates curl gnupg git openssl build-essential \
   nginx certbot python3-certbot-nginx postgresql redis-server ufw cron >/dev/null
 ok "nginx, PostgreSQL, Redis, certbot, ufw"
 
-if ! command -v node >/dev/null || [[ "$(node -p 'process.versions.node.split(".")[0]')" -lt $NODE_MAJOR ]]; then
+# System-wide Node in /usr/bin (a root-only nvm install isn't visible to the app user).
+if [[ ! -x /usr/bin/node ]] || [[ "$(/usr/bin/node -p 'process.versions.node.split(".")[0]')" -lt $NODE_MAJOR ]]; then
   curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - >/dev/null
   apt-get install -y -qq nodejs >/dev/null
 fi
-ok "Node $(node -v)"
-npm install -g --silent "pnpm@${PNPM_VERSION}" pm2@6.0.14 >/dev/null
-ok "pnpm $(pnpm -v), pm2 $(pm2 -v 2>/dev/null | tail -1)"
+ok "Node $(/usr/bin/node -v)"
+# --force replaces an existing pnpm/pm2 binary instead of failing with EEXIST.
+/usr/bin/npm install -g --force --no-fund --no-audit --loglevel=error "pnpm@${PNPM_VERSION}" pm2@6.0.14 >/dev/null \
+  || die "Installing pnpm/pm2 failed: run '/usr/bin/npm install -g --force pnpm@${PNPM_VERSION} pm2@6.0.14' to see why"
+ok "pnpm $(/usr/bin/pnpm -v)"
 
 systemctl enable --now postgresql redis-server nginx cron >/dev/null 2>&1
 ok "Services enabled"
@@ -163,7 +166,7 @@ ok "Website built for https://${DOMAIN}"
 step "Start processes (PM2)"
 as_app "pm2 startOrReload deploy/ecosystem.config.cjs --update-env" >/dev/null
 as_app "pm2 save" >/dev/null
-pm2 startup systemd -u "$APP_USER" --hp "$APP_HOME" >/dev/null
+/usr/bin/pm2 startup systemd -u "$APP_USER" --hp "$APP_HOME" >/dev/null
 as_app "pm2 describe pm2-logrotate >/dev/null 2>&1 || pm2 install pm2-logrotate >/dev/null"
 ok "web, api, collector, agent running; restart on reboot; logs rotated"
 
@@ -180,10 +183,14 @@ ok "Weekly reports scheduled"
 # ---------------------------------------------------------------- firewall
 step "Firewall"
 ssh_port=$(sshd -T 2>/dev/null | awk '/^port / {print $2; exit}')
-ufw allow "${ssh_port:-22}/tcp" >/dev/null
-ufw allow 'Nginx Full' >/dev/null
-ufw --force enable >/dev/null
-ok "Open: SSH (${ssh_port:-22}), HTTP, HTTPS. App ports 3000/4000 stay private."
+if ufw status | grep -q "Status: active"; then
+  ufw allow "${ssh_port:-22}/tcp" >/dev/null
+  ufw allow 'Nginx Full' >/dev/null
+  ok "Firewall active: HTTP and HTTPS allowed"
+else
+  # Not switched on here: the server may host other services whose ports we don't know.
+  warn "Firewall (ufw) is off. App ports stay private anyway (bound to 127.0.0.1); turn ufw on yourself if nothing else needs open ports."
+fi
 
 # ---------------------------------------------------------------- nginx + https
 step "Nginx and HTTPS"
