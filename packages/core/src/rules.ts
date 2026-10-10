@@ -32,13 +32,18 @@ export function rangeHalfWidth(profile: RiskProfile, volatilityPct: number, stab
 export type LiquiditySide = 'both' | 'x' | 'y';
 
 /**
- * Trending up: one-sided base token above price (keeps upside, sells into strength).
- * Ranging: both sides. Trending down: no new liquidity (returns null).
+ * `regime` is the risky token's trend. Trending up: one-sided, holding the risky token, on the
+ * side price moves towards (X above price, or Y below price when the risky token is Y), so it
+ * keeps upside and sells into strength. Ranging: both sides. Trending down: no new liquidity (null).
  */
-export function sideForRegime(regime: Regime, t: AgentThresholds = DEFAULT_THRESHOLDS): LiquiditySide | null {
+export function sideForRegime(regime: Regime, t: AgentThresholds = DEFAULT_THRESHOLDS, riskyIsY = false): LiquiditySide | null {
   if (!t.useRegime || regime === 'range') return 'both';
-  return regime === 'up' ? 'x' : null;
+  return regime === 'up' ? (riskyIsY ? 'y' : 'x') : null;
 }
+
+/** Cheap one-sided re-open (no swap) only applies when the market is ranging, or when the regime filter is off. */
+export const useSingleRebalance = (regime: Regime, t: AgentThresholds = DEFAULT_THRESHOLDS) =>
+  t.rebalanceMode === 'single' && (!t.useRegime || regime === 'range');
 
 /**
  * Side for a cheap ('single') rebalance: re-open with the token the closed position left us,

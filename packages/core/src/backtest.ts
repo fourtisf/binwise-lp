@@ -21,6 +21,7 @@ import {
   shouldRebalance,
   sideForRegime,
   singleSidedAfterExit,
+  useSingleRebalance,
   slippageUsd,
   type LiquiditySide,
 } from './rules';
@@ -52,6 +53,8 @@ export interface BacktestPool {
   bothAllowed: boolean;
   /** Liquidity-mining reward APR, percent (current value used for every bar) */
   farmAprPct?: number | null;
+  /** True when X is the stablecoin and Y the risky token: trends are read on 1/price */
+  riskyIsY?: boolean;
 }
 
 export interface CostModel {
@@ -227,8 +230,10 @@ export function runBacktest(cfg: BacktestConfig, bars: BacktestBar[]): BacktestR
     const fees24h = dayBars.reduce((sum, x) => sum + (x.feesUsd ?? (x.volumeUsd * pool.baseFeePct) / 100), 0);
     const median = medianDailyVolume(bars.slice(Math.max(0, i - 7 * perDay + 1), i + 1).map((x) => x.volumeUsd));
     const vol = realizedVolatilityPct(dayBars.map((x) => x.price), perDay);
-    const trend = trendState(closes);
-    const regime = regimeOf(closes, t.regimeEr);
+    // Trend and regime describe the risky token, so invert the pool price when it is Y.
+    const riskyCloses = pool.riskyIsY ? closes.map((c) => 1 / c) : closes;
+    const trend = trendState(riskyCloses);
+    const regime = pool.stablePair ? 'range' : regimeOf(riskyCloses, t.regimeEr, 24, t.regimeMinMovePct);
     regimeBars[regime]++;
     const assessment = assessPool(
       {
@@ -299,18 +304,16 @@ export function runBacktest(cfg: BacktestConfig, bars: BacktestBar[]): BacktestR
       if (why) {
         closePos(b.price);
         pay(txUsd(TX.close), b.quoteUsd, b.price);
-        rebalanceCash(b.price, b.quoteUsd, 0); // step aside into the quote token
+        rebalanceCash(b.price, b.quoteUsd, pool.riskyIsY ? 1 : 0); // step aside into the stable/quote token
         pausedUntil = i + Math.round((t.reentryCooldownHours * perDay) / 24);
         counts.exits++;
         events.push({ ts: b.ts, type: 'exit', reason: why });
       } else if (ticksOut > 0) {
         const value = positionValueY(p0, b.price);
-        const single = t.rebalanceMode === 'single';
         const priceAbove = b.price > Math.pow(1 + pool.binStep / 10_000, p0.upperBin + 1);
-        const regimeSide = sideForRegime(regime, t);
-        // Cheap mode re-opens with the token we already hold; otherwise follow the regime (or both sides).
-        // Cheap one-sided re-open only in a ranging market; in a trend, follow the regime.
-        const side: LiquiditySide = single && regime === 'range' ? singleSidedAfterExit(priceAbove) : regimeSide ?? 'both';
+        const regimeSide = sideForRegime(regime, t, pool.riskyIsY);
+        // Cheap mode re-opens with the token we already hold (ranging market only); otherwise follow the regime.
+        const side: LiquiditySide = useSingleRebalance(regime, t) ? singleSidedAfterExit(priceAbove) : regimeSide ?? 'both';
         const probe = openPosition(value, b.price, pool.binStep, binsSide, shape, side);
         const fees6h = fee(probe, volume24h / 4);
         const swapUsd = side === 'both' ? (value / 2) * b.quoteUsd : side === 'x' && priceAbove ? value * b.quoteUsd : side === 'y' && !priceAbove ? value * b.quoteUsd : 0;
@@ -350,7 +353,7 @@ export function runBacktest(cfg: BacktestConfig, bars: BacktestBar[]): BacktestR
         counts.compounds++;
       }
     } else if (i > pausedUntil && assessment.eligible) {
-      const side = sideForRegime(regime, t);
+      const side = sideForRegime(regime, t, pool.riskyIsY);
       if (side) {
         shape = shapeFor(s.profile, pool.stablePair, vol);
         rebalanceCash(b.price, b.quoteUsd, side === 'both' ? 0.5 : side === 'x' ? 1 : 0);

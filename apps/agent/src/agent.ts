@@ -27,6 +27,7 @@ import {
   isUrgent,
   sideForRegime,
   singleSidedAfterExit,
+  useSingleRebalance,
 } from '@binwise/core';
 import { SetupTooCostly, TX_COUNT, type Executor, type Holdings, type KillSwitch, type PoolCtx, type PositionRef } from '@binwise/chain';
 import {
@@ -85,6 +86,8 @@ interface PoolView {
   regime: Regime;
   /** Risk signals (depeg, TVL drain, price deviation, unlock) */
   flags: string[];
+  /** X is the stablecoin and Y the risky token (regime and trend then describe Y) */
+  riskyIsY: boolean;
   ctx: PoolCtx;
   stablePair: boolean;
   quoteMint: string;
@@ -140,6 +143,7 @@ async function poolView(
     a,
     regime: input.regime ?? 'range',
     flags: input.riskFlags,
+    riskyIsY: sx && !sy,
     stablePair: sx && sy,
     quoteMint: sx && !sy ? tx.mint : ty.mint,
     riskyMint: sx && sy ? null : sx ? ty.mint : tx.mint,
@@ -235,11 +239,12 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
   emitStep(2);
   const executor = await deps.executorFor(vault);
   const positions = await db.position.findMany({ where: { vaultId: vault.id, status: 'open' } });
-  const marked: { pos: Position; view: PoolView | null }[] = [];
+  /** Open positions with their current USD value in X and Y (for the exposure cap) */
+  const marked: { pos: Position; view: PoolView | null; xUsd: number; yUsd: number }[] = [];
   for (const p of positions) {
     const view = byPool.get(p.poolId) ?? null;
     if (!view) {
-      marked.push({ pos: p, view: null });
+      marked.push({ pos: p, view: null, xUsd: 0, yUsd: 0 });
       continue;
     }
     const lastMark = await db.positionMark.findFirst({ where: { positionId: p.id }, orderBy: { ts: 'desc' } });
@@ -276,7 +281,7 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
         rebalances: p.rebalances,
       },
     });
-    marked.push({ pos: updated, view });
+    marked.push({ pos: updated, view, xUsd: m.amountX * view.ctx.usdX, yUsd: m.amountY * view.ctx.usdY });
   }
   const inRangeCount = marked.filter((x) => x.pos.inRange).length;
   steps[2].done = positions.length ? `${inRangeCount} of ${positions.length} positions in range` : 'No open positions';
@@ -294,12 +299,27 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
   const dayAgo = await db.vaultSnapshot.findFirst({ where: { vaultId: vault.id, ts: { lte: new Date(now - 23 * 3600_000) } }, orderBy: { ts: 'desc' } });
   const stopHit = !!dayAgo && dailyStopHit(vaultValue, dayAgo.value, s.dailyStopPct);
 
+  // Exposure per token: idle cash plus what each position actually holds right now.
+  const exposure = new Map<string, number>();
+  const addExposure = (mint: string, usdAmt: number) => exposure.set(mint, (exposure.get(mint) ?? 0) + usdAmt);
+  for (const [mint, amt] of Object.entries(cash)) addExposure(mint, amt * (tokens.get(mint)?.priceUsd ?? 0));
+  for (const x of marked)
+    if (x.view) {
+      addExposure(x.view.ctx.mintX, x.xUsd);
+      addExposure(x.view.ctx.mintY, x.yUsd);
+    }
+  const stableMint = (m: string) => {
+    const t = tokens.get(m);
+    return !!t && isStable(t);
+  };
+  const headroom = (mint: string) => exposureHeadroomUsd(exposure.get(mint) ?? 0, vaultValue, params.maxTokenExposurePct, stableMint(mint));
+
   if (killed) {
     holds.push('Kill switch is on. No trades this cycle.');
   } else if (stopHit) {
     for (const x of marked) if (x.view) plans.push({ kind: 'exit', pos: x.pos, view: x.view, reason: `Vault fell more than ${s.dailyStopPct}% in 24 hours. Daily loss stop.` });
   } else {
-    for (const { pos, view } of marked) {
+    for (const { pos, view, xUsd, yUsd } of marked) {
       if (!view) {
         holds.push(`No fresh data for one position's pool, so it is left as is.`);
         continue;
@@ -332,7 +352,7 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
         }
         const halfWidth = rangeHalfWidth(s.profile, view.snap.volatility, view.stablePair, params);
         const binsEachSide = Math.min(MAX_BINS_EACH_SIDE, binsForHalfWidth(halfWidth, view.ctx.binStep));
-        const regimeSide = sideForRegime(view.regime, params);
+        const regimeSide = sideForRegime(view.regime, params, view.riskyIsY);
         if (!regimeSide) {
           holds.push(`${pairOf(view)} is out of range in a downtrend. Not re-entering until the trend turns.`);
           continue;
@@ -340,7 +360,13 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
         const { hi } = rangePrices(pos, view.ctx);
         const priceAbove = view.ctx.price >= hi;
         // In a ranging market the cheap mode re-opens one-sided with what we hold (no swap).
-        const side: LiquiditySide = params.rebalanceMode === 'single' && view.regime === 'range' ? singleSidedAfterExit(priceAbove) : regimeSide;
+        let side: LiquiditySide = useSingleRebalance(view.regime, params) ? singleSidedAfterExit(priceAbove) : regimeSide;
+        // A one-sided re-open that buys a token must stay within its exposure cap; otherwise go 50/50.
+        if (side !== 'both') {
+          const mint = side === 'x' ? view.ctx.mintX : view.ctx.mintY;
+          const added = pos.valueUsd - (side === 'x' ? xUsd : yUsd);
+          if (added > 1 && added > headroom(mint)) side = 'both';
+        }
         const needsSwap = side === 'both' || (side === 'x') === priceAbove;
         const swapUsd = side === 'both' ? pos.valueUsd / 2 : needsSwap ? pos.valueUsd : 0;
         const probe = openPosition(pos.valueUsd / view.ctx.usdY, view.ctx.price, view.ctx.binStep, binsEachSide, pos.shape, side);
@@ -366,6 +392,11 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
           feeMultiple: params.rebalanceFeeMultiple,
           cooldownMin: params.rebalanceCooldownMin,
         });
+        if (v.act) {
+          const newX = side === 'both' ? pos.valueUsd / 2 : side === 'x' ? pos.valueUsd : 0;
+          addExposure(view.ctx.mintX, newX - xUsd);
+          addExposure(view.ctx.mintY, pos.valueUsd - newX - yUsd);
+        }
         if (v.act) plans.push({ kind: 'rebalance', pos, view, reason: v.reason + (side !== 'both' ? ` Re-opened one-sided (${side === 'x' ? 'above' : 'below'} price).` : ''), binsEachSide, side });
         else holds.push(`${pairOf(view)}: ${v.reason}`);
         continue;
@@ -380,20 +411,13 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
     const maxPositions = Math.max(1, Math.floor(100 / s.maxAllocPct));
     let openCount = marked.length;
     let idleUsd = holdingsUsd(cash, tokens);
-    const exposure = new Map<string, number>();
-    const addExposure = (mint: string, usdAmt: number) => exposure.set(mint, (exposure.get(mint) ?? 0) + usdAmt);
-    for (const [mint, amt] of Object.entries(cash)) addExposure(mint, amt * (tokens.get(mint)?.priceUsd ?? 0));
-    for (const x of marked) if (x.view) {
-      // Without exact composition, count half the position in each token.
-      addExposure(x.view.ctx.mintX, x.pos.valueUsd / 2);
-      addExposure(x.view.ctx.mintY, x.pos.valueUsd / 2);
-    }
-    const stableMint = (m: string) => {
-      const t = tokens.get(m);
-      return !!t && isStable(t);
-    };
+    // Pools recently exited, or where opening was skipped because setup rent was too high, wait out the cooldown.
     const recentExits = await db.decision.findMany({
-      where: { vaultId: vault.id, type: 'exit', ts: { gte: new Date(now - params.reentryCooldownHours * 3600_000) } },
+      where: {
+        vaultId: vault.id,
+        ts: { gte: new Date(now - params.reentryCooldownHours * 3600_000) },
+        OR: [{ type: 'exit' }, { type: 'skip', inputs: { path: ['setupTooCostly'], equals: true } }],
+      },
       select: { poolId: true },
     });
     const cooling = new Set(recentExits.map((d) => d.poolId));
@@ -401,15 +425,14 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
       if (openCount >= maxPositions) break;
       if (held.has(v.snap.poolId) || cooling.has(v.snap.poolId)) continue;
       if (s.toggles.pauseOnVolSpikes && v.snap.volSpike) continue;
-      const side = sideForRegime(v.regime, params);
+      const side = sideForRegime(v.regime, params, v.riskyIsY);
       if (!side) continue;
       let size = Math.min(positionSizeUsd(vaultValue, s.maxAllocPct, v.ctx.tvlUsd, params), idleUsd * 0.98);
       // Respect the exposure cap for each non-stable token this position would add.
       const shareX = side === 'both' ? 0.5 : side === 'x' ? 1 : 0;
       for (const [mint, share] of [[v.ctx.mintX, shareX], [v.ctx.mintY, 1 - shareX]] as const) {
         if (share <= 0) continue;
-        const room = exposureHeadroomUsd(exposure.get(mint) ?? 0, vaultValue, params.maxTokenExposurePct, stableMint(mint));
-        size = Math.min(size, room / share);
+        size = Math.min(size, headroom(mint) / share);
       }
       if (size < MIN_POSITION_USD) continue;
       const shape = shapeFor(s.profile, v.stablePair, v.snap.volatility);
@@ -461,8 +484,14 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
       const msg = (e as Error).message;
       log(`[agent] vault ${vault.id} ${plan.kind} failed: ${msg}`);
       texts.push(`Couldn't ${plan.kind} ${pairOf(plan.view)}: ${msg}`);
-      await record('skip', `Skipped ${plan.kind} on ${pairOf(plan.view)}`, `${msg} Will retry next cycle if the reason still holds.`, { poolId: plan.view.snap.poolId });
-      if (!(e instanceof SetupTooCostly)) await deps.notify?.(vault, `Action failed on ${pairOf(plan.view)}: ${msg}`).catch(() => {});
+      const costly = e instanceof SetupTooCostly;
+      await record(
+        'skip',
+        `Skipped ${plan.kind} on ${pairOf(plan.view)}`,
+        costly ? `${msg} Trying other pools; this one is retried in ${params.reentryCooldownHours}h.` : `${msg} Will retry next cycle if the reason still holds.`,
+        { poolId: plan.view.snap.poolId, inputs: costly ? { setupTooCostly: true } : {} },
+      );
+      if (!costly) await deps.notify?.(vault, `Action failed on ${pairOf(plan.view)}: ${msg}`).catch(() => {});
     }
   }
 
@@ -542,7 +571,7 @@ async function execute(
     const value = pos.entryValueUsd;
     return {
       title: `Deployed ${usd(value)} to ${pair}`,
-      text: `${plan.side === 'x' ? 'Trending up, so liquidity sits above price. ' : ''}Score ${v.a.score}, trend ${v.snap.trend7d != null ? (v.snap.trend7d >= 0 ? '+' : '−') + Math.abs(v.snap.trend7d).toFixed(1) + '%' : 'n/a'}, inside the ${s.maxAllocPct}% pool cap. ${plan.shape === 'bidask' ? 'Bid-ask' : plan.shape === 'curve' ? 'Curve' : 'Spot'} over ${plan.binsEachSide * 2 + 1} bins.`,
+      text: `${plan.side === 'x' ? 'Trending up, so liquidity sits above price. ' : plan.side === 'y' ? 'Trending up, so liquidity sits below price. ' : ''}Score ${v.a.score}, trend ${v.snap.trend7d != null ? (v.snap.trend7d >= 0 ? '+' : '−') + Math.abs(v.snap.trend7d).toFixed(1) + '%' : 'n/a'}, inside the ${s.maxAllocPct}% pool cap. ${plan.shape === 'bidask' ? 'Bid-ask' : plan.shape === 'curve' ? 'Curve' : 'Spot'} over ${plan.binsEachSide * 2 + 1} bins.`,
       txSigs: sigs,
       sent: sigs.length > 0,
       inputs: { positionId: pos.id, sizeUsd: plan.sizeUsd, costUsd: r.costUsd },

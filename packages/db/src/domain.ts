@@ -133,13 +133,14 @@ export async function assessmentInput(
   snap: SnapshotLike,
   tokenX: Pick<Token, 'allowed' | 'isVerified' | 'freezeAuthorityDisabled'> | undefined,
   tokenY: Pick<Token, 'allowed' | 'isVerified' | 'freezeAuthorityDisabled'> | undefined,
-  params: { regimeEr: number },
+  params: { regimeEr: number; regimeMinMovePct: number },
 ) {
   const { regimeFrom } = await import('@binwise/core');
+  // Missing inputs (stable pairs, too little history) count as a ranging market.
   const regime =
     snap.efficiency != null && snap.change24hPct != null && snap.aboveEma50 != null
-      ? regimeFrom({ efficiency: snap.efficiency, changePct: snap.change24hPct, aboveEma50: snap.aboveEma50 }, params.regimeEr)
-      : undefined;
+      ? regimeFrom({ efficiency: snap.efficiency, changePct: snap.change24hPct, aboveEma50: snap.aboveEma50 }, params.regimeEr, params.regimeMinMovePct)
+      : 'range';
   return {
     tvl: snap.tvl,
     volume24h: snap.scoringVolume ?? snap.volume24h,

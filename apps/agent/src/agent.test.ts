@@ -4,7 +4,7 @@ import { createVault, ensureUser, getDb } from '@binwise/db';
 import { collectOnce, DEFAULT_COLLECTOR } from './collector';
 import { runVaultCycle, type AgentDeps, type VaultWithStrategy } from './agent';
 import { FakeMeteora, JUP, POOL, USDC, asMeteora, resetDb } from './test-helpers';
-import { PaperExecutor, type Holdings } from '@binwise/chain';
+import { PaperExecutor, SetupTooCostly, type Holdings } from '@binwise/chain';
 
 const db = getDb();
 let meteora: FakeMeteora;
@@ -62,6 +62,14 @@ describe('collector', () => {
     expect((snap.scoreBreakdown as unknown[]).length).toBe(7);
     expect(await db.candle.count({ where: { timeframe: '1h' } })).toBeGreaterThan(150);
     expect((await db.token.findUniqueOrThrow({ where: { mint: JUP } })).holderQuality).toBe(1);
+  });
+
+  it('reads the trend of the risky token when the stablecoin is X', async () => {
+    meteora.flip = true; // USDC/JUP: JUP rising makes the pool price fall
+    await collect();
+    const snap = await db.poolSnapshot.findFirstOrThrow();
+    expect(snap.trend7d!).toBeGreaterThan(0);
+    expect(snap.call).toBe('in');
   });
 
   it('marks downtrending pools as Avoid', async () => {
@@ -187,6 +195,34 @@ describe('agent cycle (paper)', () => {
     await collect();
     await cycle();
     expect(await db.position.count()).toBe(0);
+  });
+
+  it('skips a pool whose setup rent is too high and tries it again only after the cooldown', async () => {
+    let opens = 0;
+    const base = deps();
+    const d = (): AgentDeps => ({
+      ...base,
+      executorFor: async (v) => {
+        const ex = new PaperExecutor({ ...(v.cash as Holdings) });
+        ex.open = async () => {
+          opens++;
+          throw new SetupTooCostly('Opening here needs 2 new bin array(s) costing $21.00 in rent.');
+        };
+        return ex;
+      },
+    });
+    await collect();
+    await runVaultCycle(d(), await vault());
+    const skip = await db.decision.findFirstOrThrow({ where: { type: 'skip' } });
+    expect(skip.reason).toMatch(/retried in 6h/);
+    advance(1);
+    await collect();
+    await runVaultCycle(d(), await vault());
+    expect(opens).toBe(1);
+    advance(6 * 60 + 1);
+    await collect();
+    await runVaultCycle(d(), await vault());
+    expect(opens).toBe(2);
   });
 
   it('does nothing while the kill switch is on', async () => {

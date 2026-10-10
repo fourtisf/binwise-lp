@@ -137,6 +137,8 @@ export interface AgentThresholds {
   useRegime: boolean;
   /** Efficiency ratio above which the market counts as trending (0–1) */
   regimeEr: number;
+  /** Minimum 24h move, percent, before a market can count as trending */
+  regimeMinMovePct: number;
   /** Max share of the vault in any one non-stable token, percent */
   maxTokenExposurePct: number;
   /** Hours to wait before re-entering a pool after an exit */
@@ -166,6 +168,7 @@ export const DEFAULT_THRESHOLDS: AgentThresholds = {
   rebalanceMode: 'balanced',
   useRegime: true,
   regimeEr: 0.35,
+  regimeMinMovePct: 1,
   maxTokenExposurePct: 60,
   reentryCooldownHours: 6,
   maxBinArrayCostPct: 2,

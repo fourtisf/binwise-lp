@@ -108,17 +108,21 @@ export function regimeParts(hourlyCloses: number[], lookback = 24): RegimeParts 
   return { efficiency, changePct: from > 0 ? (last / from - 1) * 100 : 0, aboveEma50: last >= e50 };
 }
 
-/** Trending up/down when the move is efficient and price sits on the matching side of EMA50. */
-export function regimeFrom(p: RegimeParts, erThreshold = 0.35): Regime {
-  if (p.efficiency < erThreshold) return 'range';
+/**
+ * Trending up/down when the move is efficient, big enough to matter, and price sits on the
+ * matching side of EMA50. The size check stops a one-tick move in a flat market (e.g. a stable
+ * pair stepping one bin) from reading as a perfectly efficient trend.
+ */
+export function regimeFrom(p: RegimeParts, erThreshold = 0.35, minMovePct = 1): Regime {
+  if (p.efficiency < erThreshold || Math.abs(p.changePct) < minMovePct) return 'range';
   if (p.changePct > 0 && p.aboveEma50) return 'up';
   if (p.changePct < 0 && !p.aboveEma50) return 'down';
   return 'range';
 }
 
 /** Market regime from hourly closes. */
-export function regimeOf(hourlyCloses: number[], erThreshold = 0.35, lookback = 24): Regime {
-  return regimeFrom(regimeParts(hourlyCloses, lookback), erThreshold);
+export function regimeOf(hourlyCloses: number[], erThreshold = 0.35, lookback = 24, minMovePct = 1): Regime {
+  return regimeFrom(regimeParts(hourlyCloses, lookback), erThreshold, minMovePct);
 }
 
 /** Median of daily volume sums from hourly volumes (one-day buckets, most recent last). */

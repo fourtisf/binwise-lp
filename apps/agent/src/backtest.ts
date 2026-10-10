@@ -121,6 +121,7 @@ export async function loadBacktestData(meteora: MeteoraClient, o: BacktestOption
           bothAllowed: [p.token_x, p.token_y].every((t) => t.is_verified && t.freeze_authority_disabled !== false),
           // Today's farm APR applied to the whole period (no history available).
           farmAprPct: p.has_farm ? p.farm_apr ?? 0 : 0,
+          riskyIsY: isStableToken(p.token_x) && !isStableToken(p.token_y),
         },
         bars,
         feeModel: { ...DEFAULT_FEE_MODEL, protocolFeeShare: (p.pool_config.protocol_fee_pct ?? 5) / 100 },

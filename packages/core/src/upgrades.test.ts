@@ -8,7 +8,7 @@ import {
 } from './indicators';
 import { DEFAULT_PARAMS, DEFAULT_WEIGHTS, assessPool, edgeBpsPerDay, lvrDailyPct, scorePool } from './scoring';
 import { composition, openPosition } from './dlmm';
-import { exposureHeadroomUsd, rangeHalfWidth, sideForRegime, singleSidedAfterExit } from './rules';
+import { exposureHeadroomUsd, rangeHalfWidth, sideForRegime, singleSidedAfterExit, useSingleRebalance } from './rules';
 import { riskFlags } from './risk';
 import { runBacktest, type BacktestBar, type BacktestPool } from './backtest';
 import { optimizeParams } from './optimize';
@@ -64,6 +64,23 @@ describe('market regime', () => {
     expect(sideForRegime('up')).toBe('x');
     expect(sideForRegime('down')).toBeNull();
     expect(sideForRegime('up', { ...DEFAULT_PARAMS, useRegime: false })).toBe('both');
+  });
+  it('does not call a one-tick move in a flat market a trend', () => {
+    // A stable pair stepping one 1-bp bin: perfectly "efficient", but only −0.01%.
+    const flat = [...Array.from({ length: 49 }, () => 1), 0.9999];
+    expect(efficiencyRatio(flat)).toBeCloseTo(1);
+    expect(regimeOf(flat)).toBe('range');
+  });
+  it('holds the risky token on the right side when it is Y', () => {
+    expect(sideForRegime('up', DEFAULT_PARAMS, true)).toBe('y');
+    expect(sideForRegime('down', DEFAULT_PARAMS, true)).toBeNull();
+  });
+  it('uses the cheap one-sided rebalance only in ranging markets, unless the regime filter is off', () => {
+    const single = { ...DEFAULT_PARAMS, rebalanceMode: 'single' as const };
+    expect(useSingleRebalance('range', single)).toBe(true);
+    expect(useSingleRebalance('up', single)).toBe(false);
+    expect(useSingleRebalance('up', { ...single, useRegime: false })).toBe(true);
+    expect(useSingleRebalance('range', DEFAULT_PARAMS)).toBe(false);
   });
 });
 

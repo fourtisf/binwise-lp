@@ -229,8 +229,13 @@ async function snapshotPool(deps: CollectorDeps, p: MeteoraPool, now: number): P
   const hourly = hourlyRows.map((r) => r.close).filter((c) => c > 0);
   const fiveMin = await closes(db, p.address, '5m', now - 24 * H);
   const volatility = fiveMin.length >= 12 ? realizedVolatilityPct(fiveMin, 288) : realizedVolatilityPct(hourly.slice(-25), 24);
-  const trend = trendState(hourly);
-  const parts = hourly.length > 25 ? regimeParts(hourly) : null;
+  // Trend and regime describe the risky token: when X is the stablecoin, read them on 1/price.
+  const stableX = isStableSymbol({ symbol: p.token_x.symbol, isVerified: p.token_x.is_verified });
+  const stableY = isStableSymbol({ symbol: p.token_y.symbol, isVerified: p.token_y.is_verified });
+  const riskyHourly = stableX && !stableY ? hourly.map((c) => 1 / c) : hourly;
+  const trend = trendState(riskyHourly);
+  // Stable pairs never trend; leaving the regime inputs empty makes them count as ranging.
+  const parts = hourly.length > 25 && !(stableX && stableY) ? regimeParts(riskyHourly) : null;
   // Volatility spike: the last 6 hours move more than 3x the 7-day norm.
   const recentVol = realizedVolatilityPct(hourly.slice(-7), 24);
   const normalVol = realizedVolatilityPct(hourly, 24);

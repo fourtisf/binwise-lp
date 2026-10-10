@@ -240,20 +240,22 @@ export class LiveExecutor implements Executor {
     const prices = { ...this.knownPrices, [pool.mintX]: pool.usdX, [pool.mintY]: pool.usdY };
     const side = req.side ?? 'both';
     const dlmm = await DLMM.create(this.d.conn, new PublicKey(pool.address));
-    const active = await dlmm.getActiveBin();
     // One-sided ranges cover the same 2n+1 bins, starting at the active bin and going up (X) or down (Y).
     const count = req.binsEachSide * 2 + 1;
-    const minBinId = side === 'both' ? active.binId - req.binsEachSide : side === 'x' ? active.binId : active.binId - count + 1;
-    const maxBinId = minBinId + count - 1;
-    const strategy = { minBinId, maxBinId, strategyType: STRATEGY[req.shape], ...(side === 'x' ? { singleSidedX: true } : {}) };
+    const rangeFor = (activeId: number) => {
+      const minBinId = side === 'both' ? activeId - req.binsEachSide : side === 'x' ? activeId : activeId - count + 1;
+      return { minBinId, maxBinId: minBinId + count - 1 };
+    };
 
     // New bin arrays cost rent that is never refunded; skip ranges where that eats the position.
+    // Checked before any funding swap, so a skipped open costs nothing.
     if (req.maxBinArrayCostPct != null) {
-      const q = await dlmm.quoteCreatePosition({ strategy });
-      const setupUsd = (q.binArrayCost + q.bitmapExtensionCost) * (prices[NATIVE_MINT.toBase58()] ?? this.costs.solUsd);
+      const r = rangeFor((await dlmm.getActiveBin()).binId);
+      const { arrays, sol } = await this.setupRentSol(dlmm, r.minBinId, r.maxBinId);
+      const setupUsd = sol * (prices[NATIVE_MINT.toBase58()] ?? this.costs.solUsd);
       if (setupUsd > (req.valueUsd * req.maxBinArrayCostPct) / 100)
         throw new SetupTooCostly(
-          `Opening here needs ${q.binArraysCount} new bin array(s) costing $${setupUsd.toFixed(2)} in rent that is never refunded, more than ${req.maxBinArrayCostPct}% of the position.`,
+          `Opening here needs ${arrays} new bin array(s) costing $${setupUsd.toFixed(2)} in rent that is never refunded, more than ${req.maxBinArrayCostPct}% of the position.`,
         );
     }
 
@@ -267,6 +269,11 @@ export class LiveExecutor implements Executor {
           ? await this.acquire(pool.mintX, req.valueUsd, prices, `${req.key}:x`, [])
           : await this.acquire(pool.mintY, req.valueUsd, prices, `${req.key}:y`, []);
     const have = await this.holdings();
+    // Funding swaps may route through this pool and move its price: re-read it before building the deposit.
+    await dlmm.refetchStates();
+    const active = await dlmm.getActiveBin();
+    const { minBinId, maxBinId } = rangeFor(active.binId);
+    const strategy = { minBinId, maxBinId, strategyType: STRATEGY[req.shape], ...(side === 'x' ? { singleSidedX: true } : {}) };
 
     let x: BN;
     let y: BN;
@@ -310,6 +317,19 @@ export class LiveExecutor implements Executor {
       costUsd: this.txCostUsd(sigs.length),
       txSigs: sigs,
     };
+  }
+
+  /** Bin arrays the range needs that don't exist yet, and their rent (plus the bitmap extension if needed), in SOL. */
+  private async setupRentSol(dlmm: DLMM, minBinId: number, maxBinId: number): Promise<{ arrays: number; sol: number }> {
+    const m = sdk();
+    const lo = m.binIdToBinArrayIndex(new BN(minBinId));
+    const hi = m.binIdToBinArrayIndex(new BN(maxBinId));
+    const keys: PublicKey[] = [];
+    for (let i = lo.clone(); i.lte(hi); i = i.addn(1)) keys.push(m.deriveBinArray(dlmm.pubkey, i, dlmm.program.programId)[0]);
+    const infos = await withRetry(() => this.d.conn.getMultipleAccountsInfo(keys), 2, 'getMultipleAccountsInfo');
+    const arrays = infos.filter((a) => !a).length;
+    const needsBitmap = (m.isOverflowDefaultBinArrayBitmap(lo) || m.isOverflowDefaultBinArrayBitmap(hi)) && !dlmm.binArrayBitmapExtension;
+    return { arrays, sol: arrays * m.BIN_ARRAY_FEE + (needsBitmap ? m.BIN_ARRAY_BITMAP_FEE : 0) };
   }
 
   async close(p: PositionRef, pool: PoolCtx, key: string): Promise<ActionResult> {
@@ -377,7 +397,8 @@ export class LiveExecutor implements Executor {
     const decimals = await this.decimals(fromMint);
     const amountRaw = raw(uiAmount, decimals).toString();
     if (amountRaw === '0') return { amountX: 0, amountY: 0, feesUsd: 0, costUsd: 0, txSigs: [] };
-    const quote = await this.jupiter.quote(fromMint, toMint, amountRaw, 50);
+    // With Jito the tip transfer is appended to Jupiter's transaction; fewer route accounts leave room for it.
+    const quote = await this.jupiter.quote(fromMint, toMint, amountRaw, 50, this.d.jito ? 54 : undefined);
     const { swapTransaction, lastValidBlockHeight } = await this.jupiter.swap(quote, this.me.toBase58());
     let tx = VersionedTransaction.deserialize(Buffer.from(swapTransaction, 'base64'));
     let extra: Partial<TxPolicy> = {};

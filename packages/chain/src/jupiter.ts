@@ -83,8 +83,10 @@ export class JupiterClient {
     return out;
   }
 
-  quote(inputMint: string, outputMint: string, amountRaw: string, slippageBps = 50) {
+  quote(inputMint: string, outputMint: string, amountRaw: string, slippageBps = 50, maxAccounts?: number) {
     const q = new URLSearchParams({ inputMint, outputMint, amount: amountRaw, slippageBps: String(slippageBps), restrictIntermediateTokens: 'true' });
+    // Swap API v1 quote parameter: rough cap on accounts the route may use (default 64).
+    if (maxAccounts) q.set('maxAccounts', String(maxAccounts));
     return fetchJson<JupiterQuote>(`${this.baseUrl}/swap/v1/quote?${q}`, { headers: this.headers, minIntervalMs: this.spacing });
   }
 

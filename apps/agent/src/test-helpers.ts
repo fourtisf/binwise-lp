@@ -12,6 +12,8 @@ export class FakeMeteora {
   drift = 0.0005;
   tvl = 5_000_000;
   volume24h = 8_000_000;
+  /** List the pool as USDC/JUP (stablecoin as X): the pool price is then JUP per USDC = 1 / JUP price */
+  flip = false;
 
   pool(): MeteoraPool {
     const token = (address: string, symbol: string, price: number, mcap: number, decimals: number) => ({
@@ -29,11 +31,11 @@ export class FakeMeteora {
     return {
       address: POOL,
       name: 'JUP-USDC',
-      token_x: token(JUP, 'JUP', this.price, 1.3e9, 6),
-      token_y: token(USDC, 'USDC', 1, 6e10, 6),
+      token_x: this.flip ? token(USDC, 'USDC', 1, 6e10, 6) : token(JUP, 'JUP', this.price, 1.3e9, 6),
+      token_y: this.flip ? token(JUP, 'JUP', this.price, 1.3e9, 6) : token(USDC, 'USDC', 1, 6e10, 6),
       pool_config: { bin_step: 20, base_fee_pct: 0.2, max_fee_pct: 5, protocol_fee_pct: 5, collect_fee_mode: 0 },
       tvl: this.tvl,
-      current_price: this.price,
+      current_price: this.flip ? 1 / this.price : this.price,
       token_x_amount: 0,
       token_y_amount: 0,
       volume: { '24h': this.volume24h, '1h': this.volume24h / 24 },
@@ -53,7 +55,8 @@ export class FakeMeteora {
     const out: MeteoraOhlcv[] = [];
     for (let t = Math.ceil(start / step) * step; t <= end; t += step) {
       const hoursAgo = (end - t) / 3600;
-      const p = this.price * Math.exp(-this.drift * hoursAgo) * (1 + 0.002 * Math.sin(t / 7000));
+      const jup = this.price * Math.exp(-this.drift * hoursAgo) * (1 + 0.002 * Math.sin(t / 7000));
+      const p = this.flip ? 1 / jup : jup;
       out.push({ timestamp: t, open: p, high: p * 1.001, low: p * 0.999, close: p, volume: (this.volume24h / 86400) * step });
     }
     return out;
