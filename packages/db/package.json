@@ -17,6 +17,7 @@
     "typecheck": "prisma generate && tsc --noEmit"
   },
   "dependencies": {
+    "@binwise/core": "workspace:*",
     "@prisma/adapter-pg": "7.10.0",
     "@prisma/client": "7.10.0",
     "dotenv": "^16.4.7"

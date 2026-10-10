@@ -4,15 +4,23 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch --env-file-if-exists=../../.env src/main.ts",
-    "build": "tsup",
-    "start": "node --env-file-if-exists=../../.env dist/main.js",
-    "typecheck": "tsc --noEmit"
+    "collector": "node --env-file-if-exists=../../.env --import tsx src/collector-main.ts",
+    "agent": "node --env-file-if-exists=../../.env --import tsx src/agent-main.ts",
+    "backtest": "node --env-file-if-exists=../../.env --import tsx src/backtest-main.ts",
+    "kill": "node --env-file-if-exists=../../.env --import tsx src/kill-main.ts",
+    "seed": "node --env-file-if-exists=../../.env --import tsx src/seed-main.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "devDependencies": {
+    "vitest": "3.2.7"
+  },
+  "dependencies": {
     "@binwise/chain": "workspace:*",
     "@binwise/core": "workspace:*",
-    "tsup": "8.5.1",
+    "@binwise/db": "workspace:*",
+    "@solana/web3.js": "1.98.4",
+    "ioredis": "5.11.1",
     "tsx": "4.23.15"
   }
 }

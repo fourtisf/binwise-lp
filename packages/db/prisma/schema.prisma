@@ -77,6 +77,10 @@ model Vault {
   isDemo        Boolean         @default(false)
   /// Paper mode token balances not in positions: { [mint]: uiAmount }
   cash          Json            @default("{}")
+  /// Everything ever deposited, net of withdrawals: { [mint]: uiAmount }. The vault-level hold baseline.
+  deposits      Json            @default("{}")
+  /// Paper mode: the simulated wallet deposits come from
+  paperWallet   Json            @default("{}")
   cycle         Int             @default(0)
   agentPubkey   String?
   /// Agent secret key, sealed with AGENT_KEY_ENCRYPTION_SECRET. Never plaintext.
@@ -122,6 +126,7 @@ model Token {
   topHoldersPct           Float?
   /// 0..1 output of the holder safety check; null = not checked yet
   holderQuality           Float?
+  holderCheckedAt         DateTime?
   /// Allowlist: null = automatic (verified tokens pass), true/false = manual override
   allowed                 Boolean?
   updatedAt               DateTime @updatedAt
@@ -160,6 +165,8 @@ model PoolSnapshot {
   volatility     Float
   trend7d        Float?
   emaBearish     Boolean  @default(false)
+  /// Short-term volatility above 3x its 7-day norm
+  volSpike       Boolean  @default(false)
   /// Smallest non-stable token market cap, $M
   mcapM          Float?
   holderQuality  Float?
@@ -214,6 +221,8 @@ model Position {
   valueUsd         Float
   feesUnclaimedUsd Float           @default(0)
   feesClaimedUsd   Float           @default(0)
+  /// Network fees, tips and slippage paid by this position, USD
+  costsUsd         Float           @default(0)
   netVsHold        Float           @default(0)
   inRange          Boolean         @default(true)
   ticksOut         Int             @default(0)

@@ -96,6 +96,8 @@ export interface Executor {
   mark(pos: PositionRef, pool: PoolCtx, minutes: number): Promise<MarkResult>;
   close(pos: PositionRef, pool: PoolCtx, key: string): Promise<ActionResult>;
   claim(pos: PositionRef, pool: PoolCtx, key: string): Promise<ActionResult>;
+  /** Claim fees and add them back into the same position. Paper mode returns the new bins. */
+  compound(pos: PositionRef, pool: PoolCtx, key: string): Promise<ActionResult & { bins: number[] | null }>;
   /** Swap `uiAmount` of one token into another (exits step aside into the quote token). */
   swap(fromMint: string, toMint: string, uiAmount: number, usd: { from: number; to: number; poolTvlUsd?: number }, key: string): Promise<ActionResult>;
   /** USD cost of sending `n` transactions */
@@ -235,6 +237,16 @@ export class PaperExecutor implements Executor {
     const cost = this.txCostUsd(TX_COUNT.claim);
     this.add(pool.mintY, (p.feesUnclaimedUsd - cost) / pool.usdY);
     return { amountX: 0, amountY: 0, feesUsd: p.feesUnclaimedUsd, costUsd: cost, txSigs: [] };
+  }
+
+  async compound(p: PositionRef, pool: PoolCtx, _key?: string) {
+    const pos = toPositionBins(p);
+    const cost = this.txCostUsd(TX_COUNT.claim + 1);
+    const value = composition(pos, pool.price);
+    const valueUsd = value.x * pool.usdX + value.y * pool.usdY;
+    const addUsd = Math.max(0, p.feesUnclaimedUsd - cost);
+    const k = valueUsd > 0 ? 1 + addUsd / valueUsd : 1;
+    return { amountX: 0, amountY: 0, feesUsd: p.feesUnclaimedUsd, costUsd: cost, txSigs: [], bins: pos.liquidity.map((L) => L * k) };
   }
 
   /** USD prices for cash tokens outside the current pool (set by the agent each cycle). */

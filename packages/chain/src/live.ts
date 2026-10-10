@@ -1,4 +1,6 @@
-import DLMM, { StrategyType, autoFillYByStrategy, type LbPosition } from '@meteora-ag/dlmm';
+import { createRequire } from 'node:module';
+import type DLMMClass from '@meteora-ag/dlmm';
+import type { LbPosition, StrategyType as StrategyTypeEnum } from '@meteora-ag/dlmm';
 import {
   ComputeBudgetProgram,
   Keypair,
@@ -42,10 +44,23 @@ export interface IdempotencyGuard {
 export class TradingHalted extends Error {}
 export class DuplicateAction extends Error {}
 
-const STRATEGY: Record<LiquidityShape, StrategyType> = {
-  spot: StrategyType.Spot,
-  curve: StrategyType.Curve,
-  bidask: StrategyType.BidAsk,
+/**
+ * The SDK's ESM build imports a directory path that Node's ESM loader rejects,
+ * so load its CommonJS build, and only when live mode actually needs it.
+ */
+type DlmmModule = typeof import('@meteora-ag/dlmm');
+let sdkModule: DlmmModule | null = null;
+const sdk = (): DlmmModule => (sdkModule ??= createRequire(import.meta.url)('@meteora-ag/dlmm') as DlmmModule);
+const DLMM = {
+  create: (...a: Parameters<typeof DLMMClass.create>) => sdk().default.create(...a),
+};
+type DLMM = DLMMClass;
+
+// StrategyType values from the SDK: Spot = 0, Curve = 1, BidAsk = 2.
+const STRATEGY: Record<LiquidityShape, StrategyTypeEnum> = {
+  spot: 0 as StrategyTypeEnum,
+  curve: 1 as StrategyTypeEnum,
+  bidask: 2 as StrategyTypeEnum,
 };
 
 /** SOL kept aside for fees and rent; never deployed. */
@@ -212,7 +227,7 @@ export class LiveExecutor implements Executor {
 
     // Balance X and Y for the strategy; scale down if Y is short.
     let x = raw(Math.min(have[pool.mintX] ?? 0, req.valueUsd / 2 / pool.usdX), pool.decimalsX);
-    let y = autoFillYByStrategy(active.binId, pool.binStep, x, active.xAmount, active.yAmount, minBinId, maxBinId, strategy.strategyType);
+    let y = sdk().autoFillYByStrategy(active.binId, pool.binStep, x, active.xAmount, active.yAmount, minBinId, maxBinId, strategy.strategyType);
     const yAvail = raw(have[pool.mintY] ?? 0, pool.decimalsY);
     if (y.gt(yAvail)) {
       x = x.mul(yAvail).div(y.isZero() ? new BN(1) : y);
@@ -279,6 +294,28 @@ export class LiveExecutor implements Executor {
     const sigs: string[] = [];
     for (const [i, t] of txs.entries()) sigs.push(await this.runLegacy(`${key}:claim:${i}`, t));
     return { amountX: 0, amountY: 0, feesUsd, costUsd: this.txCostUsd(sigs.length), txSigs: sigs };
+  }
+
+  /** Claim swap fees, then add the claimed amounts back into the same range. */
+  async compound(p: PositionRef, pool: PoolCtx, key: string) {
+    if (!p.address) throw new Error('Live position has no address');
+    const dlmm = await DLMM.create(this.d.conn, new PublicKey(pool.address));
+    const pos = await this.lbPosition(dlmm, p.address);
+    const fx = pos.positionData.feeX;
+    const fy = pos.positionData.feeY;
+    const feesUsd = ui(fx, pool.decimalsX) * pool.usdX + ui(fy, pool.decimalsY) * pool.usdY;
+    const sigs: string[] = [];
+    for (const [i, t] of (await dlmm.claimSwapFee({ owner: this.me, position: pos })).entries()) sigs.push(await this.runLegacy(`${key}:claim:${i}`, t));
+    const add = await dlmm.addLiquidityByStrategy({
+      positionPubKey: pos.publicKey,
+      totalXAmount: fx,
+      totalYAmount: fy,
+      strategy: { minBinId: p.lowerBin, maxBinId: p.upperBin, strategyType: STRATEGY[p.shape] },
+      user: this.me,
+      slippage: 1,
+    });
+    sigs.push(await this.runLegacy(`${key}:add`, add));
+    return { amountX: 0, amountY: 0, feesUsd, costUsd: this.txCostUsd(sigs.length), txSigs: sigs, bins: null };
   }
 
   /** Jupiter swap: quote → swap tx → allowlist check → simulate → send. */

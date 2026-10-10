@@ -2,6 +2,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from './generated/prisma/client';
 
 export * from './generated/prisma/client';
+export * from './domain';
 
 let client: PrismaClient | undefined;
 
