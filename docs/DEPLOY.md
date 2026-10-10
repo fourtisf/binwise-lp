@@ -95,6 +95,14 @@ pnpm --filter @binwise/agent backtest --profile conservative --days 45
 
 The report is saved to `reports/backtest-YYYY-MM-DD.md` and shown in the app: press ⌘K → **Backtest report**.
 
+### Settings search (optimiser)
+
+PM2 runs a backtest and a settings search every Monday at 03:00 server time (`binwise-backtest` and `binwise-optimize` in `deploy/ecosystem.config.cjs`). Both reports appear under ⌘K → **Backtest report**. The weekly search never changes settings by itself; to switch to the recommended settings, run:
+
+```bash
+pnpm --filter @binwise/agent optimize --days 60 --apply   # activates only if it beats the current settings on unseen data
+```
+
 ## Emergency stop (kill switch)
 
 Stops every trade, paper and live, at the next transaction:

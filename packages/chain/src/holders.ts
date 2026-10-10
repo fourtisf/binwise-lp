@@ -2,8 +2,8 @@ import { PublicKey, type Connection } from '@solana/web3.js';
 import { withRetry } from './http';
 
 /**
- * Holder safety check (CLAUDE.md §2). Pluggable: the owner's BundleScan /
- * DevRadar tools can be wired in as extra HolderCheck implementations.
+ * Holder safety check (CLAUDE.md §2). Pluggable: other checks can be added
+ * as extra HolderCheck implementations.
  */
 export interface HolderInfo {
   mint: string;
