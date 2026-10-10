@@ -117,8 +117,9 @@ AGENT_KEY_ENCRYPTION_SECRET=$(openssl rand -base64 32)
 # Kill switch over HTTP: POST /api/admin/kill with header x-admin-token
 ADMIN_TOKEN=$(openssl rand -hex 16)
 
-# API
-API_PORT=4000
+# Ports on 127.0.0.1 (nginx forwards to them). 3100/4100 avoid clashing with other apps on 3000/4000.
+WEB_PORT=3100
+API_PORT=4100
 API_HOST=127.0.0.1
 SESSION_SECRET=$(openssl rand -hex 32)
 PUBLIC_DOMAIN=${DOMAIN}
@@ -142,6 +143,9 @@ EOF
   ok "Created .env with fresh secrets (permissions 600)"
 fi
 chmod 600 "$ENV_FILE"
+WEB_PORT=$(sed -n 's/^WEB_PORT=\([0-9]*\).*/\1/p' "$ENV_FILE"); WEB_PORT=${WEB_PORT:-3000}
+API_PORT=$(sed -n 's/^API_PORT=\([0-9]*\).*/\1/p' "$ENV_FILE"); API_PORT=${API_PORT:-4000}
+ok "Ports: website ${WEB_PORT}, API ${API_PORT} (local only)"
 
 sudo -u postgres psql -qtAc "SELECT 1 FROM pg_roles WHERE rolname='binwise'" | grep -q 1 \
   || sudo -u postgres psql -qc "CREATE ROLE binwise LOGIN"
@@ -164,6 +168,13 @@ ok "Website built for https://${DOMAIN}"
 
 # ---------------------------------------------------------------- processes
 step "Start processes (PM2)"
+# Another app on our ports would silently receive this site's traffic: refuse instead.
+for port in "$WEB_PORT" "$API_PORT"; do
+  pid=$(ss -ltnpH "sport = :${port}" | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2 || true)
+  if [[ -n "$pid" && "$(ps -o user= -p "$pid" | tr -d ' ')" != "$APP_USER" ]]; then
+    die "Port ${port} is used by another program ($(ps -o user=,cmd= -p "$pid" | cut -c1-80)). Set WEB_PORT / API_PORT in ${ENV_FILE} to free ports and run again."
+  fi
+done
 as_app "pm2 startOrReload deploy/ecosystem.config.cjs --update-env" >/dev/null
 as_app "pm2 save" >/dev/null
 /usr/bin/pm2 startup systemd -u "$APP_USER" --hp "$APP_HOME" >/dev/null
@@ -194,7 +205,7 @@ fi
 
 # ---------------------------------------------------------------- nginx + https
 step "Nginx and HTTPS"
-sed "s/YOUR_DOMAIN/${DOMAIN}/g" "$APP_DIR/deploy/nginx/binwise.conf" > /etc/nginx/sites-available/binwise
+sed -e "s/YOUR_DOMAIN/${DOMAIN}/g" -e "s/WEB_PORT/${WEB_PORT}/g" -e "s/API_PORT/${API_PORT}/g" "$APP_DIR/deploy/nginx/binwise.conf" > /etc/nginx/sites-available/binwise
 # Servers without IPv6 can't bind [::]:80.
 [[ -f /proc/net/if_inet6 ]] || sed -i '/listen \[::\]/d' /etc/nginx/sites-available/binwise
 ln -sf /etc/nginx/sites-available/binwise /etc/nginx/sites-enabled/binwise
@@ -235,8 +246,8 @@ else
 fi
 
 step "Health checks"
-curl -fsS --max-time 10 http://127.0.0.1:4000/health && echo && ok "API healthy" || warn "API not answering on :4000 (pm2 logs binwise-api)"
-curl -fsS --max-time 10 -o /dev/null http://127.0.0.1:3000 && ok "Website answering" || warn "Website not answering on :3000 (pm2 logs binwise-web)"
+curl -fsS --max-time 10 "http://127.0.0.1:${API_PORT}/health" | grep -q '"mode":"db"' && ok "API healthy" || warn "Binwise API not answering on :${API_PORT} (pm2 logs binwise-api)"
+curl -fsS --max-time 10 "http://127.0.0.1:${WEB_PORT}" | grep -qi binwise && ok "Website answering" || warn "Binwise website not answering on :${WEB_PORT} (pm2 logs binwise-web)"
 curl -fsS --max-time 10 -o /dev/null "https://dlmm.datapi.meteora.ag/pools?page_size=1" && ok "Meteora API reachable" || warn "Meteora API not reachable from this server"
 curl -fsS --max-time 10 -o /dev/null "https://api.jup.ag/price/v3?ids=So11111111111111111111111111111111111111112" && ok "Jupiter API reachable" \
   || warn "Jupiter price API refused the request: add a free JUPITER_API_KEY (portal.jup.ag) to .env, then: sudo -u $APP_USER pm2 restart all"
