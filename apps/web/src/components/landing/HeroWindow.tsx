@@ -1,24 +1,25 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { DemoStats, LiquidityShape } from '@binwise/core';
-import { getClient } from '@/lib/api/client';
+import type { DemoPair, DemoStats } from '@binwise/core';
+import { getDemoSource, type DemoSource } from '@/lib/api/demo';
 import { LiveChart } from '@/lib/charts/LiveChart';
 import { hhmm, pct, prefersReducedMotion, usd } from '@/lib/format';
 import { Icon } from '../Sprite';
 import { PairIcon } from '../Tokens';
 
-const PAIRS: { id: string; name: string; shape: LiquidityShape; a: [string, string]; b: [string, string] }[] = [
-  { id: 'jup-sol', name: 'JUP / SOL', shape: 'spot', a: ['J', '#4BE3CF'], b: ['S', '#A19BFF'] },
-  { id: 'sol-usdc', name: 'SOL / USDC', shape: 'curve', a: ['S', '#A19BFF'], b: ['U', '#5B95FF'] },
-  { id: 'pengu-sol', name: 'PENGU / SOL', shape: 'spot', a: ['P', '#9ADFFF'], b: ['S', '#A19BFF'] },
+// What the window shows before live data arrives (and in demo mode): the approved design's pairs.
+const INITIAL: DemoPair[] = [
+  { id: 'jup-sol', pair: 'JUP / SOL', shape: 'spot', tokenA: { symbol: 'JUP', letter: 'J', color: '#4BE3CF' }, tokenB: { symbol: 'SOL', letter: 'S', color: '#A19BFF' } },
+  { id: 'sol-usdc', pair: 'SOL / USDC', shape: 'curve', tokenA: { symbol: 'SOL', letter: 'S', color: '#A19BFF' }, tokenB: { symbol: 'USDC', letter: 'U', color: '#5B95FF' } },
+  { id: 'pengu-sol', pair: 'PENGU / SOL', shape: 'spot', tokenA: { symbol: 'PENGU', letter: 'P', color: '#9ADFFF' }, tokenB: { symbol: 'SOL', letter: 'S', color: '#A19BFF' } },
 ];
-
-const tok = ([letter, color]: [string, string]) => ({ letter, color });
 
 /** Landing hero: a live read-only window onto a paper vault, with the agent's reasoning. */
 export function HeroWindow() {
   const [pair, setPair] = useState(0);
+  const [pairs, setPairs] = useState<DemoPair[]>(INITIAL);
+  const [src, setSrc] = useState<DemoSource | null>(null);
   const [stats, setStats] = useState<DemoStats>({ fees: 0, netVsHold: 0, rebalances: 0, timeInRange: 100, inRange: true });
   const [mode, setMode] = useState('Holding position');
   const [log, setLog] = useState<[string, string, string][]>([]);
@@ -38,6 +39,19 @@ export function HeroWindow() {
   }, []);
 
   useEffect(() => {
+    let live = true;
+    getDemoSource().then((d) => {
+      if (!live) return;
+      setPairs(d.pairs);
+      setSrc(d);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!src) return;
     const think = (text: string) => {
       clearInterval(typeTimer.current);
       const el = thoughtEl.current;
@@ -54,30 +68,28 @@ export function HeroWindow() {
         if (i >= text.length) clearInterval(typeTimer.current);
       }, 18);
     };
-    const p = PAIRS[pair];
-    let off: (() => void) | undefined;
-    let cancelled = false;
-    getClient().then((client) => {
-      if (cancelled) return;
-      off = client.demo(p.id, (e) => {
-        if (e.type === 'demo:snapshot') {
-          chart.current?.load(e.chart, p.shape);
-          setLog(e.log.map(([a, b]) => [a, b, hhmm()]));
-          think(e.thought);
-        } else {
-          chart.current?.push(e.price, e.lo, e.hi, e.marker);
-          if (e.thought) think(e.thought);
-          if (e.log) setLog((l) => [[e.log![0], e.log![1], hhmm()] as [string, string, string], ...l].slice(0, 3));
-        }
-        setStats(e.stats);
+    const p = pairs[Math.min(pair, pairs.length - 1)];
+    const off = src.subscribe(p.id, (e) => {
+      if (e.type === 'demo:thought') {
+        think(e.thought);
         setMode(e.mode);
-      });
+        if (e.log) setLog((l) => [[e.log![0], e.log![1], hhmm()] as [string, string, string], ...l].slice(0, 3));
+        return;
+      }
+      if (e.type === 'demo:snapshot') {
+        chart.current?.load(e.chart, p.shape);
+        setLog(e.log.map(([a, b]) => [a, b, hhmm()]));
+        think(e.thought);
+      } else {
+        chart.current?.push(e.price, e.lo, e.hi, e.marker);
+        if (e.thought) think(e.thought);
+        if (e.log) setLog((l) => [[e.log![0], e.log![1], hhmm()] as [string, string, string], ...l].slice(0, 3));
+      }
+      setStats(e.stats);
+      setMode(e.mode);
     });
-    return () => {
-      cancelled = true;
-      off?.();
-    };
-  }, [pair]);
+    return off;
+  }, [pair, pairs, src]);
 
   return (
     <div className="win">
@@ -114,10 +126,10 @@ export function HeroWindow() {
         <div className="wmain">
           <div className="wtop">
             <div className="pairtabs" id="pairtabs" role="group" aria-label="Choose pool">
-              {PAIRS.map((p, i) => (
+              {pairs.map((p, i) => (
                 <button key={p.id} aria-pressed={i === pair} data-pair={i} onClick={() => setPair(i)}>
-                  <PairIcon a={tok(p.a)} b={tok(p.b)} />
-                  {p.name}
+                  <PairIcon a={p.tokenA} b={p.tokenB} />
+                  {p.pair}
                 </button>
               ))}
             </div>

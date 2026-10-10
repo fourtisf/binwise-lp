@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from 'react';
 
-export type Layer = 'drawer' | 'modal' | 'palette' | null;
+export type Layer = 'drawer' | 'modal' | 'palette' | 'connect' | 'confirmLive' | null;
 
 interface UiContext {
   layer: Layer;
@@ -11,6 +11,10 @@ interface UiContext {
   openPool: (id: string) => void;
   openDeposit: () => void;
   openPalette: () => void;
+  /** Wallet picker for sign-in */
+  openConnect: () => void;
+  /** "Real funds will be used" confirmation before live mode */
+  openConfirmLive: () => void;
   closeLayers: () => void;
   toastText: string;
   toastOn: boolean;
@@ -47,6 +51,8 @@ export function UiProvider({ children }: { children: ReactNode }) {
       },
       openDeposit: () => setLayer('modal'),
       openPalette: () => setLayer('palette'),
+      openConnect: () => setLayer('connect'),
+      openConfirmLive: () => setLayer('confirmLive'),
       closeLayers: () => setLayer(null),
       toastText,
       toastOn,

@@ -1,6 +1,13 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { useConnection, useWallet } from '@solana/wallet-adapter-react';
+import { PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
+import {
+  createAssociatedTokenAccountIdempotentInstruction,
+  createTransferCheckedInstruction,
+  getAssociatedTokenAddressSync,
+} from '@solana/spl-token';
 import { fmt, usd } from '@/lib/format';
 import { useAppData } from '@/lib/store';
 import { useUi } from '@/lib/ui';
@@ -11,7 +18,10 @@ const PROFILE_NAME = { conservative: 'Conservative', balanced: 'Balanced', aggre
 
 export function DepositModal() {
   const { layer, closeLayers } = useUi();
-  const { overview, draft, deposit } = useAppData();
+  const { overview, draft, deposit, depositLive, me } = useAppData();
+  const { connection } = useConnection();
+  const { publicKey, sendTransaction } = useWallet();
+  const live = overview?.mode === 'live';
   const [tok, setTok] = useState('SOL');
   const [amt, setAmt] = useState('10');
   const [busy, setBusy] = useState(false);
@@ -29,7 +39,14 @@ export function DepositModal() {
   const bal = asset?.balance ?? 0;
   const a = parseFloat(amt) || 0;
   const over = a > bal;
-  const label = over ? `Not enough ${tok}` : !a ? 'Enter an amount' : `Deposit ${fmt(a, a % 1 ? 2 : 0)} ${tok}`;
+  const walletMismatch = live && (!publicKey || publicKey.toBase58() !== me?.wallet);
+  const label = walletMismatch
+    ? 'Connect your signed-in wallet'
+    : over
+      ? `Not enough ${tok}`
+      : !a
+        ? 'Enter an amount'
+        : `Deposit ${fmt(a, a % 1 ? 2 : 0)} ${tok}`;
 
   return (
     <div className={`modal${on ? ' on' : ''}`} id="modal" role="dialog" aria-modal="true" aria-labelledby="mTitle" aria-hidden={!on}>
@@ -98,11 +115,38 @@ export function DepositModal() {
         className="btn btn-white"
         id="mGo"
         style={{ width: '100%', marginTop: 16 }}
-        disabled={!a || over || busy}
+        disabled={!a || over || busy || walletMismatch}
         onClick={async () => {
           setBusy(true);
-          if (await deposit(tok, a)) closeLayers();
-          setBusy(false);
+          try {
+            if (!live) {
+              if (await deposit(tok, a)) closeLayers();
+              return;
+            }
+            // Live: your wallet sends the transfer to the vault wallet; the API verifies it on-chain.
+            if (!publicKey || !me || publicKey.toBase58() !== me.wallet || !overview?.depositAddress || !asset?.mint) return;
+            const to = new PublicKey(overview.depositAddress);
+            const tx = new Transaction();
+            if (asset.symbol === 'SOL') tx.add(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: to, lamports: Math.floor(a * 1e9) }));
+            else {
+              const mint = new PublicKey(asset.mint);
+              const programId = (await connection.getAccountInfo(mint))!.owner;
+              const from = getAssociatedTokenAddressSync(mint, publicKey, false, programId);
+              const dest = getAssociatedTokenAddressSync(mint, to, true, programId);
+              const decimals = asset.decimals ?? 6;
+              tx.add(
+                createAssociatedTokenAccountIdempotentInstruction(publicKey, dest, to, mint, programId),
+                createTransferCheckedInstruction(from, mint, dest, publicKey, BigInt(Math.floor(a * 10 ** decimals)), decimals, [], programId),
+              );
+            }
+            const sig = await sendTransaction(tx, connection);
+            closeLayers();
+            await depositLive(sig);
+          } catch (e) {
+            console.error(e);
+          } finally {
+            setBusy(false);
+          }
         }}
       >
         {label}

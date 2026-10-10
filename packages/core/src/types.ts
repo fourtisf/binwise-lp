@@ -60,6 +60,9 @@ export interface PoolDetail extends PoolRow {
 }
 
 export interface DepositAsset {
+  /** Token mint (live deposits need it to build the transfer) */
+  mint?: string;
+  decimals?: number;
   symbol: string;
   letter: string;
   color: string;

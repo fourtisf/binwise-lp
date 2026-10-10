@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { gauss, rng, walk } from '@binwise/mock';
-import { getClient } from '@/lib/api/client';
+import { getDemoSource } from '@/lib/api/demo';
 import { LiveChart } from '@/lib/charts/LiveChart';
 import { dayLabels, lineChart } from '@/lib/charts/lineChart';
 import { hhmm, pct, prefersReducedMotion } from '@/lib/format';
@@ -60,11 +60,11 @@ export function BentoChart() {
     const chart = new LiveChart(el.current, { bins: 13, compact: true });
     let off: (() => void) | undefined;
     let cancelled = false;
-    getClient().then((c) => {
+    getDemoSource().then((d) => {
       if (cancelled) return;
-      off = c.demo('bento', (e) => {
+      off = d.subscribe(d.bentoId, (e) => {
         if (e.type === 'demo:snapshot') chart.load(e.chart);
-        else chart.push(e.price, e.lo, e.hi, e.marker);
+        else if (e.type === 'demo:tick') chart.push(e.price, e.lo, e.hi, e.marker);
       });
     });
     return () => {

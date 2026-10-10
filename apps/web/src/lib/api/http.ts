@@ -1,8 +1,6 @@
 import type { DemoEvent, StreamEvent } from '@binwise/core';
 import { ApiError, type BinwiseClient } from './client';
 
-const VAULT = 'main';
-
 /** Opens a WebSocket that reconnects with backoff until closed by the caller. */
 function socket<T>(url: string, fn: (e: T) => void): () => void {
   let ws: WebSocket | null = null;
@@ -13,8 +11,9 @@ function socket<T>(url: string, fn: (e: T) => void): () => void {
     ws = new WebSocket(url);
     ws.onopen = () => (delay = 1000);
     ws.onmessage = (m) => fn(JSON.parse(m.data as string) as T);
-    ws.onclose = () => {
-      if (closed) return;
+    ws.onclose = (ev) => {
+      // 4404 = unknown vault/pair: don't hammer the server.
+      if (closed || ev.code === 4404) return;
       timer = setTimeout(open, delay);
       delay = Math.min(delay * 2, 30000);
     };
@@ -28,36 +27,61 @@ function socket<T>(url: string, fn: (e: T) => void): () => void {
 }
 
 export function createHttpClient(api: string, ws: string): BinwiseClient {
+  let vault = '';
   const req = async <T>(path: string, init?: { method?: string; body?: unknown }): Promise<T> => {
     const res = await fetch(api + path, {
       method: init?.method ?? 'GET',
+      credentials: 'include',
       headers: init?.body !== undefined ? { 'content-type': 'application/json' } : undefined,
-      body: init?.body !== undefined ? JSON.stringify(init.body) : init?.method === 'POST' ? '{}' : undefined,
+      body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
     });
     const json = await res.json().catch(() => null);
     if (!res.ok) throw new ApiError(json?.error ?? 'http_' + res.status, json?.message ?? 'Something went wrong.');
     return json as T;
   };
   const post = <T>(path: string, body: unknown = {}) => req<T>(path, { method: 'POST', body });
-  const v = `/vaults/${VAULT}`;
+  const v = () => `/vaults/${vault}`;
+  const orNull = <T>(p: Promise<T>) => p.catch(() => null);
   return {
-    vaultId: VAULT,
-    overview: () => req(`${v}/overview`),
-    performance: (range) => req(`${v}/performance?range=${range}`),
-    pools: () => req('/pools'),
-    pool: (id) => req(`/pools/${encodeURIComponent(id)}`),
-    positions: () => req(`${v}/positions`),
-    decisions: (type) => req(`${v}/decisions${type ? `?type=${type}` : ''}`),
-    cycle: () => req(`${v}/cycle`),
-    strategy: () => req(`${v}/strategy`),
-    saveStrategy: (s) => req(`${v}/strategy`, { method: 'PUT', body: s }),
-    pause: () => post(`${v}/pause`),
-    resume: () => post(`${v}/resume`),
-    setMode: (mode) => post(`${v}/mode`, { mode }),
-    deposit: (token, amount) => post(`${v}/deposit`, { token, amount }),
+    kind: 'http',
+    get vaultId() {
+      return vault;
+    },
+    useVault: (id) => (vault = id),
+    me: () => orNull(req('/me')),
+    demoVaultId: async () => (await orNull(req<{ id: string }>('/vaults/demo')))?.id ?? null,
+    signInMessage: async (wallet) => (await req<{ message: string }>(`/auth/nonce?wallet=${encodeURIComponent(wallet)}`)).message,
+    signIn: async (wallet, message, signature) => {
+      await post('/auth/verify', { wallet, message, signature });
+    },
+    signOut: async () => {
+      await post('/auth/logout');
+    },
+    overview: () => req(`${v()}/overview`),
+    performance: (range) => req(`${v()}/performance?range=${range}`),
+    pools: () => req(`/pools?vault=${vault}`),
+    pool: (id) => req(`/pools/${encodeURIComponent(id)}?vault=${vault}`),
+    positions: () => req(`${v()}/positions`),
+    decisions: (f) => {
+      const q = new URLSearchParams();
+      if (f?.types?.length) q.set('type', f.types.join(','));
+      if (f?.exclude?.length) q.set('exclude', f.exclude.join(','));
+      return req(`${v()}/decisions${q.size ? `?${q}` : ''}`);
+    },
+    cycle: () => req(`${v()}/cycle`),
+    strategy: () => req(`${v()}/strategy`),
+    saveStrategy: (s) => req(`${v()}/strategy`, { method: 'PUT', body: s }),
+    pause: () => post(`${v()}/pause`),
+    resume: () => post(`${v()}/resume`),
+    setMode: (mode, confirm) => post(`${v()}/mode`, { mode, confirm }),
+    deposit: (token, amount) => post(`${v()}/deposit`, { token, amount }),
+    depositLive: (signature) => post(`${v()}/deposit`, { signature }),
     claim: (id) => post(`/positions/${encodeURIComponent(id)}/claim`),
     close: (id) => post(`/positions/${encodeURIComponent(id)}/close`),
-    subscribe: (fn) => socket<StreamEvent>(`${ws}/stream?vault=${VAULT}`, fn),
+    telegramLink: () => post('/me/telegram/link'),
+    latestBacktest: () => orNull(req('/backtests/latest')),
+    subscribe: (fn) => socket<StreamEvent>(`${ws}/stream?vault=${vault}`, fn),
+    demoPairs: async () => (await orNull(req('/demo/pairs'))) ?? [],
     demo: (pair, fn) => socket<DemoEvent>(`${ws}/demo?pair=${encodeURIComponent(pair)}`, fn),
   };
 }

@@ -3,10 +3,12 @@
 import { useAppData } from '@/lib/store';
 import { useUi } from '@/lib/ui';
 import { Icon } from '../Sprite';
+import { shortWallet } from './Wallet';
 
 export function Topbar({ title }: { title: string }) {
-  const { overview, setMode } = useAppData();
-  const { openPalette, openDeposit } = useUi();
+  const { overview, setMode, client, me, guard } = useAppData();
+  const { openPalette, openDeposit, openConnect } = useUi();
+  const api = client?.kind === 'http';
   const mode = overview?.mode ?? 'paper';
   return (
     <header className="topbar">
@@ -27,11 +29,17 @@ export function Topbar({ title }: { title: string }) {
             Live
           </button>
         </div>
-        <button className="btn btn-white btn-sm" onClick={openDeposit}>
+        <button className="btn btn-white btn-sm" onClick={() => guard(openDeposit)}>
           <Icon id="i-plus" />
           Deposit
         </button>
-        <span className="avatar" title="7xKp…9fQa"></span>
+        {api && !me ? (
+          <button className="btn btn-dark btn-sm" onClick={openConnect}>
+            Connect wallet
+          </button>
+        ) : (
+          <span className="avatar" title={me ? shortWallet(me.wallet) : 'Demo'}></span>
+        )}
       </div>
     </header>
   );

@@ -17,8 +17,8 @@ interface Cmd {
 
 /** ⌘K command menu: jump to pages, run actions, open a pool. */
 export function Palette() {
-  const { layer, closeLayers, openDeposit, openPool, openPalette } = useUi();
-  const { overview, pools, togglePause, setMode } = useAppData();
+  const { layer, closeLayers, openDeposit, openPool, openPalette, openConnect, toast } = useUi();
+  const { overview, pools, togglePause, setMode, guard, client, me, reload } = useAppData();
   const router = useRouter();
   const [q, setQ] = useState('');
   const [sel, setSel] = useState(0);
@@ -31,7 +31,7 @@ export function Palette() {
   const items = useMemo(() => {
     const cmds: Cmd[] = [
       ...PAGES.map((p) => ({ group: 'Go to', label: p.title, icon: p.icon, run: () => router.push(p.href) })),
-      { group: 'Actions', label: 'Deposit to vault', icon: 'i-plus', run: openDeposit },
+      { group: 'Actions', label: 'Deposit to vault', icon: 'i-plus', run: () => guard(openDeposit) },
       { group: 'Actions', label: paused ? 'Resume agent' : 'Pause agent', icon: paused ? 'i-play' : 'i-pause', run: togglePause },
       {
         group: 'Actions',
@@ -39,6 +39,23 @@ export function Palette() {
         icon: 'i-bolt',
         run: () => setMode(paper ? 'live' : 'paper'),
       },
+      { group: 'Actions', label: 'Backtest report', icon: 'i-act', run: () => router.push('/app/report') },
+      ...(client?.kind === 'http'
+        ? [
+            me
+              ? {
+                  group: 'Actions',
+                  label: 'Sign out',
+                  icon: 'i-exit' as IconId,
+                  run: () =>
+                    client.signOut().then(() => {
+                      toast('Signed out');
+                      reload();
+                    }),
+                }
+              : { group: 'Actions', label: 'Connect wallet', icon: 'i-lock' as IconId, run: openConnect },
+          ]
+        : []),
       ...pools.map((x) => ({
         group: 'Pools',
         label: x.pair,
@@ -52,7 +69,7 @@ export function Palette() {
     ];
     const s = q.toLowerCase().trim();
     return cmds.filter((c) => !s || c.label.toLowerCase().includes(s) || c.group.toLowerCase().includes(s));
-  }, [q, pools, paused, paper, router, openDeposit, openPool, togglePause, setMode]);
+  }, [q, pools, paused, paper, router, openDeposit, openPool, togglePause, setMode, guard, client, me, reload, toast, openConnect]);
 
   useEffect(() => {
     if (!on) return;

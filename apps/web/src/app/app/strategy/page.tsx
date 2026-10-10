@@ -4,6 +4,7 @@ import { STRATEGY_LIMITS, STRATEGY_PRESETS, type RiskProfile, type StrategySetti
 import { Switch } from '@/components/Switch';
 import { fmt, fmtM, usd } from '@/lib/format';
 import { useAppData } from '@/lib/store';
+import { useUi } from '@/lib/ui';
 
 const PROFILES: { key: RiskProfile; name: string; text: string; risk: number; note: string }[] = [
   { key: 'conservative', name: 'Conservative', text: 'Stable and blue-chip pools, wide ranges, few rebalances.', risk: 1, note: 'Lower fees, smaller swings' },
@@ -29,7 +30,8 @@ const SLIDERS: { key: NumKey; id: string; label: string; text: string; step?: nu
 ];
 
 export default function StrategyPage() {
-  const { draft, setDraft, saveStrategy, pools, overview } = useAppData();
+  const { draft, setDraft, saveStrategy, pools, overview, client, me, guard } = useAppData();
+  const { toast } = useUi();
   if (!draft) return <div className="page on" id="p-strategy" />;
 
   const S = draft;
@@ -101,7 +103,21 @@ export default function StrategyPage() {
                 <b>{t.title}</b>
                 <p>{t.text}</p>
               </div>
-              <Switch label={t.title} checked={S.toggles[t.key]} onChange={(on) => set({ toggles: { ...S.toggles, [t.key]: on } })} />
+              <Switch
+                label={t.title}
+                checked={S.toggles[t.key]}
+                onChange={(on) => {
+                  set({ toggles: { ...S.toggles, [t.key]: on } });
+                  // Turning on Telegram for the first time: link a chat with the bot.
+                  if (t.key === 'telegramAlerts' && on && client?.kind === 'http' && me && !me.telegramLinked)
+                    guard(() =>
+                      client.telegramLink().then((l) => {
+                        if (l.url) window.open(l.url, '_blank', 'noopener');
+                        toast(l.url ? 'Open Telegram and press Start to link alerts.' : `Send /start ${l.code} to the Binwise bot.`);
+                      }),
+                    );
+                }}
+              />
             </div>
           ))}
         </div>

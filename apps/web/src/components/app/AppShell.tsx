@@ -12,6 +12,7 @@ import { PoolDrawer } from './PoolDrawer';
 import { Sidebar } from './Sidebar';
 import { Toast } from './Toast';
 import { Topbar } from './Topbar';
+import { ConfirmLiveModal, ConnectModal, WalletProviders } from './Wallet';
 import { PAGES, pageFor } from './pages';
 
 function Shell({ children }: { children: ReactNode }) {
@@ -43,6 +44,8 @@ function Shell({ children }: { children: ReactNode }) {
       <div className={`scrim${layer ? ' on' : ''}`} id="scrim" onClick={closeLayers}></div>
       <PoolDrawer />
       <DepositModal />
+      <ConnectModal />
+      <ConfirmLiveModal />
       <Palette />
       <Toast />
     </>
@@ -51,10 +54,12 @@ function Shell({ children }: { children: ReactNode }) {
 
 export function AppShell({ children }: { children: ReactNode }) {
   return (
-    <UiProvider>
-      <AppDataProvider>
-        <Shell>{children}</Shell>
-      </AppDataProvider>
-    </UiProvider>
+    <WalletProviders>
+      <UiProvider>
+        <AppDataProvider>
+          <Shell>{children}</Shell>
+        </AppDataProvider>
+      </UiProvider>
+    </WalletProviders>
   );
 }

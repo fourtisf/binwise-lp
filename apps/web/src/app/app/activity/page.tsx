@@ -8,7 +8,8 @@ import { useAppData } from '@/lib/store';
 export default function ActivityPage() {
   const { decisions } = useAppData();
   const [filter, setFilter] = useState('all');
-  const list = filter === 'all' ? decisions : decisions.filter((d) => d.type === filter);
+  // Scans also cover skipped cycles; hold decisions show in the Decision box on Overview.
+  const list = filter === 'all' ? decisions : decisions.filter((d) => d.type === filter || (filter === 'scan' && d.type === 'skip'));
   return (
     <div className="page on" id="p-activity">
       <div className="toolbar">

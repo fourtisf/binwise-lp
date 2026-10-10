@@ -147,7 +147,7 @@ async function paperAssets(db: PrismaClient, wallet: Record<string, number>): Pr
   return tokens
     .filter((t) => t.priceUsd != null)
     .sort((a, b) => (a.symbol === 'SOL' ? -1 : b.symbol === 'SOL' ? 1 : 0))
-    .map((t) => ({ ...tokenRef(t.symbol), priceUsd: t.priceUsd!, balance: wallet[t.mint] ?? 0 }));
+    .map((t) => ({ ...tokenRef(t.symbol), mint: t.mint, decimals: t.decimals, priceUsd: t.priceUsd!, balance: wallet[t.mint] ?? 0 }));
 }
 
 export async function overview(db: PrismaClient, vaultId: string, opts: { readOnly: boolean; walletAssets?: DepositAsset[] }) {

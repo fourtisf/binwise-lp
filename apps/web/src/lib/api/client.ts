@@ -1,8 +1,11 @@
 import type {
+  BacktestSummary,
   CycleState,
   Decision,
   DecisionType,
   DemoEvent,
+  DemoPair,
+  Me,
   PerformanceRange,
   PerformanceSeries,
   PoolDetail,
@@ -23,26 +26,47 @@ export class ApiError extends Error {
   }
 }
 
+export interface DecisionFilter {
+  types?: DecisionType[];
+  exclude?: DecisionType[];
+}
+
 /** Everything the website reads or changes. Matches the API routes in CLAUDE.md §5. */
 export interface BinwiseClient {
+  /** 'mock' runs the simulated vault in the browser; 'http' talks to the real API */
+  readonly kind: 'mock' | 'http';
   readonly vaultId: string;
+  /** Point the vault-scoped calls at a vault (the user's own, or the public demo). */
+  useVault(id: string): void;
+  me(): Promise<Me | null>;
+  demoVaultId(): Promise<string | null>;
+  signInMessage(wallet: string): Promise<string>;
+  signIn(wallet: string, message: string, signatureB58: string): Promise<void>;
+  signOut(): Promise<void>;
   overview(): Promise<VaultOverview>;
   performance(range: PerformanceRange): Promise<PerformanceSeries>;
   pools(): Promise<PoolRow[]>;
   pool(id: string): Promise<PoolDetail>;
   positions(): Promise<PositionView[]>;
-  decisions(type?: DecisionType): Promise<Decision[]>;
+  decisions(filter?: DecisionFilter): Promise<Decision[]>;
   cycle(): Promise<CycleState>;
   strategy(): Promise<StrategySettings>;
   saveStrategy(s: StrategySettings): Promise<StrategySettings>;
   pause(): Promise<VaultOverview>;
   resume(): Promise<VaultOverview>;
-  setMode(mode: VaultMode): Promise<VaultOverview>;
+  setMode(mode: VaultMode, confirm?: boolean): Promise<VaultOverview>;
   deposit(token: string, amount: number): Promise<VaultOverview>;
-  claim(positionId: string): Promise<{ amount: number }>;
-  close(positionId: string): Promise<{ ok: true }>;
+  /** Live mode: record a deposit the user's wallet already sent */
+  depositLive(signature: string): Promise<VaultOverview>;
+  /** Returns the claimed amount (mock) or that the request was queued (API). */
+  claim(positionId: string): Promise<{ amount?: number; queued?: boolean }>;
+  close(positionId: string): Promise<{ ok?: true; queued?: boolean }>;
+  telegramLink(): Promise<{ url: string | null; code: string }>;
+  latestBacktest(): Promise<BacktestSummary | null>;
   /** Live vault stream. Returns an unsubscribe function. */
   subscribe(fn: (e: StreamEvent) => void): () => void;
+  /** Pairs shown in the landing page window */
+  demoPairs(): Promise<DemoPair[]>;
   /** Public landing-page demo stream for one pair. */
   demo(pair: string, fn: (e: DemoEvent) => void): () => void;
 }

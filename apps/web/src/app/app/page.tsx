@@ -8,13 +8,15 @@ import { PositionChart } from '@/components/PositionChart';
 import { Icon } from '@/components/Sprite';
 import { PairIcon } from '@/components/Tokens';
 import { dayLabel, lineChart, sparkPath } from '@/lib/charts/lineChart';
-import { pct, usd } from '@/lib/format';
+import { hhmm, pct, usd } from '@/lib/format';
+import { useUi } from '@/lib/ui';
 import { useAppData } from '@/lib/store';
 
 const SHAPE_LABEL = { spot: 'spot', curve: 'curve', bidask: 'bid-ask' } as const;
 
 export default function OverviewPage() {
-  const { overview: o, positions, decisions, cycle, decisionText, client } = useAppData();
+  const { overview: o, positions, decisions, cycle, decisionText, client, empty } = useAppData();
+  const { openConnect } = useUi();
   const [range, setRange] = useState<PerformanceRange>(30);
   const [perf, setPerf] = useState<PerformanceSeries | null>(null);
   const eq = useRef<HTMLDivElement>(null);
@@ -31,11 +33,17 @@ export default function OverviewPage() {
   }, [client, range]);
 
   useEffect(() => {
-    if (!perf) return;
+    if (!perf || !eq.current) return;
+    if (perf.ts.length < 2) {
+      eq.current.innerHTML = '<p class="muted" style="padding:40px 0;text-align:center;font-size:14px">Not enough history yet. The chart fills in as the agent runs.</p>';
+      return;
+    }
+    // Young vaults have hourly points; label those with the time.
+    const hourly = perf.ts.at(-1)! - perf.ts[0] < 2 * 86_400_000;
     const draw = () =>
       eq.current &&
       lineChart(eq.current, {
-        labels: perf.ts.map(dayLabel),
+        labels: perf.ts.map((t) => (hourly ? hhmm(t) : dayLabel(t))),
         series: [
           { name: 'Binwise vault', color: '#4BE3CF', values: perf.vault, area: true, w: 2.2 },
           { name: 'Hold', color: '#5D6072', values: perf.hold, dash: '4 4' },
@@ -54,6 +62,21 @@ export default function OverviewPage() {
   }, [perf]);
 
   const step = cycle?.paused ? -1 : (cycle?.step ?? -1);
+
+  if (empty)
+    return (
+      <div className="page on" id="p-overview">
+        <div className="panel card" style={{ textAlign: 'center', padding: '48px 20px' }}>
+          <h3 style={{ fontSize: 19 }}>Connect a wallet to start</h3>
+          <p className="muted" style={{ margin: '8px auto 20px', maxWidth: '44ch' }}>
+            You get a paper vault with simulated funds. Watch every decision before risking anything.
+          </p>
+          <button className="btn btn-white" onClick={openConnect}>
+            Connect wallet
+          </button>
+        </div>
+      </div>
+    );
 
   return (
     <div className="page on" id="p-overview">
@@ -84,7 +107,7 @@ export default function OverviewPage() {
             {inRange} / {positions.length}
           </div>
           <div className="s">
-            <b className="num">{o ? o.timeInRange30d : '—'}%</b> time in range, 30d
+            <b className="num">{o && o.timeInRange30d != null ? `${Math.round(o.timeInRange30d)}%` : '—'}</b> time in range, 30d
           </div>
         </div>
       </div>

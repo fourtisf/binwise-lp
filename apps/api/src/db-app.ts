@@ -119,7 +119,7 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
         const accs = await conn.getParsedTokenAccountsByOwner(owner, { mint: new PublicKey(t.mint) });
         balance = accs.value.reduce((s, a) => s + Number(a.account.data.parsed.info.tokenAmount.uiAmount ?? 0), 0);
       }
-      out.push({ ...tokenRef(t.symbol), priceUsd: t.priceUsd ?? 0, balance });
+      out.push({ ...tokenRef(t.symbol), mint: t.mint, decimals: t.decimals, priceUsd: t.priceUsd ?? 0, balance });
     }
     return out;
   }
