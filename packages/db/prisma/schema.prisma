@@ -1,4 +1,4 @@
-// Binwise database. Starting point from CLAUDE.md §4.
+// Binwise database. Started from CLAUDE.md §4, extended for real data, paper and live trading.
 
 generator client {
   provider = "prisma-client"
@@ -54,25 +54,34 @@ enum TxStatus {
 }
 
 model User {
-  id        String   @id @default(cuid())
+  id               String   @id @default(cuid())
   /// Registered wallet. Withdrawals may only go here.
-  wallet    String   @unique
-  createdAt DateTime @default(now())
-  vaults    Vault[]
+  wallet           String   @unique
+  telegramChatId   String?
+  /// One-time code the user sends to the bot to link Telegram
+  telegramLinkCode String?  @unique
+  createdAt        DateTime @default(now())
+  vaults           Vault[]
 }
 
 model Vault {
-  id            String      @id @default(cuid())
+  id            String          @id @default(cuid())
   userId        String
-  user          User        @relation(fields: [userId], references: [id])
+  user          User            @relation(fields: [userId], references: [id])
   name          String
   /// Paper is the default. Live also needs LIVE_TRADING_ENABLED=true.
-  mode          VaultMode   @default(paper)
-  status        VaultStatus @default(running)
+  mode          VaultMode       @default(paper)
+  status        VaultStatus     @default(running)
+  pausedReason  String?
+  /// Public read-only paper vault shown on the landing page
+  isDemo        Boolean         @default(false)
+  /// Paper mode token balances not in positions: { [mint]: uiAmount }
+  cash          Json            @default("{}")
+  cycle         Int             @default(0)
   agentPubkey   String?
   /// Agent secret key, sealed with AGENT_KEY_ENCRYPTION_SECRET. Never plaintext.
   encSecret     Bytes?
-  createdAt     DateTime    @default(now())
+  createdAt     DateTime        @default(now())
   strategy      Strategy?
   positions     Position[]
   decisions     Decision[]
@@ -91,25 +100,51 @@ model Strategy {
   minMcap      Float       @default(500)
   trendExitPct Float       @default(-12)
   dailyStopPct Float       @default(4)
-  /// Score weights per component (w1..w5)
+  /// Score weights (ScoreWeights in packages/core)
   weights      Json
   /// autoCompound, rebalanceOnlyProfitable, holderSafety, pauseOnVolSpikes, telegramAlerts
   toggles      Json
   updatedAt    DateTime    @updatedAt
 }
 
+model Token {
+  /// Mint address
+  mint                    String   @id
+  symbol                  String
+  name                    String?
+  decimals                Int
+  isVerified              Boolean  @default(false)
+  freezeAuthorityDisabled Boolean?
+  holders                 Int?
+  priceUsd                Float?
+  mcapUsd                 Float?
+  /// Share of supply held by the largest wallets, percent (from the holder check)
+  topHoldersPct           Float?
+  /// 0..1 output of the holder safety check; null = not checked yet
+  holderQuality           Float?
+  /// Allowlist: null = automatic (verified tokens pass), true/false = manual override
+  allowed                 Boolean?
+  updatedAt               DateTime @updatedAt
+}
+
 model Pool {
-  id        String         @id @default(cuid())
-  address   String         @unique
-  tokenA    String
-  tokenB    String
-  binStep   Int
+  /// Pool (lb pair) address
+  id             String         @id
+  name           String
+  tokenA         String
+  tokenB         String
+  mintA          String
+  mintB          String
+  binStep        Int
   /// Base fee in percent
-  baseFee   Float
-  updatedAt DateTime       @updatedAt
-  snapshots PoolSnapshot[]
-  positions Position[]
-  decisions Decision[]
+  baseFee        Float
+  protocolFeePct Float?
+  isBlacklisted  Boolean        @default(false)
+  updatedAt      DateTime       @updatedAt
+  snapshots      PoolSnapshot[]
+  candles        Candle[]
+  positions      Position[]
+  decisions      Decision[]
 }
 
 model PoolSnapshot {
@@ -119,52 +154,114 @@ model PoolSnapshot {
   ts             DateTime @default(now())
   tvl            Float
   volume24h      Float
+  fees24h        Float?
+  /// Quote per base (UI units)
   price          Float
   volatility     Float
-  trend7d        Float
+  trend7d        Float?
+  emaBearish     Boolean  @default(false)
+  /// Smallest non-stable token market cap, $M
+  mcapM          Float?
+  holderQuality  Float?
   score          Float
   scoreBreakdown Json
+  call           String
+  callLabel      String
+  reason         String
+  eligible       Boolean  @default(false)
 
   @@index([poolId, ts])
   @@index([ts])
 }
 
+model Candle {
+  poolId    String
+  pool      Pool     @relation(fields: [poolId], references: [id], onDelete: Cascade)
+  /// "5m" or "1h"
+  timeframe String
+  ts        DateTime
+  open      Float
+  high      Float
+  low       Float
+  close     Float
+  /// USD volume during the candle
+  volume    Float
+
+  @@id([poolId, timeframe, ts])
+}
+
 model Position {
-  id           String         @id @default(cuid())
-  vaultId      String
-  vault        Vault          @relation(fields: [vaultId], references: [id])
-  poolId       String
-  pool         Pool           @relation(fields: [poolId], references: [id])
+  id               String          @id @default(cuid())
+  vaultId          String
+  vault            Vault           @relation(fields: [vaultId], references: [id])
+  poolId           String
+  pool             Pool            @relation(fields: [poolId], references: [id])
   /// On-chain position account (null in paper mode)
-  address      String?
-  lowerBin     Int
-  upperBin     Int
-  shape        LiquidityShape
-  entryAmountA Float
-  entryAmountB Float
-  entryPriceA  Float
-  entryPriceB  Float
-  openedAt     DateTime       @default(now())
-  closedAt     DateTime?
-  status       PositionStatus @default(open)
+  address          String?
+  binStep          Int
+  lowerBin         Int
+  upperBin         Int
+  shape            LiquidityShape
+  /// Paper mode: liquidity per bin (Y units), index 0 = lowerBin
+  bins             Json?
+  entryAmountA     Float
+  entryAmountB     Float
+  entryPriceA      Float
+  entryPriceB      Float
+  entryValueUsd    Float
+  /// Latest marks, refreshed every cycle
+  price            Float
+  valueUsd         Float
+  feesUnclaimedUsd Float           @default(0)
+  feesClaimedUsd   Float           @default(0)
+  netVsHold        Float           @default(0)
+  inRange          Boolean         @default(true)
+  ticksOut         Int             @default(0)
+  rebalances       Int             @default(0)
+  lowScoreStreak   Int             @default(0)
+  lastRebalanceAt  DateTime?
+  openedAt         DateTime        @default(now())
+  closedAt         DateTime?
+  status           PositionStatus  @default(open)
+  marks            PositionMark[]
 
   @@index([vaultId, status])
 }
 
+model PositionMark {
+  id         String   @id @default(cuid())
+  positionId String
+  position   Position @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  ts         DateTime @default(now())
+  price      Float
+  lo         Float
+  hi         Float
+  valueUsd   Float
+  holdUsd    Float
+  /// percent
+  netVsHold  Float
+  inRange    Boolean
+  rebalanced Boolean  @default(false)
+
+  @@index([positionId, ts])
+}
+
 model Decision {
-  id      String       @id @default(cuid())
-  vaultId String
-  vault   Vault        @relation(fields: [vaultId], references: [id])
-  poolId  String?
-  pool    Pool?        @relation(fields: [poolId], references: [id])
-  ts      DateTime     @default(now())
-  type    DecisionType
-  title   String
+  id             String       @id @default(cuid())
+  vaultId        String
+  vault          Vault        @relation(fields: [vaultId], references: [id])
+  poolId         String?
+  pool           Pool?        @relation(fields: [poolId], references: [id])
+  ts             DateTime     @default(now())
+  type           DecisionType
+  title          String
   /// Plain-language reason shown in the activity feed
-  reason  String
-  inputs  Json
-  txSig   String?
-  txs     Tx[]
+  reason         String
+  inputs         Json
+  txSig          String?
+  /// Guards against executing the same decision twice
+  idempotencyKey String?      @unique
+  txs            Tx[]
 
   @@index([vaultId, ts])
   @@index([vaultId, type, ts])
@@ -178,6 +275,7 @@ model Tx {
   status      TxStatus
   feeLamports BigInt?
   simulated   Boolean
+  error       String?
   ts          DateTime @default(now())
 
   @@index([decisionId])
@@ -195,4 +293,17 @@ model VaultSnapshot {
   netVsHold Float
 
   @@index([vaultId, ts])
+}
+
+model BacktestRun {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  /// Strategy, cost and fee-model assumptions used
+  params    Json
+  /// Per-pool stats
+  results   Json
+  /// Aggregate stats across pools
+  summary   Json
+  /// Markdown report shown to the owner
+  report    String
 }

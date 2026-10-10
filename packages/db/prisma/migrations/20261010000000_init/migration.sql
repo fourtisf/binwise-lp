@@ -26,6 +26,8 @@ CREATE TYPE "TxStatus" AS ENUM ('simulated', 'sent', 'confirmed', 'failed');
 CREATE TABLE "User" (
     "id" TEXT NOT NULL,
     "wallet" TEXT NOT NULL,
+    "telegramChatId" TEXT,
+    "telegramLinkCode" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "User_pkey" PRIMARY KEY ("id")
@@ -38,6 +40,10 @@ CREATE TABLE "Vault" (
     "name" TEXT NOT NULL,
     "mode" "VaultMode" NOT NULL DEFAULT 'paper',
     "status" "VaultStatus" NOT NULL DEFAULT 'running',
+    "pausedReason" TEXT,
+    "isDemo" BOOLEAN NOT NULL DEFAULT false,
+    "cash" JSONB NOT NULL DEFAULT '{}',
+    "cycle" INTEGER NOT NULL DEFAULT 0,
     "agentPubkey" TEXT,
     "encSecret" BYTEA,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -62,13 +68,36 @@ CREATE TABLE "Strategy" (
 );
 
 -- CreateTable
+CREATE TABLE "Token" (
+    "mint" TEXT NOT NULL,
+    "symbol" TEXT NOT NULL,
+    "name" TEXT,
+    "decimals" INTEGER NOT NULL,
+    "isVerified" BOOLEAN NOT NULL DEFAULT false,
+    "freezeAuthorityDisabled" BOOLEAN,
+    "holders" INTEGER,
+    "priceUsd" DOUBLE PRECISION,
+    "mcapUsd" DOUBLE PRECISION,
+    "topHoldersPct" DOUBLE PRECISION,
+    "holderQuality" DOUBLE PRECISION,
+    "allowed" BOOLEAN,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "Token_pkey" PRIMARY KEY ("mint")
+);
+
+-- CreateTable
 CREATE TABLE "Pool" (
     "id" TEXT NOT NULL,
-    "address" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
     "tokenA" TEXT NOT NULL,
     "tokenB" TEXT NOT NULL,
+    "mintA" TEXT NOT NULL,
+    "mintB" TEXT NOT NULL,
     "binStep" INTEGER NOT NULL,
     "baseFee" DOUBLE PRECISION NOT NULL,
+    "protocolFeePct" DOUBLE PRECISION,
+    "isBlacklisted" BOOLEAN NOT NULL DEFAULT false,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "Pool_pkey" PRIMARY KEY ("id")
@@ -81,13 +110,35 @@ CREATE TABLE "PoolSnapshot" (
     "ts" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "tvl" DOUBLE PRECISION NOT NULL,
     "volume24h" DOUBLE PRECISION NOT NULL,
+    "fees24h" DOUBLE PRECISION,
     "price" DOUBLE PRECISION NOT NULL,
     "volatility" DOUBLE PRECISION NOT NULL,
-    "trend7d" DOUBLE PRECISION NOT NULL,
+    "trend7d" DOUBLE PRECISION,
+    "emaBearish" BOOLEAN NOT NULL DEFAULT false,
+    "mcapM" DOUBLE PRECISION,
+    "holderQuality" DOUBLE PRECISION,
     "score" DOUBLE PRECISION NOT NULL,
     "scoreBreakdown" JSONB NOT NULL,
+    "call" TEXT NOT NULL,
+    "callLabel" TEXT NOT NULL,
+    "reason" TEXT NOT NULL,
+    "eligible" BOOLEAN NOT NULL DEFAULT false,
 
     CONSTRAINT "PoolSnapshot_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "Candle" (
+    "poolId" TEXT NOT NULL,
+    "timeframe" TEXT NOT NULL,
+    "ts" TIMESTAMP(3) NOT NULL,
+    "open" DOUBLE PRECISION NOT NULL,
+    "high" DOUBLE PRECISION NOT NULL,
+    "low" DOUBLE PRECISION NOT NULL,
+    "close" DOUBLE PRECISION NOT NULL,
+    "volume" DOUBLE PRECISION NOT NULL,
+
+    CONSTRAINT "Candle_pkey" PRIMARY KEY ("poolId","timeframe","ts")
 );
 
 -- CreateTable
@@ -96,18 +147,48 @@ CREATE TABLE "Position" (
     "vaultId" TEXT NOT NULL,
     "poolId" TEXT NOT NULL,
     "address" TEXT,
+    "binStep" INTEGER NOT NULL,
     "lowerBin" INTEGER NOT NULL,
     "upperBin" INTEGER NOT NULL,
     "shape" "LiquidityShape" NOT NULL,
+    "bins" JSONB,
     "entryAmountA" DOUBLE PRECISION NOT NULL,
     "entryAmountB" DOUBLE PRECISION NOT NULL,
     "entryPriceA" DOUBLE PRECISION NOT NULL,
     "entryPriceB" DOUBLE PRECISION NOT NULL,
+    "entryValueUsd" DOUBLE PRECISION NOT NULL,
+    "price" DOUBLE PRECISION NOT NULL,
+    "valueUsd" DOUBLE PRECISION NOT NULL,
+    "feesUnclaimedUsd" DOUBLE PRECISION NOT NULL DEFAULT 0,
+    "feesClaimedUsd" DOUBLE PRECISION NOT NULL DEFAULT 0,
+    "netVsHold" DOUBLE PRECISION NOT NULL DEFAULT 0,
+    "inRange" BOOLEAN NOT NULL DEFAULT true,
+    "ticksOut" INTEGER NOT NULL DEFAULT 0,
+    "rebalances" INTEGER NOT NULL DEFAULT 0,
+    "lowScoreStreak" INTEGER NOT NULL DEFAULT 0,
+    "lastRebalanceAt" TIMESTAMP(3),
     "openedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "closedAt" TIMESTAMP(3),
     "status" "PositionStatus" NOT NULL DEFAULT 'open',
 
     CONSTRAINT "Position_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "PositionMark" (
+    "id" TEXT NOT NULL,
+    "positionId" TEXT NOT NULL,
+    "ts" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "price" DOUBLE PRECISION NOT NULL,
+    "lo" DOUBLE PRECISION NOT NULL,
+    "hi" DOUBLE PRECISION NOT NULL,
+    "valueUsd" DOUBLE PRECISION NOT NULL,
+    "holdUsd" DOUBLE PRECISION NOT NULL,
+    "netVsHold" DOUBLE PRECISION NOT NULL,
+    "inRange" BOOLEAN NOT NULL,
+    "rebalanced" BOOLEAN NOT NULL DEFAULT false,
+
+    CONSTRAINT "PositionMark_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -121,6 +202,7 @@ CREATE TABLE "Decision" (
     "reason" TEXT NOT NULL,
     "inputs" JSONB NOT NULL,
     "txSig" TEXT,
+    "idempotencyKey" TEXT,
 
     CONSTRAINT "Decision_pkey" PRIMARY KEY ("id")
 );
@@ -133,6 +215,7 @@ CREATE TABLE "Tx" (
     "status" "TxStatus" NOT NULL,
     "feeLamports" BIGINT,
     "simulated" BOOLEAN NOT NULL,
+    "error" TEXT,
     "ts" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "Tx_pkey" PRIMARY KEY ("id")
@@ -151,17 +234,29 @@ CREATE TABLE "VaultSnapshot" (
     CONSTRAINT "VaultSnapshot_pkey" PRIMARY KEY ("id")
 );
 
+-- CreateTable
+CREATE TABLE "BacktestRun" (
+    "id" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "params" JSONB NOT NULL,
+    "results" JSONB NOT NULL,
+    "summary" JSONB NOT NULL,
+    "report" TEXT NOT NULL,
+
+    CONSTRAINT "BacktestRun_pkey" PRIMARY KEY ("id")
+);
+
 -- CreateIndex
 CREATE UNIQUE INDEX "User_wallet_key" ON "User"("wallet");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "User_telegramLinkCode_key" ON "User"("telegramLinkCode");
 
 -- CreateIndex
 CREATE INDEX "Vault_userId_idx" ON "Vault"("userId");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "Strategy_vaultId_key" ON "Strategy"("vaultId");
-
--- CreateIndex
-CREATE UNIQUE INDEX "Pool_address_key" ON "Pool"("address");
 
 -- CreateIndex
 CREATE INDEX "PoolSnapshot_poolId_ts_idx" ON "PoolSnapshot"("poolId", "ts");
@@ -171,6 +266,12 @@ CREATE INDEX "PoolSnapshot_ts_idx" ON "PoolSnapshot"("ts");
 
 -- CreateIndex
 CREATE INDEX "Position_vaultId_status_idx" ON "Position"("vaultId", "status");
+
+-- CreateIndex
+CREATE INDEX "PositionMark_positionId_ts_idx" ON "PositionMark"("positionId", "ts");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Decision_idempotencyKey_key" ON "Decision"("idempotencyKey");
 
 -- CreateIndex
 CREATE INDEX "Decision_vaultId_ts_idx" ON "Decision"("vaultId", "ts");
@@ -197,10 +298,16 @@ ALTER TABLE "Strategy" ADD CONSTRAINT "Strategy_vaultId_fkey" FOREIGN KEY ("vaul
 ALTER TABLE "PoolSnapshot" ADD CONSTRAINT "PoolSnapshot_poolId_fkey" FOREIGN KEY ("poolId") REFERENCES "Pool"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "Candle" ADD CONSTRAINT "Candle_poolId_fkey" FOREIGN KEY ("poolId") REFERENCES "Pool"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "Position" ADD CONSTRAINT "Position_vaultId_fkey" FOREIGN KEY ("vaultId") REFERENCES "Vault"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "Position" ADD CONSTRAINT "Position_poolId_fkey" FOREIGN KEY ("poolId") REFERENCES "Pool"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PositionMark" ADD CONSTRAINT "PositionMark_positionId_fkey" FOREIGN KEY ("positionId") REFERENCES "Position"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "Decision" ADD CONSTRAINT "Decision_vaultId_fkey" FOREIGN KEY ("vaultId") REFERENCES "Vault"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
