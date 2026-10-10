@@ -30,7 +30,8 @@ const advance = (minutes: number) => (now += minutes * 60_000);
 beforeAll(async () => {
   // Use a dedicated test database.
   const { execSync } = await import('node:child_process');
-  execSync('psql -h localhost -U binwise -d postgres -c "create database binwise_test" 2>/dev/null || true', { stdio: 'ignore' });
+  const dbName = new URL(process.env.DATABASE_URL!).pathname.slice(1);
+  execSync(`psql -h localhost -U binwise -d postgres -c "create database ${dbName}" 2>/dev/null || true`, { stdio: 'ignore' });
   execSync('pnpm --filter @binwise/db exec prisma migrate deploy', { stdio: 'ignore', env: { ...process.env } });
 });
 

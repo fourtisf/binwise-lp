@@ -5,8 +5,8 @@ export default defineConfig({
     // Integration tests use a real Postgres + Redis; they share one database, so run files in sequence.
     fileParallelism: false,
     env: {
-      DATABASE_URL: process.env.TEST_DATABASE_URL ?? 'postgresql://binwise@localhost:5432/binwise_test',
-      REDIS_URL: process.env.TEST_REDIS_URL ?? 'redis://localhost:6379/15',
+      DATABASE_URL: process.env.TEST_DATABASE_URL ?? 'postgresql://binwise@localhost:5432/binwise_test_agent',
+      REDIS_URL: process.env.TEST_REDIS_URL ?? 'redis://localhost:6379/14',
     },
   },
 });
