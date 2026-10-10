@@ -24,6 +24,8 @@ import { TX_COUNT, type Executor, type Holdings, type KillSwitch, type PoolCtx, 
 import {
   isStable,
   latestSnapshots,
+  startOfUtcDay,
+  vaultValue,
   strategySettings,
   strategyWeights,
   type Position,
@@ -75,7 +77,8 @@ interface PoolView {
 }
 
 type Plan =
-  | { kind: 'exit'; pos: Position; view: PoolView; reason: string }
+  | { kind: 'exit'; pos: Position; view: PoolView; reason: string; manual?: boolean }
+  | { kind: 'claim'; pos: Position; view: PoolView; reason: string }
   | { kind: 'rebalance'; pos: Position; view: PoolView; reason: string; binsEachSide: number }
   | { kind: 'compound'; pos: Position; view: PoolView; reason: string }
   | { kind: 'deploy'; view: PoolView; sizeUsd: number; shape: LiquidityShape; binsEachSide: number; reason: string };
@@ -386,7 +389,7 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
       const r = await execute(deps, vault, executor, plan, key, s, tokens, now);
       sentTx = sentTx || r.sent;
       texts.push(r.text);
-      await record(plan.kind === 'deploy' ? 'deploy' : plan.kind, r.title, r.text, {
+      await record(plan.kind === 'claim' ? 'compound' : plan.kind, r.title, r.text, {
         poolId: plan.view.snap.poolId,
         key,
         inputs: { score: plan.view.a.score, breakdown: plan.view.a.breakdown, ...r.inputs },
@@ -484,6 +487,11 @@ async function execute(
   }
 
   const pos = plan.pos;
+  if (plan.kind === 'claim') {
+    const r = await ex.claim(ref(pos), v.ctx, key);
+    await db.position.update({ where: { id: pos.id }, data: { feesUnclaimedUsd: 0, feesClaimedUsd: { increment: r.feesUsd }, costsUsd: { increment: r.costUsd } } });
+    return { title: `Claimed fees from ${pair}`, text: `${usd(r.feesUsd, 2)} claimed. ${plan.reason}`, txSigs: r.txSigs, sent: r.txSigs.length > 0, inputs: { positionId: pos.id } };
+  }
   if (plan.kind === 'compound') {
     const r = await ex.compound(ref(pos), v.ctx, key);
     await db.position.update({
@@ -500,7 +508,7 @@ async function execute(
   if (plan.kind === 'exit') {
     // Step aside: move the risky token into the pair's quote/stable token.
     let swapCost = 0;
-    if (v.riskyMint) {
+    if (v.riskyMint && !plan.manual) {
       const risky = v.riskyMint;
       // Sell the whole idle balance of the falling token, not just what this position returned.
       const amt = (await ex.holdings())[risky] ?? 0;
@@ -519,7 +527,7 @@ async function execute(
     const quoteSym = v.quoteMint === v.ctx.mintX ? v.snap.pool.tokenA : v.snap.pool.tokenB;
     return {
       title: `Closed ${pair}`,
-      text: `${plan.reason} ${usd(backUsd)} back in the vault${v.riskyMint ? ` as ${quoteSym}` : ''}.`,
+      text: `${plan.reason} ${usd(backUsd)} back in the vault${v.riskyMint && !plan.manual ? ` as ${quoteSym}` : ''}.`,
       txSigs: sigs,
       sent: sigs.length > 0,
       inputs: { positionId: pos.id },
@@ -586,24 +594,31 @@ async function snapshotVault(deps: AgentDeps, vaultId: string, tokens: Map<strin
   });
 }
 
-export const startOfUtcDay = (now: number) => new Date(Math.floor(now / 86_400_000) * 86_400_000);
+export type ManualAction = 'claim' | 'close';
 
-/**
- * Vault value = idle cash + positions + unclaimed fees.
- * Hold value = everything ever deposited, valued at today's prices (CLAUDE.md §2).
- */
-export async function vaultValue(db: PrismaClient, vaultId: string, tokens?: Map<string, Token>) {
-  const vault = await db.vault.findUniqueOrThrow({ where: { id: vaultId }, include: { positions: { where: { status: 'open' } } } });
-  const cash = vault.cash as Holdings;
-  const deposits = vault.deposits as Holdings;
-  const mints = [...new Set([...Object.keys(cash), ...Object.keys(deposits)])].filter((m) => !tokens?.has(m));
-  const extra = mints.length ? await db.token.findMany({ where: { mint: { in: mints } } }) : [];
-  const price = (m: string) => tokens?.get(m)?.priceUsd ?? extra.find((t) => t.mint === m)?.priceUsd ?? 0;
-  const cashUsd = Object.entries(cash).reduce((s, [m, a]) => s + a * price(m), 0);
-  const posUsd = vault.positions.reduce((s, p) => s + p.valueUsd + p.feesUnclaimedUsd, 0);
-  const hold = Object.entries(deposits).reduce((s, [m, a]) => s + a * price(m), 0);
-  const since = new Date(Date.now() - 30 * 86_400_000);
-  const recent = await db.position.findMany({ where: { vaultId, OR: [{ status: 'open' }, { closedAt: { gte: since } }] }, select: { feesClaimedUsd: true, feesUnclaimedUsd: true } });
-  const fees = recent.reduce((s, p) => s + p.feesClaimedUsd + p.feesUnclaimedUsd, 0);
-  return { value: cashUsd + posUsd, hold, fees, mode: vault.mode, status: vault.status, cycle: vault.cycle };
+/** Runs a user's manual Claim / Close from the Positions page, with the same executor and logging. */
+export async function runManualAction(deps: AgentDeps, vault: VaultWithStrategy, positionId: string, action: ManualAction, requestId: string) {
+  const { db } = deps;
+  const pos = await db.position.findFirst({ where: { id: positionId, vaultId: vault.id, status: 'open' } });
+  if (!pos) return;
+  const snap = await db.poolSnapshot.findFirst({ where: { poolId: pos.poolId }, orderBy: { ts: 'desc' }, include: { pool: true } });
+  if (!snap) throw new Error('No market data for this pool yet.');
+  const tokens = new Map((await db.token.findMany({ where: { mint: { in: [snap.pool.mintA, snap.pool.mintB] } } })).map((t) => [t.mint, t]));
+  const view = poolView(snap, tokens, strategySettings(vault.strategy!), strategyWeights(vault.strategy!));
+  if (!view) throw new Error('Token prices are missing for this pool.');
+  const key = `${vault.id}:manual:${requestId}`;
+  if (!(await deps.claimKey(key))) return;
+  const executor = await deps.executorFor(vault);
+  const plan: Plan =
+    action === 'close'
+      ? { kind: 'exit', pos, view, reason: 'Manual close. Funds returned to your vault.', manual: true }
+      : { kind: 'claim', pos, view, reason: 'Manual claim. Sent to your vault balance.' };
+  const r = await execute(deps, vault, executor, plan, key, strategySettings(vault.strategy!), tokens, (deps.now ?? Date.now)());
+  const d = await db.decision.create({
+    data: { vaultId: vault.id, poolId: pos.poolId, type: action === 'close' ? 'exit' : 'compound', title: r.title, reason: r.text, inputs: { manual: true }, idempotencyKey: key },
+  });
+  const txSig = executor.mode === 'paper' ? `sim-${d.id}` : r.txSigs.at(-1);
+  if (txSig) await db.decision.update({ where: { id: d.id }, data: { txSig } });
+  if (executor.mode === 'paper') await db.vault.update({ where: { id: vault.id }, data: { cash: (executor as unknown as { balances: Holdings }).balances } });
+  deps.emit(vault.id, { type: 'decision', decision: { id: d.id, vaultId: vault.id, poolId: pos.poolId, ts: d.ts.getTime(), type: d.type, title: d.title, reason: d.reason, txSig } });
 }

@@ -80,10 +80,36 @@ export interface VaultOverview {
   fees30d: number;
   /** Net return vs holding the same tokens, 30d, percent. The headline metric. */
   netVsHold30d: number;
-  /** Share of time positions stayed in range, 30d, percent. */
-  timeInRange30d: number;
+  /** Share of time positions stayed in range, 30d, percent (null before any position). */
+  timeInRange30d: number | null;
   spark: number[];
   depositAssets: DepositAsset[];
+  /** Live mode: the vault's agent wallet that deposits are sent to */
+  depositAddress?: string | null;
+  /** True when the viewer can't change this vault (the public demo vault) */
+  readOnly?: boolean;
+  pausedReason?: string | null;
+}
+
+export interface Me {
+  wallet: string;
+  vaults: { id: string; name: string; mode: VaultMode }[];
+  telegramLinked: boolean;
+}
+
+/** A pair shown in the landing page's live window (a position of the public demo vault). */
+export interface DemoPair {
+  id: string;
+  pair: string;
+  tokenA: TokenRef;
+  tokenB: TokenRef;
+  shape: LiquidityShape;
+}
+
+export interface BacktestSummary {
+  createdAt: number;
+  report: string;
+  summary: Record<string, number>;
 }
 
 export interface PerformanceSeries {
@@ -232,6 +258,13 @@ export type DemoEvent =
       stats: DemoStats;
       mode: string;
       thought?: string;
+      log?: [string, string];
+    }
+  | {
+      /** The agent's reasoning changed; no new price */
+      type: 'demo:thought';
+      mode: string;
+      thought: string;
       log?: [string, string];
     };
 

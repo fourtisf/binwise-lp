@@ -1,7 +1,7 @@
 import { JupiterClient } from '@binwise/chain';
 import { getDb } from '@binwise/db';
-import { CYCLE_MS, runVaultCycle } from './agent';
-import { makeRedis, publish, withVaultLock } from './redis';
+import { CYCLE_MS, runManualAction, runVaultCycle, type ManualAction } from './agent';
+import { KEYS, makeRedis, publish, withVaultLock } from './redis';
 import { makeAgentDeps } from './runtime';
 import { Telegram } from './telegram';
 import { tickOnce } from './ticker';
@@ -54,12 +54,36 @@ const loop = async () => {
 };
 void loop();
 const cycleTimer = setInterval(loop, CYCLE_MS);
+/** Manual Claim / Close requests, picked up within a few seconds. */
+async function manualActions() {
+  const keys = await redis.keys(KEYS.actions('*'));
+  for (const k of keys) {
+    const vaultId = k.slice(KEYS.actions('').length);
+    const vault = await db.vault.findUnique({ where: { id: vaultId }, include: { strategy: true } });
+    if (!vault) {
+      await redis.del(k);
+      continue;
+    }
+    await withVaultLock(redis, vaultId, 30_000, async () => {
+      for (let raw = await redis.rpop(k); raw; raw = await redis.rpop(k)) {
+        const req = JSON.parse(raw) as { id: string; positionId: string; action: ManualAction };
+        try {
+          await runManualAction(deps, vault, req.positionId, req.action, req.id);
+        } catch (e) {
+          await db.decision.create({ data: { vaultId, type: 'skip', title: `Couldn't ${req.action}`, reason: (e as Error).message, inputs: { manual: true } } });
+        }
+      }
+    });
+  }
+}
+const manualTimer = setInterval(() => manualActions().catch((e) => console.error(`[manual] ${(e as Error).message}`)), 3_000);
 const tickTimer = setInterval(() => tickOnce(db, jupiter, deps.emit).catch((e) => console.error(`[ticker] ${(e as Error).message}`)), 10_000);
 if (telegram) void telegram.poll(db, console.log);
 
 const stop = async () => {
   clearInterval(cycleTimer);
   clearInterval(tickTimer);
+  clearInterval(manualTimer);
   telegram?.stop();
   await redis.quit();
   await db.$disconnect();

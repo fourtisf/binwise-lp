@@ -3,7 +3,7 @@ import WebSocket from 'ws';
 import type { FastifyInstance } from 'fastify';
 import { DEFAULT_STRATEGY } from '@binwise/core';
 import { MockEngine } from '@binwise/mock';
-import { buildApp } from './app';
+import { buildApp } from './mock-app';
 
 let app: FastifyInstance;
 let engine: MockEngine;

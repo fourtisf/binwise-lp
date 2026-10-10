@@ -1,14 +1,9 @@
 import { Redis } from 'ioredis';
-import type { StreamEvent } from '@binwise/core';
+import { REDIS_KEYS, type StreamEvent } from '@binwise/core';
 import type { IdempotencyGuard, KillSwitch } from '@binwise/chain';
 
 /** Redis keys and channels shared with the API. */
-export const KEYS = {
-  kill: 'binwise:kill',
-  idem: (k: string) => `binwise:idem:${k}`,
-  lock: (vaultId: string) => `binwise:lock:vault:${vaultId}`,
-  events: (vaultId: string) => `binwise:events:${vaultId}`,
-};
+export const KEYS = REDIS_KEYS;
 
 export function makeRedis(url = process.env.REDIS_URL || 'redis://localhost:6379') {
   return new Redis(url, { maxRetriesPerRequest: 3 });

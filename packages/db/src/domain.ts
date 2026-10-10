@@ -77,3 +77,25 @@ export async function latestSnapshots(db: PrismaClient, maxAgeMin = 10) {
 }
 
 export type SnapshotWithPool = Awaited<ReturnType<typeof latestSnapshots>>[number];
+
+export const startOfUtcDay = (now: number) => new Date(Math.floor(now / 86_400_000) * 86_400_000);
+
+/**
+ * Vault value = idle cash + positions + unclaimed fees.
+ * Hold value = everything ever deposited, valued at today's prices (CLAUDE.md §2).
+ */
+export async function vaultValue(db: PrismaClient, vaultId: string, tokens?: Map<string, Token>) {
+  const vault = await db.vault.findUniqueOrThrow({ where: { id: vaultId }, include: { positions: { where: { status: 'open' } } } });
+  const cash = vault.cash as Record<string, number>;
+  const deposits = vault.deposits as Record<string, number>;
+  const mints = [...new Set([...Object.keys(cash), ...Object.keys(deposits)])].filter((m) => !tokens?.has(m));
+  const extra = mints.length ? await db.token.findMany({ where: { mint: { in: mints } } }) : [];
+  const price = (m: string) => tokens?.get(m)?.priceUsd ?? extra.find((t) => t.mint === m)?.priceUsd ?? 0;
+  const cashUsd = Object.entries(cash).reduce((s, [m, a]) => s + a * price(m), 0);
+  const posUsd = vault.positions.reduce((s, p) => s + p.valueUsd + p.feesUnclaimedUsd, 0);
+  const hold = Object.entries(deposits).reduce((s, [m, a]) => s + a * price(m), 0);
+  const since = new Date(Date.now() - 30 * 86_400_000);
+  const recent = await db.position.findMany({ where: { vaultId, OR: [{ status: 'open' }, { closedAt: { gte: since } }] }, select: { feesClaimedUsd: true, feesUnclaimedUsd: true } });
+  const fees = recent.reduce((s, p) => s + p.feesClaimedUsd + p.feesUnclaimedUsd, 0);
+  return { value: cashUsd + posUsd, hold, fees, mode: vault.mode, status: vault.status, cycle: vault.cycle };
+}
