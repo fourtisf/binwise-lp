@@ -1,14 +1,27 @@
+'use client';
+
+import { useState } from 'react';
 import type { TokenRef } from '@binwise/core';
 
-export function Tok({ t }: { t: Pick<TokenRef, 'letter' | 'color'> }) {
+type TokLike = Pick<TokenRef, 'letter' | 'color'> & Partial<Pick<TokenRef, 'logo' | 'symbol'>>;
+
+/** Token badge: the token's logo, or its letter on the token color if there's no logo or it fails to load. */
+export function Tok({ t }: { t: TokLike }) {
+  const [broken, setBroken] = useState(false);
+  const logo = t.logo && !broken ? t.logo : null;
   return (
-    <span className="tok" style={{ background: t.color }}>
-      {t.letter}
+    <span className={`tok${logo ? ' img' : ''}`} style={{ background: t.color }}>
+      {logo ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={logo} alt={t.symbol ?? ''} loading="lazy" decoding="async" onError={() => setBroken(true)} />
+      ) : (
+        t.letter
+      )}
     </span>
   );
 }
 
-export function PairIcon({ a, b }: { a: Pick<TokenRef, 'letter' | 'color'>; b: Pick<TokenRef, 'letter' | 'color'> }) {
+export function PairIcon({ a, b }: { a: TokLike; b: TokLike }) {
   return (
     <span className="toks">
       <Tok t={a} />

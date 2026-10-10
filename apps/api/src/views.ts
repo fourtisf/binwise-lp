@@ -29,10 +29,31 @@ import {
 const PALETTE = ['#4BE3CF', '#A19BFF', '#5B95FF', '#B9F2E6', '#F6A93B', '#D9B38C', '#9ADFFF', '#C792FF', '#FF9EC3'];
 const FIXED: Record<string, string> = { SOL: '#A19BFF', USDC: '#5B95FF', USDT: '#4BE3CF', JUP: '#4BE3CF' };
 
-export function tokenRef(symbol: string): TokenRef {
+/** Logos bundled with the website for well-known mints (Trust Wallet assets), used when the API has none. */
+const BUNDLED: Record<string, string> = {
+  So11111111111111111111111111111111111111112: '/tokens/SOL.png',
+  EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v: '/tokens/USDC.png',
+  Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB: '/tokens/USDT.png',
+  JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN: '/tokens/JUP.png',
+  jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL: '/tokens/JTO.png',
+  DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263: '/tokens/BONK.png',
+  EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm: '/tokens/WIF.png',
+  '2zMMhcVQEXDtdE6vsFS7S7D5oUodfJHE8vd1gnBouauv': '/tokens/PENGU.png',
+  '4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R': '/tokens/RAY.png',
+  '7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr': '/tokens/POPCAT.png',
+};
+
+export function tokenRef(symbol: string, token?: Pick<Token, 'mint' | 'logoUrl'> | null): TokenRef {
   let h = 0;
   for (const c of symbol) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-  return { symbol, letter: (symbol[0] ?? '?').toUpperCase(), color: FIXED[symbol.toUpperCase()] ?? PALETTE[h % PALETTE.length] };
+  const logo = token?.logoUrl ?? (token ? BUNDLED[token.mint] : undefined);
+  return {
+    symbol,
+    letter: (symbol[0] ?? '?').toUpperCase(),
+    color: FIXED[symbol.toUpperCase()] ?? PALETTE[h % PALETTE.length],
+    ...(logo ? { logo } : {}),
+    ...(token ? { mint: token.mint } : {}),
+  };
 }
 
 export const decimalsFor = (price: number) => (price >= 100 ? 2 : price >= 1 ? 4 : price >= 0.01 ? 6 : 8);
@@ -87,8 +108,8 @@ function row(s: SnapshotWithPool, tokens: Map<string, Token>, strategy: Strategy
   return {
     id: s.poolId,
     pair: `${s.pool.tokenA} / ${s.pool.tokenB}`,
-    tokenA: tokenRef(s.pool.tokenA),
-    tokenB: tokenRef(s.pool.tokenB),
+    tokenA: tokenRef(s.pool.tokenA, tokens.get(s.pool.mintA)),
+    tokenB: tokenRef(s.pool.tokenB, tokens.get(s.pool.mintB)),
     tvl: s.tvl,
     volume24h: s.volume24h,
     volTvl: s.tvl > 0 ? s.volume24h / s.tvl : 0,
@@ -112,6 +133,7 @@ export function decisionView(d: Decision): DecisionView {
 
 export async function positionViews(db: PrismaClient, vaultId: string): Promise<PositionView[]> {
   const ps = await db.position.findMany({ where: { vaultId, status: 'open' }, include: { pool: true }, orderBy: { openedAt: 'asc' } });
+  const tokens = await tokenMap(db, ps.flatMap((p) => [p.pool.mintA, p.pool.mintB]));
   const out: PositionView[] = [];
   for (const p of ps) {
     const marks = (await db.positionMark.findMany({ where: { positionId: p.id }, orderBy: { ts: 'desc' }, take: 70 })).reverse();
@@ -121,8 +143,8 @@ export async function positionViews(db: PrismaClient, vaultId: string): Promise<
       id: p.id,
       poolId: p.poolId,
       pair: `${p.pool.tokenA} / ${p.pool.tokenB}`,
-      tokenA: tokenRef(p.pool.tokenA),
-      tokenB: tokenRef(p.pool.tokenB),
+      tokenA: tokenRef(p.pool.tokenA, tokens.get(p.pool.mintA)),
+      tokenB: tokenRef(p.pool.tokenB, tokens.get(p.pool.mintB)),
       shape: p.shape,
       value: p.valueUsd,
       fees: p.feesClaimedUsd + p.feesUnclaimedUsd,
@@ -147,7 +169,7 @@ async function paperAssets(db: PrismaClient, wallet: Record<string, number>): Pr
   return tokens
     .filter((t) => t.priceUsd != null)
     .sort((a, b) => (a.symbol === 'SOL' ? -1 : b.symbol === 'SOL' ? 1 : 0))
-    .map((t) => ({ ...tokenRef(t.symbol), mint: t.mint, decimals: t.decimals, priceUsd: t.priceUsd!, balance: wallet[t.mint] ?? 0 }));
+    .map((t) => ({ ...tokenRef(t.symbol, t), mint: t.mint, decimals: t.decimals, priceUsd: t.priceUsd!, balance: wallet[t.mint] ?? 0 }));
 }
 
 export async function overview(db: PrismaClient, vaultId: string, opts: { readOnly: boolean; walletAssets?: DepositAsset[] }) {
@@ -196,4 +218,8 @@ export async function performance(db: PrismaClient, vaultId: string, range: 7 | 
 
 export function strategyView(s: Strategy): StrategySettings {
   return strategySettings(s);
+}
+
+export async function tokenMap(db: PrismaClient, mints: string[]) {
+  return new Map((await db.token.findMany({ where: { mint: { in: [...new Set(mints)] } } })).map((t) => [t.mint, t]));
 }

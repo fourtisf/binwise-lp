@@ -116,6 +116,8 @@ model Token {
   mint                    String   @id
   symbol                  String
   name                    String?
+  /// Logo URL (Jupiter Tokens API)
+  logoUrl                 String?
   decimals                Int
   isVerified              Boolean  @default(false)
   freezeAuthorityDisabled Boolean?

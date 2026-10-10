@@ -51,3 +51,8 @@ pnpm typecheck
 pnpm lint
 pnpm build
 ```
+
+## Credits
+
+- Token logos in `apps/web/public/tokens` come from [Trust Wallet assets](https://github.com/trustwallet/assets) (MIT). In production the collector also pulls each token's logo from the Jupiter Tokens API.
+- Wallet logos in `apps/web/public/wallets` come from [web3icons](https://github.com/0xa3k5/web3icons) (MIT). Installed wallets show the icon they provide themselves.

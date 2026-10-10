@@ -10,6 +10,8 @@ export interface HolderInfo {
   isVerified: boolean;
   freezeAuthorityDisabled: boolean | null;
   holders: number | null;
+  /** Share of supply held by the top holders, percent (Jupiter audit), if known */
+  topHoldersPct?: number | null;
 }
 
 export interface HolderVerdict {
@@ -42,7 +44,12 @@ export const metadataCheck: HolderCheck = {
       notes.push(`Only ${t.holders} holders.`);
       q = Math.min(q, 0.3);
     }
-    return { quality: q, notes };
+    if (t.topHoldersPct != null) {
+      // Same scale as the RPC check: clean at ≤20% held by the top wallets, unsafe at ≥60%.
+      q = Math.min(q, Math.max(0, Math.min(1, (60 - t.topHoldersPct) / 40)));
+      if (t.topHoldersPct > 20) notes.push(`Top holders own ${t.topHoldersPct.toFixed(1)}% of supply.`);
+    }
+    return { quality: q, notes, topHoldersPct: t.topHoldersPct ?? undefined };
   },
 };
 

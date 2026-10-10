@@ -74,6 +74,7 @@ CREATE TABLE "Token" (
     "mint" TEXT NOT NULL,
     "symbol" TEXT NOT NULL,
     "name" TEXT,
+    "logoUrl" TEXT,
     "decimals" INTEGER NOT NULL,
     "isVerified" BOOLEAN NOT NULL DEFAULT false,
     "freezeAuthorityDisabled" BOOLEAN,

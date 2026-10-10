@@ -32,6 +32,20 @@ export interface JupiterSwapResponse {
   prioritizationFeeLamports?: number;
 }
 
+/** Tokens API v2 (jup-ag/docs tokens/token-information.mdx); fields we use. */
+export interface JupiterToken {
+  id: string;
+  name: string;
+  symbol: string;
+  icon?: string;
+  decimals: number;
+  isVerified?: boolean;
+  holderCount?: number;
+  mcap?: number;
+  usdPrice?: number;
+  audit?: { mintAuthorityDisabled?: boolean; freezeAuthorityDisabled?: boolean; topHoldersPercentage?: number };
+}
+
 export class JupiterClient {
   constructor(
     readonly baseUrl = process.env.JUPITER_API_URL || 'https://api.jup.ag',
@@ -55,6 +69,16 @@ export class JupiterClient {
         out,
         await fetchJson<Record<string, JupiterPrice>>(`${this.baseUrl}/price/v3?ids=${ids}`, { headers: this.headers, minIntervalMs: this.spacing }),
       );
+    }
+    return out;
+  }
+
+  /** Token metadata (logo, audit) for up to 100 mints per call. */
+  async tokens(mints: string[]): Promise<JupiterToken[]> {
+    const out: JupiterToken[] = [];
+    for (let i = 0; i < mints.length; i += 100) {
+      const query = mints.slice(i, i + 100).join(',');
+      out.push(...(await fetchJson<JupiterToken[]>(`${this.baseUrl}/tokens/v2/search?query=${query}`, { headers: this.headers, minIntervalMs: this.spacing })));
     }
     return out;
   }

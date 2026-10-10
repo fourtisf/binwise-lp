@@ -6,7 +6,7 @@ import {
   realizedVolatilityPct,
   trendState,
 } from '@binwise/core';
-import { MeteoraClient, metadataCheck, runHolderChecks, type HolderCheck, type MeteoraPool, type MeteoraToken } from '@binwise/chain';
+import { JupiterClient, MeteoraClient, metadataCheck, runHolderChecks, type HolderCheck, type MeteoraPool, type MeteoraToken } from '@binwise/chain';
 import { isAllowed, isStable, type PrismaClient, type Token } from '@binwise/db';
 
 /**
@@ -17,6 +17,8 @@ import { isAllowed, isStable, type PrismaClient, type Token } from '@binwise/db'
 export interface CollectorDeps {
   db: PrismaClient;
   meteora: MeteoraClient;
+  /** Token logos and holder audit (Jupiter Tokens API); optional */
+  jupiter?: JupiterClient;
   holderChecks?: HolderCheck[];
   /** Reads real active-bin liquidity (USD) from chain; refreshed every 10 minutes per pool */
   activeBinLiq?: (pool: { address: string; decimalsX: number; decimalsY: number; usdX: number; usdY: number }) => Promise<number>;
@@ -107,6 +109,7 @@ async function refreshHolders(deps: CollectorDeps, token: Token) {
     isVerified: token.isVerified,
     freezeAuthorityDisabled: token.freezeAuthorityDisabled,
     holders: token.holders,
+    topHoldersPct: token.topHoldersPct,
   });
   return deps.db.token.update({ where: { mint: token.mint }, data: { holderQuality: v.quality, topHoldersPct: v.topHoldersPct ?? null, holderCheckedAt: new Date() } });
 }
@@ -129,6 +132,28 @@ async function activeLiquidity(deps: CollectorDeps, p: MeteoraPool, now: number)
     return usd;
   } catch {
     return hit?.usd ?? null;
+  }
+}
+
+let lastEnrich = 0;
+
+/** Once an hour: logos and top-holder share from Jupiter for tokens we store. Best effort. */
+async function enrichTokens(deps: CollectorDeps, mints: string[]) {
+  const now = (deps.now ?? Date.now)();
+  if (!deps.jupiter || now - lastEnrich < 3600_000) return;
+  lastEnrich = now;
+  try {
+    for (const t of await deps.jupiter.tokens(mints)) {
+      await deps.db.token.updateMany({
+        where: { mint: t.id },
+        data: {
+          ...(t.icon ? { logoUrl: t.icon } : {}),
+          ...(t.audit?.topHoldersPercentage != null ? { topHoldersPct: t.audit.topHoldersPercentage, holderCheckedAt: null } : {}),
+        },
+      });
+    }
+  } catch (e) {
+    (deps.log ?? (() => {}))(`[collector] token metadata: ${(e as Error).message}`);
   }
 }
 
@@ -162,6 +187,8 @@ export async function collectOnce(deps: CollectorDeps, o: CollectorOptions = DEF
     };
     await db.pool.upsert({ where: { id: p.address }, update: data, create: { id: p.address, ...data } });
   }
+
+  await enrichTokens(deps, [...new Set(stored.flatMap((p) => [p.token_x.address, p.token_y.address]))]);
 
   const tracked = stored
     .filter((p) => p.tvl >= o.trackMinTvl)

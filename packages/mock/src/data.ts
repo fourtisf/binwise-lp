@@ -10,16 +10,18 @@ import type {
 import { clamp, walk } from './random';
 import type { SimConfig } from './price-sim';
 
+// Logos are served by the website from /tokens (sources: Trust Wallet assets, MIT).
+const t = (symbol: string, letter: string, color: string): TokenRef => ({ symbol, letter, color, logo: `/tokens/${symbol}.png` });
 export const TOKENS = {
-  JUP: { symbol: 'JUP', letter: 'J', color: '#4BE3CF' },
-  SOL: { symbol: 'SOL', letter: 'S', color: '#A19BFF' },
-  USDC: { symbol: 'USDC', letter: 'U', color: '#5B95FF' },
-  JTO: { symbol: 'JTO', letter: 'J', color: '#B9F2E6' },
-  BONK: { symbol: 'BONK', letter: 'B', color: '#F6A93B' },
-  WIF: { symbol: 'WIF', letter: 'W', color: '#D9B38C' },
-  PENGU: { symbol: 'PENGU', letter: 'P', color: '#9ADFFF' },
-  RAY: { symbol: 'RAY', letter: 'R', color: '#C792FF' },
-  POPCAT: { symbol: 'POPCAT', letter: 'P', color: '#FF9EC3' },
+  JUP: t('JUP', 'J', '#4BE3CF'),
+  SOL: t('SOL', 'S', '#A19BFF'),
+  USDC: t('USDC', 'U', '#5B95FF'),
+  JTO: t('JTO', 'J', '#B9F2E6'),
+  BONK: t('BONK', 'B', '#F6A93B'),
+  WIF: t('WIF', 'W', '#D9B38C'),
+  PENGU: t('PENGU', 'P', '#9ADFFF'),
+  RAY: t('RAY', 'R', '#C792FF'),
+  POPCAT: t('POPCAT', 'P', '#FF9EC3'),
 } satisfies Record<string, TokenRef>;
 
 export interface MockPool {

@@ -25,7 +25,7 @@ import {
 import { createVault, ensureUser, strategyData, type PrismaClient, type Vault } from '@binwise/db';
 import { SESSION_COOKIE, SESSION_DAYS, makeSession, newNonce, readSession, signInMessage, verifyWalletSignature } from './auth';
 import { EventHub } from './events';
-import { decisionView, overview, performance, poolRows, positionViews, tokenRef } from './views';
+import { decisionView, overview, performance, poolRows, positionViews, tokenMap, tokenRef } from './views';
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 const TYPES: DecisionType[] = ['scan', 'deploy', 'rebalance', 'exit', 'compound', 'hold', 'skip'];
@@ -119,7 +119,7 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
         const accs = await conn.getParsedTokenAccountsByOwner(owner, { mint: new PublicKey(t.mint) });
         balance = accs.value.reduce((s, a) => s + Number(a.account.data.parsed.info.tokenAmount.uiAmount ?? 0), 0);
       }
-      out.push({ ...tokenRef(t.symbol), mint: t.mint, decimals: t.decimals, priceUsd: t.priceUsd ?? 0, balance });
+      out.push({ ...tokenRef(t.symbol, t), mint: t.mint, decimals: t.decimals, priceUsd: t.priceUsd ?? 0, balance });
     }
     return out;
   }
@@ -513,7 +513,14 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     const demo = await demoVault();
     if (!demo) return [];
     const ps = await db.position.findMany({ where: { vaultId: demo.id, status: 'open' }, include: { pool: true }, orderBy: { valueUsd: 'desc' }, take: 3 });
-    return ps.map((p) => ({ id: p.id, pair: `${p.pool.tokenA} / ${p.pool.tokenB}`, tokenA: tokenRef(p.pool.tokenA), tokenB: tokenRef(p.pool.tokenB), shape: p.shape }));
+    const tokens = await tokenMap(db, ps.flatMap((p) => [p.pool.mintA, p.pool.mintB]));
+    return ps.map((p) => ({
+      id: p.id,
+      pair: `${p.pool.tokenA} / ${p.pool.tokenB}`,
+      tokenA: tokenRef(p.pool.tokenA, tokens.get(p.pool.mintA)),
+      tokenB: tokenRef(p.pool.tokenB, tokens.get(p.pool.mintB)),
+      shape: p.shape,
+    }));
   });
 
   return app;

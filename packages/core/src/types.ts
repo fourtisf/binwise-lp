@@ -17,9 +17,12 @@ export type PerformanceRange = 7 | 30 | 90;
 
 export interface TokenRef {
   symbol: string;
-  /** One-letter badge shown in the token circle. */
+  /** One-letter badge shown in the token circle (and when the logo can't load). */
   letter: string;
   color: string;
+  /** Token logo URL */
+  logo?: string;
+  mint?: string;
 }
 
 export interface PoolRow {
