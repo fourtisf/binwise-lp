@@ -21,7 +21,9 @@ async function tick() {
     await collectOnce({ db, meteora, jupiter, holderChecks, activeBinLiq, params: await activeParams(db), log: console.log });
     if (++runs % 60 === 1) await prune(db);
   } catch (e) {
-    console.error(`[collector] ${(e as Error).message}`);
+    const err = e as Error & { cause?: { message?: string; code?: string } };
+    // Network errors hide the real reason (DNS, TLS, refused) in .cause.
+    console.error(`[collector] ${err.message}${err.cause ? ` (${err.cause.code ?? ''} ${err.cause.message ?? ''})` : ''}`);
   } finally {
     running = false;
   }

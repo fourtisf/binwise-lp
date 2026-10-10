@@ -101,7 +101,7 @@ export function HeroWindow() {
         </div>
         <div className="url">
           <Icon id="i-lock" />
-          app.binwise.fi
+          binwise.org/app
         </div>
         <div style={{ width: 47 }}></div>
       </div>

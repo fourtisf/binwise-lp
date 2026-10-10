@@ -48,7 +48,7 @@ export interface DbAppOptions {
   sub: Redis;
   corsOrigins?: string[];
   logger?: boolean;
-  /** e.g. binwise.fi, shown in the sign-in message */
+  /** e.g. binwise.org, shown in the sign-in message */
   domain?: string;
   secureCookies?: boolean;
   rpc?: () => Connection;

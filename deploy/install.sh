@@ -188,9 +188,12 @@ ok "Open: SSH (${ssh_port:-22}), HTTP, HTTPS. App ports 3000/4000 stay private."
 # ---------------------------------------------------------------- nginx + https
 step "Nginx and HTTPS"
 sed "s/YOUR_DOMAIN/${DOMAIN}/g" "$APP_DIR/deploy/nginx/binwise.conf" > /etc/nginx/sites-available/binwise
+# Servers without IPv6 can't bind [::]:80.
+[[ -f /proc/net/if_inet6 ]] || sed -i '/listen \[::\]/d' /etc/nginx/sites-available/binwise
 ln -sf /etc/nginx/sites-available/binwise /etc/nginx/sites-enabled/binwise
 rm -f /etc/nginx/sites-enabled/default
-nginx -t -q && systemctl reload nginx
+nginx -t -q || die "Nginx configuration test failed (see the message above)."
+systemctl reload nginx
 ok "Nginx serving ${DOMAIN}"
 
 if [[ "${SKIP_HTTPS:-}" == "1" ]]; then

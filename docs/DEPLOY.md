@@ -7,100 +7,64 @@ Two ways to run it:
 
 Live trading is **off** in both. It needs `LIVE_TRADING_ENABLED=true` *and* the owner switching a vault to live with an explicit confirmation. Only turn the flag on with the owner's approval (build step 6).
 
-You need: SSH access to the VPS (Ubuntu 22.04/24.04), a domain pointed at the VPS IP (an `A` record), and about 30 minutes.
+You need: SSH access as root to the VPS (Ubuntu 22.04/24.04), and a domain whose `A` record points at the VPS IP.
 
-## 1. One-time server setup
-
-```bash
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-sudo apt-get install -y nodejs nginx certbot python3-certbot-nginx git postgresql redis-server
-sudo npm install -g pnpm@10 pm2
-```
-
-Create the database:
+## 1. Install (one command)
 
 ```bash
-sudo -u postgres psql -c "CREATE USER binwise WITH PASSWORD 'choose-a-strong-password';"
-sudo -u postgres psql -c "CREATE DATABASE binwise OWNER binwise;"
+curl -fsSL -o install.sh https://raw.githubusercontent.com/fourtisf/binwise-lp/refs/heads/claude/new-session-ll75nf/deploy/install.sh
+bash install.sh binwise.org
 ```
 
-## 2. Get the code and configure
+It takes about 10 minutes and does everything:
 
-```bash
-git clone https://github.com/fourtisf/binwise-lp.git binwise
-cd binwise
-cp .env.example .env
-nano .env
-```
+- Installs Node 22, pnpm, PM2, PostgreSQL, Redis, Nginx and certbot. Adds swap on small servers.
+- Creates a `binwise` system user and puts the code in `/home/binwise/binwise`.
+- Creates the database and `/home/binwise/binwise/.env` with fresh random secrets (readable by that user only). `LIVE_TRADING_ENABLED=false`.
+- Installs dependencies, migrates the database, and builds the website for `https://binwise.org`.
+- Starts web, API, collector and agent under PM2, set to restart on reboot, with log rotation.
+- Schedules the weekly backtest and settings search with cron (Monday 03:00 and 03:30).
+- Firewall: only SSH, HTTP and HTTPS are open. Ports 3000/4000, Postgres and Redis stay private.
+- Nginx with `www` redirecting to the bare domain, plus an HTTPS certificate from Let's Encrypt that renews automatically.
+- Waits for the first real Meteora data, creates the public demo vault, and runs health checks.
 
-Fill in at least:
+If DNS hasn't reached the server yet, the script says so and skips HTTPS. Run it again later.
 
-| Variable | Value |
+**Back up** the `AGENT_KEY_ENCRYPTION_SECRET` and `ADMIN_TOKEN` lines from `.env` somewhere offline.
+
+Optional keys (edit `.env`, then `sudo -u binwise pm2 restart all`):
+
+| Variable | Why |
 |---|---|
-| `DATABASE_URL` | `postgresql://binwise:choose-a-strong-password@localhost:5432/binwise` |
-| `RPC_URL` | your Helius URL: `https://mainnet.helius-rpc.com/?api-key=YOUR_KEY` |
-| `SESSION_SECRET` | output of `openssl rand -hex 32` |
-| `AGENT_KEY_ENCRYPTION_SECRET` | output of `openssl rand -base64 32` (keep a safe offline copy) |
-| `ADMIN_TOKEN` | output of `openssl rand -hex 16` |
-| `PUBLIC_DOMAIN` | `binwise.fi` (your domain) |
-| `CORS_ORIGINS` | `https://binwise.fi` |
-| `NEXT_PUBLIC_API_URL` | `https://binwise.fi/api` |
-| `NEXT_PUBLIC_WS_URL` | `wss://binwise.fi/api` |
-| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_BOT_USERNAME` | from @BotFather (optional) |
+| `JUPITER_API_KEY` | free at portal.jup.ag; keyless price requests are heavily rate-limited |
+| `RPC_URL` | Helius mainnet RPC; adds real active-bin liquidity to fee estimates |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_BOT_USERNAME` | alerts, from @BotFather |
 
-Leave `LIVE_TRADING_ENABLED=false`.
-
-## 3. Install, migrate, build
+## 2. Everyday commands
 
 ```bash
-pnpm install
-pnpm --filter @binwise/db migrate:deploy
-pnpm --filter @binwise/web build
+sudo -u binwise pm2 ls                      # status
+sudo -u binwise pm2 logs binwise-agent      # live agent log (also: binwise-collector, binwise-api, binwise-web)
+bash install.sh binwise.org                 # update to the latest code (keeps .env and data)
 ```
 
-## 4. Start everything with PM2
+The site's NEXT_PUBLIC_* settings are baked in at build time; the install script rebuilds every time.
+
+## 3. Backtest report (build step 4)
 
 ```bash
-pm2 start deploy/ecosystem.config.cjs
-pm2 save
-pm2 startup        # run the command it prints, so it survives reboots
-```
-
-After a minute the collector has stored pools. Then create the public demo vault (shown on the landing page):
-
-```bash
-pnpm --filter @binwise/agent seed
-```
-
-Check: `pm2 logs binwise-collector` shows `scanned … eligible`, and `pm2 logs binwise-agent` shows cycles.
-
-## 5. Nginx + HTTPS
-
-```bash
-sudo cp deploy/nginx/binwise.conf /etc/nginx/sites-available/binwise
-sudo sed -i 's/YOUR_DOMAIN/binwise.fi/' /etc/nginx/sites-available/binwise
-sudo ln -s /etc/nginx/sites-available/binwise /etc/nginx/sites-enabled/binwise
-sudo nginx -t && sudo systemctl reload nginx
-sudo certbot --nginx -d binwise.fi
-```
-
-Open `https://binwise.fi`, then **Launch app → Connect wallet**. Each wallet gets a paper vault with a simulated wallet (100 SOL + 10,000 USDC) to deposit from.
-
-## 6. Backtest report (build step 4)
-
-```bash
-pnpm --filter @binwise/agent backtest            # 38 days, top 15 pools, balanced
-pnpm --filter @binwise/agent backtest --profile conservative --days 45
+sudo -u binwise -H bash -lc 'cd ~/binwise && pnpm --filter @binwise/agent backtest'   # 38 days, top 15 pools, balanced
+sudo -u binwise -H bash -lc 'cd ~/binwise && pnpm --filter @binwise/agent backtest --profile conservative --days 45'
 ```
 
 The report is saved to `reports/backtest-YYYY-MM-DD.md` and shown in the app: press ⌘K → **Backtest report**.
 
 ### Settings search (optimiser)
 
-PM2 runs a backtest and a settings search every Monday at 03:00 server time (`binwise-backtest` and `binwise-optimize` in `deploy/ecosystem.config.cjs`). Both reports appear under ⌘K → **Backtest report**. The weekly search never changes settings by itself; to switch to the recommended settings, run:
+Cron runs a backtest and a settings search every Monday at 03:00 and 03:30 server time (installed by `deploy/install.sh`; logs in `/home/binwise/backtest.log` and `optimize.log`). Both reports appear under ⌘K → **Backtest report**. The weekly search never changes settings by itself; to switch to the recommended settings, run:
 
 ```bash
-pnpm --filter @binwise/agent optimize --days 60 --apply   # activates only if it beats the current settings on unseen data
+sudo -u binwise -H bash -lc 'cd ~/binwise && pnpm --filter @binwise/agent optimize --days 60 --apply'   # activates only if it beats the current settings on unseen data
 ```
 
 ## Emergency stop (kill switch)
@@ -108,24 +72,9 @@ pnpm --filter @binwise/agent optimize --days 60 --apply   # activates only if it
 Stops every trade, paper and live, at the next transaction:
 
 ```bash
-pnpm --filter @binwise/agent kill on       # off / status
+sudo -u binwise -H bash -lc 'cd ~/binwise && pnpm --filter @binwise/agent kill on'   # off / status
 # or over HTTP:
-curl -X POST https://binwise.fi/api/admin/kill -H "x-admin-token: $ADMIN_TOKEN" -H 'content-type: application/json' -d '{"on":true}'
-```
-
-## Updating after new commits
-
-```bash
-cd binwise && git pull && pnpm install && pnpm --filter @binwise/db migrate:deploy && pnpm --filter @binwise/web build && pm2 restart all
-```
-
-## Website only (no database)
-
-Leave `DATABASE_URL`, `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_WS_URL` empty, then:
-
-```bash
-pnpm install && pnpm --filter @binwise/web build
-pm2 start deploy/ecosystem.config.cjs --only binwise-web && pm2 save
+curl -X POST https://binwise.org/api/admin/kill -H "x-admin-token: $ADMIN_TOKEN" -H 'content-type: application/json' -d '{"on":true}'
 ```
 
 ## Before going live (build step 6, owner approval required)
