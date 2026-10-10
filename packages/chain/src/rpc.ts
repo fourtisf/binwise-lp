@@ -51,11 +51,52 @@ export async function simulateOrThrow(conn: Connection, tx: VersionedTransaction
   return r.value.unitsConsumed;
 }
 
+/** Simulates and returns the accounts' state after the transaction (for balance checks). */
+export async function simulateWithAccounts(conn: Connection, tx: VersionedTransaction, addresses: string[]) {
+  const r = await withRetry(
+    () => conn.simulateTransaction(tx, { sigVerify: true, commitment: 'processed', accounts: { encoding: 'base64', addresses } }),
+    2,
+    'simulateTransaction',
+  );
+  if (r.value.err) throw new SimulationFailed(`Simulation failed: ${JSON.stringify(r.value.err)}`, r.value.logs);
+  return r.value.accounts ?? [];
+}
+
+export class TxFailed extends Error {}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Waits for a sent transaction. If the normal confirmation errors out (timeout, dropped
+ * websocket, block-height expiry), asks the chain for the signature's real status instead of
+ * guessing, so a transaction that did land is never treated as failed and sent again.
+ */
+export async function confirmOrCheck(conn: Connection, sig: string, blockhash: string, lastValidBlockHeight: number): Promise<string> {
+  try {
+    const res = await conn.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'confirmed');
+    if (res.value.err) throw new TxFailed(`Transaction ${sig} failed: ${JSON.stringify(res.value.err)}`);
+    return sig;
+  } catch (e) {
+    if (e instanceof TxFailed) throw e;
+    for (let i = 0; i < 60; i++) {
+      const st = (await withRetry(() => conn.getSignatureStatuses([sig], { searchTransactionHistory: true }), 3, 'getSignatureStatuses')).value[0];
+      if (st?.err) throw new TxFailed(`Transaction ${sig} failed: ${JSON.stringify(st.err)}`);
+      if (st && (st.confirmationStatus === 'confirmed' || st.confirmationStatus === 'finalized')) return sig;
+      // Once the blockhash has expired the transaction can no longer land: safe to call it failed.
+      if ((await withRetry(() => conn.getBlockHeight('confirmed'), 3, 'getBlockHeight')) > lastValidBlockHeight) {
+        const last = (await conn.getSignatureStatuses([sig], { searchTransactionHistory: true })).value[0];
+        if (last && !last.err) return sig;
+        throw new TxFailed(`Transaction ${sig} did not land before its blockhash expired.`);
+      }
+      await sleep(2000);
+    }
+    throw new Error(`Transaction ${sig} is still unconfirmed. Check it on an explorer before retrying.`);
+  }
+}
+
 /** Sends a signed transaction (no preflight; we already simulated) and waits for confirmation. */
 export async function sendAndConfirm(conn: Connection, tx: VersionedTransaction, lastValidBlockHeight: number): Promise<string> {
   const raw = tx.serialize();
   const sig = await withRetry(() => conn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 3 }), 2, 'sendRawTransaction');
-  const res = await conn.confirmTransaction({ signature: sig, blockhash: tx.message.recentBlockhash, lastValidBlockHeight }, 'confirmed');
-  if (res.value.err) throw new Error(`Transaction ${sig} failed: ${JSON.stringify(res.value.err)}`);
-  return sig;
+  return confirmOrCheck(conn, sig, tx.message.recentBlockhash, lastValidBlockHeight);
 }

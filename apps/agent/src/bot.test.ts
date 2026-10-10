@@ -29,6 +29,10 @@ const press = (data: string, messageId = 77) =>
   bot()({ update_id: ++updateId, callback_query: { id: `cb${updateId}`, data, message: { message_id: messageId, chat: { id: CHAT, type: 'private' } } } });
 const last = () => sent.at(-1)!;
 const buttons = () => (last().keyboard ?? []).flat();
+const callbackOf = (text: string) => {
+  const b = buttons().find((x) => x.text === text);
+  return b && 'callback_data' in b ? b.callback_data : undefined;
+};
 
 const agentDeps = (): AgentDeps => ({
   db,
@@ -56,7 +60,7 @@ beforeEach(async () => {
   usedKeys.clear();
   now = Date.UTC(2026, 9, 10, 12);
   const user = await ensureUser(db, 'Wallet1111111111111111111111111111111111111');
-  await db.user.update({ where: { id: user.id }, data: { telegramLinkCode: 'code123' } });
+  await db.user.update({ where: { id: user.id }, data: { telegramLinkCode: 'code123', telegramLinkCodeAt: new Date(now) } });
   const v = await createVault(db, user.id, { cash: { [USDC]: 10_000 } });
   await db.vault.update({ where: { id: v.id }, data: { deposits: { [USDC]: 10_000 } } });
   await collectOnce({ db, meteora: asMeteora(meteora), now: () => now }, DEFAULT_COLLECTOR);
@@ -73,9 +77,26 @@ describe('telegram bot', () => {
     await say('/start code123');
     expect(last().text).toMatch(/^✅ Connected/);
     expect(buttons().map((b) => b.text)).toEqual(['📊 Status', '➕ Add LP', '💼 Positions', '🗳 Approvals', '🤖 Mode: Auto', '⏸ Pause agent', '🌐 Open app']);
+    expect(callbackOf('🤖 Mode: Auto')).toBe('mode|manual');
     // The code works once.
     await say('/start code123');
     expect(last().text).toMatch(/not valid or was already used/);
+  });
+
+  it('refuses link codes older than 15 minutes', async () => {
+    now += 16 * 60_000;
+    await say('/start code123');
+    expect(last().text).toMatch(/expired/);
+    expect(await db.user.count({ where: { telegramChatId: String(CHAT) } })).toBe(0);
+  });
+
+  it('unlinks the chat with /unlink', async () => {
+    await say('/start code123');
+    await say('/unlink');
+    expect(last().text).toMatch(/Disconnected/);
+    expect(await db.user.count({ where: { telegramChatId: String(CHAT) } })).toBe(0);
+    await say('/status');
+    expect(last().text).toMatch(/isn't connected to a vault yet/);
   });
 
   it('ignores group chats', async () => {
@@ -127,6 +148,11 @@ describe('telegram bot', () => {
     const pos = await db.position.findFirstOrThrow();
     await press('pos');
     expect(last().text).toMatch(/JUP \/ USDC/);
+    // Claim fees can be pressed again on the same message later: each press is its own request.
+    await press(`f|${pos.id}`);
+    await press(`f|${pos.id}`);
+    expect(queue.map((r) => r.action)).toEqual(['claim', 'claim']);
+    expect(queue[0].id).not.toBe(queue[1].id);
     await press(`c|${pos.id}`);
     expect(last().text).toMatch(/^Close <b>JUP \/ USDC<\/b>/);
     await press(`cx|${pos.id}`);
@@ -148,11 +174,15 @@ describe('telegram bot', () => {
 
   it('switches between automatic and manual, and approves proposals with buttons', async () => {
     await say('/start code123');
-    await press('mode');
+    await press('mode|manual');
     expect(last().text).toMatch(/✋ Manual: the agent asks before every trade/);
-    expect(buttons().map((b) => b.text)).toContain('✋ Mode: Manual');
+    expect(callbackOf('✋ Mode: Manual')).toBe('mode|auto');
     const st = await db.strategy.findFirstOrThrow();
     expect((st.toggles as { askBeforeTrading: boolean }).askBeforeTrading).toBe(true);
+    // A double tap sets the same mode again instead of flipping back.
+    await press('mode|manual');
+    expect(answers.at(-1)).toMatch(/Already in manual mode/);
+    expect(((await db.strategy.findFirstOrThrow()).toggles as { askBeforeTrading: boolean }).askBeforeTrading).toBe(true);
 
     const v = await vault();
     const p = await db.proposal.create({
@@ -174,8 +204,9 @@ describe('telegram bot', () => {
 
     // Back to automatic: anything still waiting is dropped (the agent now acts by itself).
     await db.proposal.create({ data: { vaultId: v.id, kind: 'exit', title: 'Exit X', reason: 'r', expiresAt: new Date(now + 3600_000) } });
-    await press('mode');
+    await press('mode|auto');
     expect(await db.proposal.count({ where: { status: 'pending' } })).toBe(0);
+    expect(((await db.strategy.findFirstOrThrow()).toggles as { askBeforeTrading: boolean }).askBeforeTrading).toBe(false);
   });
 
   it('pauses and resumes the agent', async () => {

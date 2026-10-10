@@ -157,7 +157,10 @@ ok "Ports: website ${WEB_PORT}, API ${API_PORT} (local only)"
 
 sudo -u postgres psql -qtAc "SELECT 1 FROM pg_roles WHERE rolname='binwise'" | grep -q 1 \
   || sudo -u postgres psql -qc "CREATE ROLE binwise LOGIN"
-sudo -u postgres psql -qc "ALTER ROLE binwise WITH LOGIN PASSWORD '${DB_PASS}'"
+# Password via stdin, not the command line (where any user could see it in ps).
+sudo -u postgres psql -q -v ON_ERROR_STOP=1 <<SQL
+ALTER ROLE binwise WITH LOGIN PASSWORD '${DB_PASS}';
+SQL
 sudo -u postgres psql -qtAc "SELECT 1 FROM pg_database WHERE datname='binwise'" | grep -q 1 \
   || sudo -u postgres psql -qc "CREATE DATABASE binwise OWNER binwise"
 ok "PostgreSQL database 'binwise' (local connections only)"
@@ -224,6 +227,10 @@ ok "Nginx serving ${DOMAIN}"
 
 if [[ "${SKIP_HTTPS:-}" == "1" ]]; then
   warn "Skipped HTTPS (SKIP_HTTPS=1). The site won't work fully until HTTPS is on: re-run without it."
+elif [[ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]]; then
+  # Re-run: the site file above replaced certbot's HTTPS lines. Put the existing certificate back (no DNS check needed).
+  certbot install --nginx --cert-name "$DOMAIN" --non-interactive --redirect >/dev/null
+  ok "HTTPS on (existing certificate, renews automatically)"
 else
   server_ip=$(curl -fsS4 --max-time 10 https://api.ipify.org || hostname -I | awk '{print $1}')
   names=(-d "$DOMAIN")

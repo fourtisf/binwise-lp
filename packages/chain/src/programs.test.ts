@@ -1,12 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import { ComputeBudgetProgram, Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
-import { createTransferCheckedInstruction, getAssociatedTokenAddressSync } from '@solana/spl-token';
+import {
+  NATIVE_MINT,
+  createApproveInstruction,
+  createAssociatedTokenAccountIdempotentInstruction,
+  createCloseAccountInstruction,
+  createSetAuthorityInstruction,
+  createSyncNativeInstruction,
+  createTransferCheckedInstruction,
+  createTransferInstruction,
+  AuthorityType,
+  getAssociatedTokenAddressSync,
+} from '@solana/spl-token';
 import { PROGRAM_IDS, PolicyViolation, assertTxAllowed, type TxPolicy } from './programs';
 
 const agent = Keypair.generate().publicKey;
 const owner = Keypair.generate().publicKey;
 const stranger = Keypair.generate().publicKey;
-const policy = (p: Partial<TxPolicy> = {}): TxPolicy => ({ transferDestinations: new Set([agent.toBase58()]), newAccounts: new Set(), ...p });
+const policy = (p: Partial<TxPolicy> = {}): TxPolicy => ({ agent: agent.toBase58(), transferDestinations: new Set([agent.toBase58()]), newAccounts: new Set(), ...p });
 const tx = (...ixs: TransactionInstruction[]) => new Transaction().add(...ixs);
 
 describe('transaction policy', () => {
@@ -43,5 +54,19 @@ describe('transaction policy', () => {
     const ix = SystemProgram.createAccount({ fromPubkey: agent, newAccountPubkey: stranger, lamports: 1, space: 0, programId: SystemProgram.programId });
     expect(() => assertTxAllowed(tx(ix), policy())).toThrow(/Unexpected/);
     expect(() => assertTxAllowed(tx(ix), policy({ newAccounts: new Set([stranger.toBase58()]) }))).not.toThrow();
+  });
+  it('allows only safe token instructions in trading transactions', () => {
+    const mint = Keypair.generate().publicKey;
+    const mine = getAssociatedTokenAddressSync(mint, agent);
+    const wsol = getAssociatedTokenAddressSync(NATIVE_MINT, agent);
+    // Wrapping and unwrapping SOL back to the agent: allowed
+    expect(() => assertTxAllowed(tx(createSyncNativeInstruction(wsol), createCloseAccountInstruction(wsol, agent, agent)), policy())).not.toThrow();
+    expect(() => assertTxAllowed(tx(createAssociatedTokenAccountIdempotentInstruction(agent, mine, agent, mint)), policy())).not.toThrow();
+    // Anything that hands tokens or control to someone else: blocked
+    expect(() => assertTxAllowed(tx(createCloseAccountInstruction(wsol, stranger, agent)), policy())).toThrow(PolicyViolation);
+    expect(() => assertTxAllowed(tx(createApproveInstruction(mine, stranger, agent, 1n)), policy())).toThrow(/not allowed/);
+    expect(() => assertTxAllowed(tx(createSetAuthorityInstruction(mine, agent, AuthorityType.AccountOwner, stranger)), policy())).toThrow(/not allowed/);
+    expect(() => assertTxAllowed(tx(createTransferInstruction(mine, getAssociatedTokenAddressSync(mint, stranger), agent, 1n)), policy())).toThrow(/not allowed/);
+    expect(() => assertTxAllowed(tx(createAssociatedTokenAccountIdempotentInstruction(agent, getAssociatedTokenAddressSync(mint, stranger), stranger, mint)), policy())).toThrow(PolicyViolation);
   });
 });

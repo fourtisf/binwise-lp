@@ -14,10 +14,12 @@ import { useUi } from '@/lib/ui';
 import { Icon } from '../Sprite';
 import { Tok } from '../Tokens';
 
+/** SOL left in the wallet on a live "Max" so the transfer's network fee can still be paid. */
+const SOL_FEE_RESERVE = 0.01;
 const PROFILE_NAME = { conservative: 'Conservative', balanced: 'Balanced', aggressive: 'Aggressive' } as const;
 
 export function DepositModal() {
-  const { layer, closeLayers } = useUi();
+  const { layer, closeLayers, toast } = useUi();
   const { overview, draft, deposit, depositLive, me } = useAppData();
   const { connection } = useConnection();
   const { publicKey, sendTransaction } = useWallet();
@@ -92,7 +94,14 @@ export function DepositModal() {
             ['.5', '50%'],
             ['1', 'Max'],
           ].map(([q, l]) => (
-            <button key={q} onClick={() => setAmt(String(+(bal * +q).toFixed(2)))}>
+            <button
+              key={q}
+              onClick={() => {
+                // Round down to the shown precision so "Max" never exceeds the balance.
+                const max = live && tok === 'SOL' ? Math.max(0, bal - SOL_FEE_RESERVE) : bal;
+                setAmt(String(Math.floor(Math.min(bal * +q, max) * 100) / 100));
+              }}
+            >
               {l}
             </button>
           ))}
@@ -142,7 +151,9 @@ export function DepositModal() {
             if (asset.symbol === 'SOL') tx.add(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: to, lamports: Math.floor(a * 1e9) }));
             else {
               const mint = new PublicKey(asset.mint);
-              const programId = (await connection.getAccountInfo(mint))!.owner;
+              const info = await connection.getAccountInfo(mint);
+              if (!info) throw new Error(`Couldn't load the ${asset.symbol} token from Solana. Try again.`);
+              const programId = info.owner;
               const from = getAssociatedTokenAddressSync(mint, publicKey, false, programId);
               const dest = getAssociatedTokenAddressSync(mint, to, true, programId);
               const decimals = asset.decimals ?? 6;
@@ -156,6 +167,8 @@ export function DepositModal() {
             await depositLive(sig);
           } catch (e) {
             console.error(e);
+            const msg = e instanceof Error ? e.message : '';
+            toast(/reject|cancel|denied/i.test(msg) ? 'Deposit cancelled' : msg || 'Deposit failed. Try again.');
           } finally {
             setBusy(false);
           }

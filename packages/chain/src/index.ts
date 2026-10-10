@@ -9,4 +9,5 @@ export * from './keys';
 export * from './programs';
 export * from './executor';
 export * from './live';
+export * from './deposits';
 export { activeBinLiquidityUsd } from './sdk';

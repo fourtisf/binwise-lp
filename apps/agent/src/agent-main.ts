@@ -25,7 +25,11 @@ async function cycleAll() {
       for (let v = queue.shift(); v; v = queue.shift()) {
         const vault = v;
         try {
-          const r = await withVaultLock(redis, vault.id, CYCLE_MS - 5_000, () => runVaultCycle(deps, vault));
+          // Re-read inside the lock: the app or a manual action may have changed the vault meanwhile.
+          const r = await withVaultLock(redis, vault.id, 60_000, async () => {
+            const fresh = await db.vault.findUnique({ where: { id: vault.id }, include: { strategy: true } });
+            return fresh?.status === 'running' ? runVaultCycle(deps, fresh) : null;
+          });
           if (r) console.log(`[agent] ${vault.id} cycle ${vault.cycle + 1}: ${r.short}`);
         } catch (e) {
           const msg = (e as Error).message;
@@ -65,10 +69,13 @@ async function manualActions() {
       await redis.del(k);
       continue;
     }
-    // Long enough for a live open (funding swaps + deposit), so a cycle can't start mid-action.
-    await withVaultLock(redis, vaultId, 180_000, async () => {
+    // The lock is renewed while each action runs, so a cycle can't start mid-action.
+    await withVaultLock(redis, vaultId, 60_000, async () => {
       for (let raw = await redis.rpop(k); raw; raw = await redis.rpop(k)) {
         const req = JSON.parse(raw) as ManualRequest;
+        // Fresh copy per request: the previous one may have changed cash or positions.
+        const vault = await db.vault.findUnique({ where: { id: vaultId }, include: { strategy: true } });
+        if (!vault) break;
         let result: ManualResult | null = null;
         let error: string | undefined;
         try {

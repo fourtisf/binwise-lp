@@ -18,6 +18,7 @@ import {
 import {
   LiveExecutor,
   isLiveWallet,
+  parseDeposit,
   createAgentKey,
   loadAgentKey,
   makeConnection,
@@ -74,12 +75,21 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
   const hub = new EventHub(o.sub);
   await hub.start();
   const rpc = o.rpc ?? (() => makeConnection());
+  /** RPC for money routes: a missing or unreachable node is a clear, retryable error, not a 500. */
+  const chain = () => {
+    try {
+      return rpc();
+    } catch {
+      throw new ApiError(502, 'rpc_unavailable', 'Could not reach Solana right now. Nothing was sent; try again in a moment.');
+    }
+  };
   const liveEnabled = () => process.env.LIVE_TRADING_ENABLED === 'true';
   /** DEFAULT_VAULT_MODE=live: new wallets start on mainnet (needs live trading on, an RPC, and the wallet allowed). */
   const liveByDefault = (wallet: string) =>
     process.env.DEFAULT_VAULT_MODE === 'live' && liveEnabled() && !!process.env.RPC_URL && isLiveWallet(wallet);
 
-  const app = Fastify({ logger: o.logger ?? false, trustProxy: true });
+  // Only nginx on this machine may set X-Forwarded-For; otherwise clients could spoof their IP past rate limits.
+  const app = Fastify({ logger: o.logger ?? false, trustProxy: '127.0.0.1' });
   await app.register(cors, { origin: o.corsOrigins?.length ? o.corsOrigins : false, credentials: true });
   await app.register(cookie);
   await app.register(rateLimit, { max: 300, timeWindow: '1 minute' });
@@ -141,9 +151,60 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
   const publish = (vaultId: string, e: StreamEvent) => redis.publish(REDIS_KEYS.events(vaultId), JSON.stringify(e));
   const killed = async () => (await redis.get(REDIS_KEYS.kill)) === '1';
 
+  /**
+   * Same per-vault lock the agent worker takes, so money moves from the app (deposit, withdraw,
+   * mode switch) never interleave with an agent cycle. Waits up to ~15s for a running cycle.
+   */
+  async function withVaultLock<T>(vaultId: string, ttlMs: number, fn: () => Promise<T>): Promise<T> {
+    const token = randomUUID();
+    for (let i = 0; i < 60; i++) {
+      if ((await redis.set(REDIS_KEYS.lock(vaultId), token, 'PX', ttlMs, 'NX')) === 'OK') {
+        const renew = setInterval(
+          () =>
+            void redis
+              .eval("if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) else return 0 end", 1, REDIS_KEYS.lock(vaultId), token, ttlMs)
+              .catch(() => {}),
+          Math.max(1000, Math.floor(ttlMs / 3)),
+        );
+        try {
+          return await fn();
+        } finally {
+          clearInterval(renew);
+          await redis.eval("if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end", 1, REDIS_KEYS.lock(vaultId), token);
+        }
+      }
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    throw new ApiError(409, 'vault_busy', 'The agent is working on this vault right now. Try again in a few seconds.');
+  }
+
+  /** USD value of a token map at current prices. */
+  async function usdValue(amounts: Record<string, number>) {
+    const tokens = await db.token.findMany({ where: { mint: { in: Object.keys(amounts) } } });
+    return Object.entries(amounts).reduce((s, [m, a]) => s + a * (tokens.find((t) => t.mint === m)?.priceUsd ?? 0), 0);
+  }
+
+  /**
+   * After a withdrawal, shrink the hold baseline by the same share of its value, whatever token
+   * was withdrawn, so net vs hold isn't distorted by money taken out.
+   */
+  async function shrinkDeposits(deposits: Record<string, number>, withdrawnUsd: number) {
+    const holdUsd = await usdValue(deposits);
+    const k = holdUsd > 0 ? Math.max(0, 1 - withdrawnUsd / holdUsd) : 0;
+    return Object.fromEntries(Object.entries(deposits).map(([m, a]) => [m, a * k]));
+  }
+
+  const moneyLimit = { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } };
+
   const fmt = (n: number, d = 2) => n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
-  async function logDecision(vaultId: string, type: DecisionType, title: string, reason: string, extra: { txSig?: string; key?: string } = {}) {
-    const d = await db.decision.create({ data: { vaultId, type, title, reason, inputs: {}, txSig: extra.txSig, idempotencyKey: extra.key } });
+  async function logDecision(
+    vaultId: string,
+    type: DecisionType,
+    title: string,
+    reason: string,
+    extra: { txSig?: string; key?: string; inputs?: object } = {},
+  ) {
+    const d = await db.decision.create({ data: { vaultId, type, title, reason, inputs: extra.inputs ?? {}, txSig: extra.txSig, idempotencyKey: extra.key } });
     await publish(vaultId, { type: 'decision', decision: decisionView(d) });
     return d;
   }
@@ -163,17 +224,20 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     } catch {
       throw new ApiError(400, 'bad_wallet', 'That is not a Solana wallet address.');
     }
-    const message = signInMessage(wallet, newNonce(), new Date().toISOString(), o.domain ?? 'Binwise');
-    await redis.set(REDIS_KEYS.nonce(wallet), message, 'EX', 300);
+    const nonce = newNonce();
+    const message = signInMessage(wallet, nonce, new Date().toISOString(), o.domain ?? 'Binwise');
+    // Keyed by the nonce itself, so requesting a new message can't invalidate someone else's.
+    await redis.set(REDIS_KEYS.nonce(nonce), message, 'EX', 300);
     return { message };
   });
 
   app.post<{ Body: { wallet?: string; message?: string; signature?: string } }>('/auth/verify', authLimit, async (req, reply) => {
     const { wallet = '', message = '', signature = '' } = req.body ?? {};
-    const expected = await redis.get(REDIS_KEYS.nonce(wallet));
-    if (!expected || expected !== message) throw new ApiError(400, 'bad_nonce', 'Sign-in request expired. Try again.');
+    const nonce = /\nNonce: ([0-9a-f]{32})\n/.exec(message)?.[1];
+    // GETDEL: a message can be used exactly once, even by two requests at the same time.
+    const expected = nonce ? await redis.getdel(REDIS_KEYS.nonce(nonce)) : null;
+    if (!expected || expected !== message || !message.includes(`\nWallet: ${wallet}\n`)) throw new ApiError(400, 'bad_nonce', 'Sign-in request expired. Try again.');
     if (!verifyWalletSignature(wallet, message, signature)) throw new ApiError(401, 'bad_signature', 'Signature check failed.');
-    await redis.del(REDIS_KEYS.nonce(wallet));
     const user = await ensureUser(db, wallet);
     if (!(await db.vault.count({ where: { userId: user.id } }))) {
       if (liveByDefault(wallet)) {
@@ -215,7 +279,7 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
   app.post('/me/telegram/link', async (req) => {
     const uid = requireUser(req);
     const code = randomUUID().replace(/-/g, '').slice(0, 16);
-    await db.user.update({ where: { id: uid }, data: { telegramLinkCode: code } });
+    await db.user.update({ where: { id: uid }, data: { telegramLinkCode: code, telegramLinkCodeAt: new Date() } });
     const bot = process.env.TELEGRAM_BOT_USERNAME;
     return { code, url: bot ? `https://t.me/${bot}?start=${code}` : null };
   });
@@ -311,6 +375,8 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
   app.post<VP>('/vaults/:id/pause', async (req) => {
     const v = await writable(req, req.params.id);
     await db.vault.update({ where: { id: v.id }, data: { status: 'paused', pausedReason: 'Paused by you.' } });
+    // Nothing proposed before the pause may be approved into a paused vault.
+    await db.proposal.updateMany({ where: { vaultId: v.id, status: 'pending' }, data: { status: 'expired' } });
     await publish(v.id, { type: 'cycle', cycle: { cycle: v.cycle, step: -1, paused: true, intervalMs: CYCLE_MS, elapsedMs: 0, steps: [] } });
     return overview(db, v.id, { readOnly: false });
   });
@@ -321,31 +387,54 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     return overview(db, v.id, { readOnly: false });
   });
 
-  app.post<VP & { Body: { mode?: string; confirm?: boolean } }>('/vaults/:id/mode', async (req) => {
-    const v = await writable(req, req.params.id);
+  app.post<VP & { Body: { mode?: string; confirm?: boolean } }>('/vaults/:id/mode', moneyLimit, async (req) => {
+    const v0 = await writable(req, req.params.id);
     const mode = req.body?.mode;
     if (mode !== 'paper' && mode !== 'live') throw new ApiError(400, 'invalid_mode', 'Mode must be paper or live.');
-    if (mode === v.mode) return overview(db, v.id, { readOnly: false });
+    if (mode === v0.mode) return overview(db, v0.id, { readOnly: false });
     if (mode === 'live') {
       if (!liveEnabled()) throw new ApiError(403, 'live_disabled', "Live mode isn't available yet. Paper mode stays on.");
       if (req.body?.confirm !== true) throw new ApiError(400, 'confirm_required', 'Confirm that real funds will be used.');
-      if (!isLiveWallet(v.user.wallet)) throw new ApiError(403, 'live_not_allowed', 'Live mode is limited to approved wallets while it is being tested.');
+      if (!isLiveWallet(v0.user.wallet)) throw new ApiError(403, 'live_not_allowed', 'Live mode is limited to approved wallets while it is being tested.');
     }
-    if (await db.position.count({ where: { vaultId: v.id, status: 'open' } }))
-      throw new ApiError(409, 'positions_open', 'Close all positions before switching modes.');
-    const key = mode === 'live' && !v.agentPubkey ? createAgentKey() : null;
-    await db.vault.update({
-      where: { id: v.id },
-      data: { mode, cash: {}, deposits: {}, ...(key ? { agentPubkey: key.pubkey, encSecret: new Uint8Array(key.encSecret) } : {}) },
+    await withVaultLock(v0.id, 60_000, async () => {
+      // Re-read inside the lock: the agent may have just opened or closed something.
+      const v = await writable(req, req.params.id);
+      if (v.mode === mode) return;
+      if (await db.position.count({ where: { vaultId: v.id, status: 'open' } }))
+        throw new ApiError(409, 'positions_open', 'Close all positions before switching modes.');
+      if (v.mode === 'live' && v.encSecret) {
+        // Leaving live with money still in the agent wallet would hide real funds from the app.
+        const ex = new LiveExecutor({
+          conn: chain(),
+          agent: loadAgentKey(v.encSecret, undefined, v.agentPubkey),
+          ownerWallet: new PublicKey(v.user.wallet),
+          killSwitch: { isKilled: killed },
+          idempotency: { claim: async () => false },
+        });
+        const left = await usdValue(await ex.holdings());
+        if (left > 1) throw new ApiError(409, 'funds_in_vault', `Withdraw the ${'$' + fmt(left, 2)} still in the vault wallet before switching to paper.`);
+      }
+      const key = mode === 'live' && !v.agentPubkey ? createAgentKey() : null;
+      await db.vault.update({
+        where: { id: v.id },
+        data: { mode, cash: {}, deposits: {}, ...(key ? { agentPubkey: key.pubkey, encSecret: new Uint8Array(key.encSecret) } : {}) },
+      });
+      // Nothing queued or proposed under the old mode may run under the new one.
+      await db.proposal.updateMany({ where: { vaultId: v.id, status: 'pending' }, data: { status: 'expired' } });
+      await redis.del(REDIS_KEYS.actions(v.id));
+      await logDecision(v.id, 'scan', mode === 'live' ? 'Live mode on' : 'Paper mode on', mode === 'live' ? 'Real funds will be used. Deposit to the vault wallet to start.' : 'Simulated funds only.');
     });
-    await logDecision(v.id, 'scan', mode === 'live' ? 'Live mode on' : 'Paper mode on', mode === 'live' ? 'Real funds will be used. Deposit to the vault wallet to start.' : 'Simulated funds only.');
-    return overview(db, v.id, { readOnly: false });
+    return overview(db, v0.id, { readOnly: false });
   });
 
-  app.post<VP & { Body: { token?: string; amount?: number; signature?: string } }>('/vaults/:id/deposit', async (req) => {
-    const v = await writable(req, req.params.id);
-    if (v.mode === 'paper') return paperDeposit(v, String(req.body?.token ?? ''), Number(req.body?.amount));
-    return liveDeposit(v, String(req.body?.signature ?? ''), v.user.wallet);
+  app.post<VP & { Body: { token?: string; amount?: number; signature?: string } }>('/vaults/:id/deposit', moneyLimit, async (req) => {
+    const id = (await writable(req, req.params.id)).id;
+    return withVaultLock(id, 30_000, async () => {
+      const v = await writable(req, req.params.id);
+      if (v.mode === 'paper') return paperDeposit(v, String(req.body?.token ?? ''), Number(req.body?.amount));
+      return liveDeposit(v, String(req.body?.signature ?? ''), v.user.wallet);
+    });
   });
 
   async function symbolMint(symbol: string, wallet: Record<string, number>) {
@@ -366,7 +455,7 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
       data: { paperWallet: add(wallet, -amount), cash: add(v.cash as Record<string, number>, amount), deposits: add(v.deposits as Record<string, number>, amount) },
     });
     const usd = amount * (t.priceUsd ?? 0);
-    await logDecision(v.id, 'deploy', `Deposited ${fmt(amount)} ${symbol}`, `Added $${fmt(usd, 0)} to the vault. The agent places it on the next cycle.`);
+    await logDecision(v.id, 'deploy', `Deposited ${fmt(amount)} ${symbol}`, `Added $${fmt(usd, 0)} to the vault. The agent places it on the next cycle.`, { inputs: { flowUsd: usd } });
     return overview(db, v.id, { readOnly: false });
   }
 
@@ -377,75 +466,91 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     const key = `deposit:${signature}`;
     if (await db.decision.findUnique({ where: { idempotencyKey: key } })) return overview(db, v.id, { readOnly: false });
     const tx = await rpc().getParsedTransaction(signature, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' });
-    if (!tx || tx.meta?.err) throw new ApiError(400, 'tx_not_found', 'That transaction is not confirmed yet. Try again in a moment.');
-    const agent = v.agentPubkey;
-    const credited: Record<string, number> = {};
-    for (const ix of tx.transaction.message.instructions) {
-      if (!('parsed' in ix)) continue;
-      const info = ix.parsed?.info;
-      if (ix.program === 'system' && ix.parsed?.type === 'transfer' && info.source === ownerWallet && info.destination === agent)
-        credited[SOL_MINT] = (credited[SOL_MINT] ?? 0) + info.lamports / 1e9;
-      if ((ix.program === 'spl-token' || ix.program === 'spl-token-2022') && ix.parsed?.type === 'transferChecked' && info.authority === ownerWallet) {
-        const post = tx.meta?.postTokenBalances?.find((b) => b.mint === info.mint && b.owner === agent);
-        const destIndex = post?.accountIndex;
-        const destKey = destIndex != null ? tx.transaction.message.accountKeys[destIndex]?.pubkey.toBase58() : null;
-        if (destKey === info.destination) credited[info.mint] = (credited[info.mint] ?? 0) + Number(info.tokenAmount.uiAmount);
-      }
-    }
+    if (!tx || !tx.meta) throw new ApiError(400, 'tx_not_found', 'That transaction is not confirmed yet. Try again in a moment.');
+    if (tx.meta.err) throw new ApiError(400, 'tx_failed', 'That transaction failed on-chain, so nothing was deposited.');
+    const credited = parseDeposit(tx, ownerWallet, v.agentPubkey);
     if (!Object.keys(credited).length) throw new ApiError(400, 'no_transfer', 'No transfer from your wallet to the vault was found in that transaction.');
     const deposits = { ...(v.deposits as Record<string, number>) };
     for (const [m, a] of Object.entries(credited)) deposits[m] = (deposits[m] ?? 0) + a;
-    await db.vault.update({ where: { id: v.id }, data: { deposits } });
     const tokens = await db.token.findMany({ where: { mint: { in: Object.keys(credited) } } });
     const label = Object.entries(credited)
       .map(([m, a]) => `${fmt(a)} ${tokens.find((t) => t.mint === m)?.symbol ?? m.slice(0, 4)}`)
       .join(' + ');
-    await logDecision(v.id, 'deploy', `Deposited ${label}`, 'Received in the vault wallet. The agent places it on the next cycle.', { txSig: signature, key });
+    const flowUsd = await usdValue(credited);
+    // One transaction: the idempotency key (unique) and the credit land together or not at all.
+    try {
+      const [d] = await db.$transaction([
+        db.decision.create({
+          data: { vaultId: v.id, type: 'deploy', title: `Deposited ${label}`, reason: 'Received in the vault wallet. The agent places it on the next cycle.', inputs: { flowUsd }, txSig: signature, idempotencyKey: key },
+        }),
+        db.vault.update({ where: { id: v.id }, data: { deposits } }),
+      ]);
+      await publish(v.id, { type: 'decision', decision: decisionView(d) });
+    } catch (e) {
+      if ((e as { code?: string }).code !== 'P2002') throw e; // already credited
+    }
     return overview(db, v.id, { readOnly: false });
   }
 
-  app.post<VP & { Body: { token?: string; amount?: number } }>('/vaults/:id/withdraw', async (req) => {
-    const v = await writable(req, req.params.id);
-    const symbol = String(req.body?.token ?? '');
+  app.post<VP & { Body: { token?: string; mint?: string; amount?: number } }>('/vaults/:id/withdraw', moneyLimit, async (req) => {
+    const id = (await writable(req, req.params.id)).id;
     const amount = Number(req.body?.amount);
     if (!Number.isFinite(amount) || amount <= 0) throw new ApiError(400, 'invalid_amount', 'Enter an amount.');
-    const cash = v.cash as Record<string, number>;
-    const deposits = v.deposits as Record<string, number>;
-    if (v.mode === 'paper') {
-      const t = await symbolMint(symbol, { ...cash, ...(v.paperWallet as Record<string, number>) });
-      if (amount > (cash[t.mint] ?? 0)) throw new ApiError(400, 'insufficient_balance', `Only ${fmt(cash[t.mint] ?? 0)} ${symbol} is idle in the vault.`);
-      const wallet = v.paperWallet as Record<string, number>;
-      await db.vault.update({
-        where: { id: v.id },
-        data: {
-          cash: { ...cash, [t.mint]: cash[t.mint] - amount },
-          paperWallet: { ...wallet, [t.mint]: (wallet[t.mint] ?? 0) + amount },
-          deposits: { ...deposits, [t.mint]: Math.max(0, (deposits[t.mint] ?? 0) - amount) },
-        },
+    return withVaultLock(id, 120_000, async () => {
+      const v = await writable(req, req.params.id);
+      const symbol = String(req.body?.token ?? '');
+      const cash = v.cash as Record<string, number>;
+      const deposits = v.deposits as Record<string, number>;
+      if (v.mode === 'paper') {
+        const t = await symbolMint(symbol, { ...cash, ...(v.paperWallet as Record<string, number>) });
+        if (amount > (cash[t.mint] ?? 0)) throw new ApiError(400, 'insufficient_balance', `Only ${fmt(cash[t.mint] ?? 0)} ${symbol} is idle in the vault.`);
+        const wallet = v.paperWallet as Record<string, number>;
+        const flowUsd = amount * (t.priceUsd ?? 0);
+        await db.vault.update({
+          where: { id: v.id },
+          data: {
+            cash: { ...cash, [t.mint]: cash[t.mint] - amount },
+            paperWallet: { ...wallet, [t.mint]: (wallet[t.mint] ?? 0) + amount },
+            deposits: await shrinkDeposits(deposits, flowUsd),
+          },
+        });
+        await logDecision(v.id, 'exit', `Withdrew ${fmt(amount)} ${symbol}`, 'Back in your paper wallet.', { inputs: { flowUsd: -flowUsd } });
+        return overview(db, v.id, { readOnly: false });
+      }
+      // Live: only to the owner's registered wallet, enforced by the executor's transaction policy.
+      // Deliberately not gated on LIVE_TRADING_ENABLED, so turning live trading off never traps funds.
+      // The kill switch does block it (CLAUDE.md: checked before every transaction).
+      if (v.mode !== 'live') throw new ApiError(400, 'not_live', 'This vault is not in live mode.');
+      if (await killed()) throw new ApiError(423, 'kill_switch', 'Trading is halted right now. Try again later.');
+      if (!v.encSecret) throw new ApiError(400, 'no_agent', 'This vault has no agent wallet.');
+      const ex = new LiveExecutor({
+        conn: chain(),
+        agent: loadAgentKey(v.encSecret, undefined, v.agentPubkey),
+        ownerWallet: new PublicKey(v.user.wallet),
+        killSwitch: { isKilled: killed },
+        idempotency: { claim: async (k) => (await redis.set(REDIS_KEYS.idem(k), '1', 'EX', 7 * 86400, 'NX')) === 'OK' },
       });
-      await logDecision(v.id, 'exit', `Withdrew ${fmt(amount)} ${symbol}`, 'Back in your paper wallet.');
+      const holdings = await ex.holdings().catch(() => {
+        throw new ApiError(502, 'rpc_unavailable', 'Could not reach Solana right now. Nothing was sent; try again in a moment.');
+      });
+      // By mint when given (any token the vault holds); otherwise by symbol.
+      const mint =
+        req.body?.mint && holdings[req.body.mint] != null
+          ? req.body.mint
+          : symbol === 'SOL'
+            ? SOL_MINT
+            : (await db.token.findMany({ where: { symbol, mint: { in: Object.keys(holdings) } } })).sort((x, y) => (holdings[y.mint] ?? 0) - (holdings[x.mint] ?? 0))[0]?.mint;
+      if (!mint) throw new ApiError(400, 'unknown_token', 'The vault holds no such token.');
+      // SOL comes out as native lamports; the reserve for fees and rent is released once nothing is deployed.
+      const have =
+        mint === SOL_MINT ? await ex.withdrawableSol(!(await db.position.count({ where: { vaultId: v.id, status: 'open' } }))) : (holdings[mint] ?? 0);
+      if (amount > have) throw new ApiError(400, 'insufficient_balance', `Only ${fmt(have)} ${symbol || 'of that token'} is idle in the vault.`);
+      const sig = await ex.withdraw(mint, amount, `withdraw:${v.id}:${randomUUID()}`);
+      const flowUsd = await usdValue({ [mint]: amount });
+      await db.vault.update({ where: { id: v.id }, data: { deposits: await shrinkDeposits(deposits, flowUsd) } });
+      await logDecision(v.id, 'exit', `Withdrew ${fmt(amount)} ${symbol || mint.slice(0, 4)}`, 'Sent to your registered wallet.', { txSig: sig, inputs: { flowUsd: -flowUsd } });
       return overview(db, v.id, { readOnly: false });
-    }
-    // Live: only to the owner's registered wallet, enforced by the executor's transaction policy.
-    // Deliberately not gated on LIVE_TRADING_ENABLED: users can always take their funds out.
-    if (v.mode !== 'live') throw new ApiError(400, 'not_live', 'This vault is not in live mode.');
-    if (await killed()) throw new ApiError(423, 'kill_switch', 'Trading is halted right now. Try again later.');
-    if (!v.encSecret) throw new ApiError(400, 'no_agent', 'This vault has no agent wallet.');
-    const token = symbol === 'SOL' ? { mint: SOL_MINT } : await db.token.findFirst({ where: { symbol, isVerified: true }, orderBy: { mcapUsd: 'desc' } });
-    if (!token) throw new ApiError(400, 'unknown_token', 'Unknown token.');
-    const ex = new LiveExecutor({
-      conn: rpc(),
-      agent: loadAgentKey(v.encSecret),
-      ownerWallet: new PublicKey(v.user.wallet),
-      killSwitch: { isKilled: killed },
-      idempotency: { claim: async (k) => (await redis.set(REDIS_KEYS.idem(k), '1', 'EX', 7 * 86400, 'NX')) === 'OK' },
     });
-    const have = (await ex.holdings())[token.mint] ?? 0;
-    if (amount > have) throw new ApiError(400, 'insufficient_balance', `Only ${fmt(have)} ${symbol} is idle in the vault.`);
-    const sig = await ex.withdraw(token.mint, amount, `withdraw:${v.id}:${randomUUID()}`);
-    await db.vault.update({ where: { id: v.id }, data: { deposits: { ...deposits, [token.mint]: Math.max(0, (deposits[token.mint] ?? 0) - amount) } } });
-    await logDecision(v.id, 'exit', `Withdrew ${fmt(amount)} ${symbol}`, 'Sent to your registered wallet.', { txSig: sig });
-    return overview(db, v.id, { readOnly: false });
   });
 
   // Manual Claim / Close: queued for the agent so execution stays in one place.
@@ -503,6 +608,7 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     ws.get<{ Querystring: { vault?: string } }>('/stream', { websocket: true }, async (socket, req) => {
       try {
         const { vault } = await readable(req, req.query.vault ?? '');
+        if (socket.readyState !== socket.OPEN) return; // closed while we were checking access
         const off = hub.on(vault.id, (e) => socket.send(JSON.stringify(e)));
         socket.on('close', off);
       } catch {

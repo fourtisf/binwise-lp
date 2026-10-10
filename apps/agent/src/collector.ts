@@ -179,7 +179,10 @@ export async function collectOnce(deps: CollectorDeps, o: CollectorOptions = DEF
   const log = deps.log ?? (() => {});
   const now = (deps.now ?? Date.now)();
   const pools = await meteora.topPools(o.scanLimit);
-  const stored = pools.filter((p) => p.tvl >= o.storeMinTvl && p.token_x && p.token_y);
+  // Pools holding open positions are always stored and snapshotted, whatever their TVL or rank:
+  // a draining pool is exactly the one the agent must keep watching (and exit).
+  const held = new Set((await db.position.findMany({ where: { status: 'open' }, select: { poolId: true }, distinct: ['poolId'] })).map((p) => p.poolId));
+  const stored = pools.filter((p) => (p.tvl >= o.storeMinTvl || held.has(p.address)) && p.token_x && p.token_y);
 
   for (const p of stored) {
     await upsertToken(db, p.token_x);
@@ -200,10 +203,11 @@ export async function collectOnce(deps: CollectorDeps, o: CollectorOptions = DEF
 
   await enrichTokens(deps, [...new Set(stored.flatMap((p) => [p.token_x.address, p.token_y.address]))]);
 
-  const tracked = stored
+  const top = stored
     .filter((p) => p.tvl >= o.trackMinTvl)
     .sort((a, b) => (b.volume['24h'] ?? 0) - (a.volume['24h'] ?? 0))
     .slice(0, o.trackLimit);
+  const tracked = [...top, ...stored.filter((p) => held.has(p.address) && !top.includes(p))];
 
   let eligible = 0;
   for (const p of tracked) {

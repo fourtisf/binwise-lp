@@ -60,6 +60,8 @@ model User {
   telegramChatId   String?
   /// One-time code the user sends to the bot to link Telegram
   telegramLinkCode String?  @unique
+  /// When the link code was issued (codes expire after 15 minutes)
+  telegramLinkCodeAt DateTime?
   createdAt        DateTime @default(now())
   vaults           Vault[]
 }
@@ -243,6 +245,8 @@ model Position {
   valueUsd         Float
   feesUnclaimedUsd Float           @default(0)
   feesClaimedUsd   Float           @default(0)
+  /// Fees put back into this position (compound, rebalance): already inside valueUsd
+  feesReinvestedUsd Float          @default(0)
   /// Network fees, tips and slippage paid by this position, USD
   costsUsd         Float           @default(0)
   netVsHold        Float           @default(0)

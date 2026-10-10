@@ -13,7 +13,7 @@ import {
 import { getDb, type PrismaClient } from '@binwise/db';
 import { PublicKey } from '@solana/web3.js';
 import type { Redis } from 'ioredis';
-import { publish, redisIdempotency, redisKillSwitch } from './redis';
+import { publish, redisIdempotency, redisKillSwitch, withVaultLock } from './redis';
 import type { AgentDeps, VaultWithStrategy } from './agent';
 import { Telegram } from './telegram';
 import { proposalMessage } from './bot';
@@ -37,6 +37,14 @@ export function makeAgentDeps(redis: Redis, db: PrismaClient = getDb(), telegram
           if (user?.telegramChatId) await telegram.send(user.telegramChatId, `${vault.name}: ${text}`);
         }
       : undefined,
+    liveCapacityLock: async (fn) => {
+      for (let i = 0; i < 360; i++) {
+        const r = await withVaultLock(redis, 'live-capacity', 60_000, fn);
+        if (r !== null) return r;
+        await new Promise((res) => setTimeout(res, 500));
+      }
+      throw new Error('Timed out waiting for other live deploys to finish.');
+    },
     // Manual mode: each new proposal goes to the owner's chat with Approve / Reject buttons.
     onProposal: telegram
       ? async (vault, proposal) => {
@@ -55,7 +63,7 @@ export function makeAgentDeps(redis: Redis, db: PrismaClient = getDb(), telegram
       assertLiveWallet(user.wallet);
       return new LiveExecutor({
         conn: makeConnection(),
-        agent: loadAgentKey(vault.encSecret),
+        agent: loadAgentKey(vault.encSecret, undefined, vault.agentPubkey),
         ownerWallet: new PublicKey(user.wallet),
         killSwitch,
         idempotency: idem,

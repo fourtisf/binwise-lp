@@ -145,8 +145,9 @@ describe('vaults', () => {
       // Turning the global flag off must not trap funds: the withdraw route still gets past the live gate.
       process.env.LIVE_TRADING_ENABLED = 'false';
       const w = await app.inject({ method: 'POST', url: `/vaults/${id}/withdraw`, headers, payload: { token: 'NOPE', amount: 1 } });
-      expect(w.statusCode).toBe(400);
-      expect(w.json().error).toBe('unknown_token');
+      // Past the live gate: it goes on to read the wallet (no Solana node in tests).
+      expect(w.statusCode).toBe(502);
+      expect(w.json().error).toBe('rpc_unavailable');
     } finally {
       process.env.LIVE_TRADING_ENABLED = prev.flag;
       process.env.LIVE_WALLETS = prev.wallets;

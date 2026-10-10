@@ -67,9 +67,12 @@ export const BOT_COMMANDS = [
   { command: 'add', description: 'Add liquidity to a pool' },
   { command: 'positions', description: 'Your open positions' },
   { command: 'approvals', description: 'Trades waiting for your approval (manual mode)' },
+  { command: 'unlink', description: 'Disconnect this chat from your vault' },
 ];
 
 const KIND_ICON: Record<string, string> = { deploy: '➕', rebalance: '🔁', exit: '🚪', compound: '♻️' };
+/** Link codes from the app work for this long. */
+const LINK_CODE_TTL_MS = 15 * 60_000;
 const minutesLeft = (p: Proposal, now: number) => Math.max(0, Math.round((p.expiresAt.getTime() - now) / 60_000));
 
 /** The message the owner gets for a new proposal in manual mode. */
@@ -106,7 +109,8 @@ export function makeBot(d: BotDeps) {
       { text: '🗳 Approvals', callback_data: 'apv' },
     ],
     [
-      { text: manual(v) ? '✋ Mode: Manual' : '🤖 Mode: Auto', callback_data: 'mode' },
+      // The button carries the target state, so a double tap can't flip it back.
+      manual(v) ? { text: '✋ Mode: Manual', callback_data: 'mode|auto' } : { text: '🤖 Mode: Auto', callback_data: 'mode|manual' },
       v.status === 'running' ? { text: '⏸ Pause agent', callback_data: 'pause' } : { text: '▶️ Resume agent', callback_data: 'resume' },
     ],
     [{ text: '🌐 Open app', url: `${d.appUrl}/app` }],
@@ -154,7 +158,7 @@ export function makeBot(d: BotDeps) {
         `Net vs holding: <b>${pct(m.netVsHold)}</b>\n` +
         `Idle (not in a pool): ${usd(m.idle)}\n` +
         `Positions: ${m.open.length} (${m.open.filter((p) => p.inRange).length} in range)\n` +
-        (last ? `\n🕒 Last: <b>${esc(last.title)}</b>\n${esc(last.reason).slice(0, 300)}` : ''),
+        (last ? `\n🕒 Last: <b>${esc(last.title)}</b>\n${esc(last.reason.slice(0, 300))}` : ''),
       keyboard: menu(c.vault),
     };
   }
@@ -280,7 +284,7 @@ export function makeBot(d: BotDeps) {
       };
     return {
       text: `🗳 <b>Waiting for your approval</b>\n\n${list
-        .map((p, i) => `${i + 1}. ${KIND_ICON[p.kind] ?? '•'} <b>${esc(p.title)}</b>\n    ${esc(p.reason).slice(0, 160)}\n    Expires in ${minutesLeft(p, now())} min`)
+        .map((p, i) => `${i + 1}. ${KIND_ICON[p.kind] ?? '•'} <b>${esc(p.title)}</b>\n    ${esc(p.reason.slice(0, 160))}\n    Expires in ${minutesLeft(p, now())} min`)
         .join('\n')}`,
       keyboard: [
         ...list.map((p, i) => [
@@ -297,9 +301,11 @@ export function makeBot(d: BotDeps) {
   async function link(chatId: string, code: string) {
     const user = await db.user.findUnique({ where: { telegramLinkCode: code } });
     if (!user) return tg.send(chatId, 'That link code is not valid or was already used. In the app, turn Telegram alerts off and on again to get a new one.');
+    if (!user.telegramLinkCodeAt || now() - user.telegramLinkCodeAt.getTime() > LINK_CODE_TTL_MS)
+      return tg.send(chatId, 'That link code has expired (codes work for 15 minutes). In the app, turn Telegram alerts off and on again to get a new one.');
     // One chat per wallet: unlink this chat from anyone else first.
     await db.user.updateMany({ where: { telegramChatId: chatId, NOT: { id: user.id } }, data: { telegramChatId: null } });
-    await db.user.update({ where: { id: user.id }, data: { telegramChatId: chatId, telegramLinkCode: null } });
+    await db.user.update({ where: { id: user.id }, data: { telegramChatId: chatId, telegramLinkCode: null, telegramLinkCodeAt: null } });
     const c = await context(chatId);
     if (c) {
       const w = welcome(c);
@@ -313,9 +319,14 @@ export function makeBot(d: BotDeps) {
     const text = (m.text ?? '').trim();
     const code = text.match(/^\/start\s+(\S+)/)?.[1];
     if (code) return link(chatId, code);
+    const cmd = text.split(/[\s@]/)[0].toLowerCase();
+    if (cmd === '/unlink') {
+      const { count } = await db.user.updateMany({ where: { telegramChatId: chatId }, data: { telegramChatId: null } });
+      if (!count) return tg.send(chatId, notLinked.text, { html: true });
+      return tg.send(chatId, '👋 Disconnected. This chat no longer gets alerts or controls your vault.\n\nTo connect again, turn Telegram alerts off and on in the app.');
+    }
     const c = await context(chatId);
     if (!c) return tg.send(chatId, notLinked.text, { html: true });
-    const cmd = text.split(/[\s@]/)[0].toLowerCase();
     const screen =
       cmd === '/status'
         ? await status(c)
@@ -381,7 +392,9 @@ export function makeBot(d: BotDeps) {
               ],
             ],
           });
-        await d.enqueue(c.vault.id, { id: requestId + (op === 'f' ? `-f-${p.id}` : ''), action: op === 'f' ? 'claim' : 'close', positionId: p.id, chatId });
+        // Claiming can be repeated later from the same message, so it keys on the press (unique per tap);
+        // closing keys on the message, so a double tap is sent once.
+        await d.enqueue(c.vault.id, { id: op === 'f' ? `tg-${q.id}-f` : requestId, action: op === 'f' ? 'claim' : 'close', positionId: p.id, chatId });
         if (op === 'f') return tg.answer(q.id, 'Claiming fees…');
         return show({ text: `⏳ Closing <b>${esc(pair)}</b>…\n\nYou'll get a message here when it's done.` }, 'Sent to the agent');
       }
@@ -402,8 +415,9 @@ export function makeBot(d: BotDeps) {
         }
       }
       case 'mode': {
-        if (!c.vault.strategy) return show(welcome(c));
-        const next = !manual(c.vault);
+        if (!c.vault.strategy || (a !== 'manual' && a !== 'auto')) return show(welcome(c));
+        const next = a === 'manual';
+        if (next === manual(c.vault)) return show(welcome(c), next ? 'Already in manual mode' : 'Already in automatic mode');
         const toggles = { ...settingsOf(c.vault.strategy).toggles, askBeforeTrading: next };
         const strategy = await db.strategy.update({ where: { id: c.vault.strategy.id }, data: { toggles } });
         await db.decision.create({
@@ -434,7 +448,10 @@ export function makeBot(d: BotDeps) {
             inputs: { manual: true },
           },
         });
-        if (paused) await d.onPaused?.(v);
+        if (paused) {
+          await db.proposal.updateMany({ where: { vaultId: v.id, status: 'pending' }, data: { status: 'expired' } });
+          await d.onPaused?.(v);
+        }
         return show(await status({ ...c, vault: { ...c.vault, ...v } }), paused ? 'Agent paused' : 'Agent resumed');
       }
       default:

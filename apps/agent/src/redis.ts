@@ -23,9 +23,19 @@ export const redisIdempotency = (r: Redis): IdempotencyGuard => ({
 export async function withVaultLock<T>(r: Redis, vaultId: string, ttlMs: number, fn: () => Promise<T>): Promise<T | null> {
   const token = Math.random().toString(36).slice(2);
   if ((await r.set(KEYS.lock(vaultId), token, 'PX', ttlMs, 'NX')) !== 'OK') return null;
+  // Keep the lock alive while the work runs (a live open can take minutes); if this process
+  // dies, the lock still expires after ttlMs.
+  const renew = setInterval(
+    () =>
+      void r
+        .eval("if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) else return 0 end", 1, KEYS.lock(vaultId), token, ttlMs)
+        .catch(() => {}),
+    Math.max(1000, Math.floor(ttlMs / 3)),
+  );
   try {
     return await fn();
   } finally {
+    clearInterval(renew);
     // Release only our own lock.
     await r.eval("if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end", 1, KEYS.lock(vaultId), token);
   }

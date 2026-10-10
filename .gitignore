@@ -12,3 +12,4 @@ npm-debug.log*
 pnpm-debug.log*
 packages/db/src/generated/
 .turbo/
+dump.rdb

@@ -24,7 +24,8 @@ It takes about 10 minutes and does everything:
 - Installs dependencies, migrates the database, and builds the website for `https://binwise.org`.
 - Starts web, API, collector and agent under PM2, set to restart on reboot, with log rotation.
 - Schedules the weekly backtest and settings search with cron (Monday 03:00 and 03:30).
-- Firewall: only SSH, HTTP and HTTPS are open. Ports 3000/4000, Postgres and Redis stay private.
+- Private ports: the website and API (3100/4100), Postgres and Redis listen on 127.0.0.1 only; nginx is the only way in.
+  Firewall: if ufw is already on, it allows SSH, HTTP and HTTPS. If it's off, it's left as found (other apps on a shared server may need their ports).
 - Nginx with `www` redirecting to the bare domain, plus an HTTPS certificate from Let's Encrypt that renews automatically.
 - Waits for the first real Meteora data, creates the public demo vault, and runs health checks.
 
@@ -68,7 +69,9 @@ and the agent manages the position afterwards. The bot only answers private chat
 
 1. In Telegram, open @BotFather → `/newbot` → pick a name and a username ending in `bot`. Copy the token.
 2. Put `TELEGRAM_BOT_TOKEN=<token>` and `TELEGRAM_BOT_USERNAME=<username without @>` in `.env`, then `sudo -u binwise pm2 restart all`.
-3. In the app: **Strategy** → turn on **Telegram alerts** → Telegram opens → press **Start**.
+3. In the app: **Strategy** → turn on **Telegram alerts** → Telegram opens → press **Start**. The link code works for 15 minutes.
+
+To disconnect a chat, send `/unlink` to the bot.
 
 ## 3. Backtest report (build step 4)
 

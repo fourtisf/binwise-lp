@@ -86,6 +86,8 @@ export interface MarkResult {
   /** Unclaimed fees, USD */
   feesUsd: number;
   inRange: boolean;
+  /** Live: the position account no longer exists on-chain (closed elsewhere or by an earlier partial action) */
+  gone?: boolean;
 }
 
 export interface ActionResult {
@@ -98,7 +100,8 @@ export interface ActionResult {
 
 export interface Executor {
   readonly mode: 'paper' | 'live';
-  holdings(): Promise<Holdings>;
+  /** Spendable balances. Live: includeReserve also counts the SOL kept for fees and rent (for vault value). */
+  holdings(opts?: { includeReserve?: boolean }): Promise<Holdings>;
   open(req: OpenRequest): Promise<OpenResult>;
   /** Re-values a position; paper mode also accrues fees for `minutes` of pool volume. */
   mark(pos: PositionRef, pool: PoolCtx, minutes: number): Promise<MarkResult>;

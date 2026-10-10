@@ -34,15 +34,20 @@ export function openSecret(sealed: Uint8Array, secret?: string): Buffer {
 /** New agent keypair for a vault: public key + sealed secret, ready to store. */
 export function createAgentKey(secret?: string): { pubkey: string; encSecret: Buffer } {
   const kp = Keypair.generate();
-  const sealed = sealSecret(kp.secretKey, secret);
-  kp.secretKey.fill(0);
-  return { pubkey: kp.publicKey.toBase58(), encSecret: sealed };
+  // (Keypair.secretKey returns a copy each time, so there is no buffer here worth zeroing.)
+  return { pubkey: kp.publicKey.toBase58(), encSecret: sealSecret(kp.secretKey, secret) };
 }
 
-export function loadAgentKey(encSecret: Uint8Array, secret?: string): Keypair {
+/**
+ * Opens a vault's agent key. With `expectedPubkey` (the vault's stored agent address) it refuses a
+ * secret that belongs to a different wallet, so a key copied between vaults can't be used.
+ */
+export function loadAgentKey(encSecret: Uint8Array, secret?: string, expectedPubkey?: string | null): Keypair {
   const raw = openSecret(encSecret, secret);
   try {
-    return Keypair.fromSecretKey(new Uint8Array(raw));
+    const kp = Keypair.fromSecretKey(new Uint8Array(raw));
+    if (expectedPubkey && kp.publicKey.toBase58() !== expectedPubkey) throw new Error("This vault's agent key doesn't match its agent address.");
+    return kp;
   } finally {
     raw.fill(0);
   }

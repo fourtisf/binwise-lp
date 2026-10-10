@@ -32,6 +32,10 @@ export const ALLOWED_PROGRAMS = new Set<string>(Object.values(PROGRAM_IDS));
 export class PolicyViolation extends Error {}
 
 export interface TxPolicy {
+  /** The agent wallet: the only account token instructions may act for or send rent back to */
+  agent?: string;
+  /** Wallets associated token accounts may be created for (the agent; the owner on withdraw) */
+  ataOwners?: Set<string>;
   /** Accounts a top-level SOL transfer may go to (agent's own ATAs, Jito tip accounts, owner wallet on withdraw) */
   transferDestinations: Set<string>;
   /** Fresh accounts the transaction may create (e.g. the new position keypair) */
@@ -54,13 +58,30 @@ function checkInstruction(ix: TransactionInstruction, policy: TxPolicy) {
       if (!policy.newAccounts.has(newAccountPubkey.toBase58())) throw new PolicyViolation('Unexpected account creation');
     } else throw new PolicyViolation(`System instruction ${type} is not allowed`);
   }
-  if ((program === PROGRAM_IDS.TOKEN || program === PROGRAM_IDS.TOKEN_2022) && policy.tokenDestinations) {
-    // Transfer = 3, TransferChecked = 12 (SPL Token instruction tags)
+  if (program === PROGRAM_IDS.TOKEN || program === PROGRAM_IDS.TOKEN_2022) {
+    // SPL Token instruction tags. Only what the DLMM SDK, Jupiter and withdrawals need; everything
+    // else (Approve, SetAuthority, Burn, …) could hand control of the vault's tokens to someone else.
     const tag = ix.data[0];
-    if (tag === 3 || tag === 12) {
+    if (tag === 17) return; // SyncNative (wrap SOL)
+    if (tag === 9) {
+      // CloseAccount: rent must come back to the agent, and only the agent may close
+      const [, dest, authority] = ix.keys.map((k) => k.pubkey.toBase58());
+      if (!policy.agent || dest !== policy.agent || authority !== policy.agent) throw new PolicyViolation('Token account close must return funds to the agent');
+      return;
+    }
+    if ((tag === 3 || tag === 12) && policy.tokenDestinations) {
       const dest = ix.keys[tag === 3 ? 1 : 2].pubkey.toBase58();
       if (!policy.tokenDestinations.has(dest)) throw new PolicyViolation(`Token transfer to ${dest} is not allowed`);
+      return;
     }
+    throw new PolicyViolation(`Token instruction ${tag} is not allowed`);
+  }
+  if (program === PROGRAM_IDS.ASSOCIATED_TOKEN) {
+    // Create (0 / empty data) or CreateIdempotent (1), only for the agent (or the owner on withdraw)
+    const tag = ix.data.length ? ix.data[0] : 0;
+    const owner = ix.keys[2]?.pubkey.toBase58();
+    if ((tag !== 0 && tag !== 1) || !owner || !(policy.ataOwners ?? new Set(policy.agent ? [policy.agent] : [])).has(owner))
+      throw new PolicyViolation('Unexpected associated token account instruction');
   }
 }
 

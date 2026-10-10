@@ -72,6 +72,18 @@ describe('collector', () => {
     expect(snap.call).toBe('in');
   });
 
+  it('keeps snapshotting a pool with open positions even below the TVL floor', async () => {
+    await collect();
+    const v = await db.vault.findFirstOrThrow();
+    await db.position.create({
+      data: { vaultId: v.id, poolId: POOL, binStep: 20, lowerBin: 0, upperBin: 10, shape: 'spot', entryAmountA: 0, entryAmountB: 100, entryPriceA: 1, entryPriceB: 1, entryValueUsd: 100, price: 1, valueUsd: 100 },
+    });
+    meteora.tvl = 100_000; // far below the floors
+    now += 60_000;
+    await collect();
+    expect(await db.poolSnapshot.count({ where: { poolId: POOL } })).toBe(2);
+  });
+
   it('marks downtrending pools as Avoid', async () => {
     meteora.drift = -0.002;
     await collect();
@@ -352,6 +364,98 @@ describe('agent cycle (paper)', () => {
         if (v === undefined) delete process.env[k];
         else process.env[k] = v;
     }
+  });
+
+  describe('failure safety (audit)', () => {
+    it('records a rebalance close even when re-opening fails, and keeps cycling afterwards', async () => {
+      await collect();
+      await cycle();
+      meteora.price *= 1.15;
+      meteora.volume24h *= 3;
+      advance(1);
+      await collect();
+      await cycle(); // first tick out: wait
+      advance(1);
+      await collect();
+      let opens = 0;
+      const d = (): AgentDeps => ({
+        ...deps(),
+        executorFor: async (v) => {
+          const ex = new PaperExecutor({ ...(v.cash as Holdings) });
+          const open = ex.open.bind(ex);
+          ex.open = async (req) => {
+            if (req.key.endsWith(':reopen')) {
+              opens++;
+              throw new Error('simulated reopen failure');
+            }
+            return open(req);
+          };
+          return ex;
+        },
+      });
+      const r = await runVaultCycle(d(), await vault());
+      expect(opens).toBe(1);
+      expect(r.text).toMatch(/re-opening failed/);
+      const pos = await db.position.findFirstOrThrow();
+      expect(pos.status).toBe('closed');
+      // The money is back as idle cash, not lost and not counted twice.
+      const cash = (await vault()).cash as Record<string, number>;
+      expect(Object.values(cash).reduce((a, b) => a + b, 0)).toBeGreaterThan(9000);
+      advance(1);
+      await collect();
+      await expect(runVaultCycle(deps(), await vault())).resolves.toBeTruthy();
+    });
+
+    it("keeps managing other positions when one can't be read, and closes one that is gone on-chain", async () => {
+      await collect();
+      await cycle();
+      advance(1);
+      await collect();
+      const failing = (): AgentDeps => ({
+        ...deps(),
+        executorFor: async (v) => Object.assign(new PaperExecutor({ ...(v.cash as Holdings) }), { mark: async () => Promise.reject(new Error('rpc down')) }),
+      });
+      await expect(runVaultCycle(failing(), await vault())).resolves.toBeTruthy();
+      expect((await db.position.findFirstOrThrow()).status).toBe('open');
+
+      advance(1);
+      await collect();
+      const gone = (): AgentDeps => ({
+        ...deps(),
+        executorFor: async (v) =>
+          Object.assign(new PaperExecutor({ ...(v.cash as Holdings) }), {
+            mark: async () => ({ amountX: 0, amountY: 0, valueUsd: 0, feesUsd: 0, inRange: false, gone: true }),
+          }),
+      });
+      await runVaultCycle(gone(), await vault());
+      expect((await db.position.findFirstOrThrow()).status).toBe('closed');
+      expect((await db.decision.findFirstOrThrow({ where: { reason: { contains: 'no longer exists on-chain' } } })).type).toBe('exit');
+    });
+
+    it("doesn't treat a withdrawal as a loss for the daily stop", async () => {
+      await collect();
+      const v = await vault();
+      // A day ago the vault held $10,000; the owner has since withdrawn $3,000 of it.
+      await db.vaultSnapshot.create({ data: { vaultId: v.id, ts: new Date(now - 24 * 3600_000), value: 10_000, holdValue: 10_000, feesTotal: 0, netVsHold: 0 } });
+      await db.vault.update({ where: { id: v.id }, data: { cash: { [USDC]: 7_000 } } });
+      await db.decision.create({ data: { vaultId: v.id, ts: new Date(now - 3600_000), type: 'exit', title: 'Withdrew 3,000 USDC', reason: '', inputs: { flowUsd: -3000 } } });
+      const r = await cycle();
+      expect(r.short).not.toMatch(/^Exit/);
+      expect((await vault()).status).toBe('running');
+    });
+
+    it('exits a held pool that stops getting market data', async () => {
+      await collect();
+      await cycle();
+      // Another pool keeps the collector "alive"; ours goes silent for 20 minutes.
+      await db.pool.create({ data: { id: 'Other1111111111111111111111111111111111111', name: 'X-USDC', tokenA: 'X', tokenB: 'USDC', mintA: JUP, mintB: USDC, binStep: 20, baseFee: 0.2 } });
+      advance(20);
+      const last = await db.poolSnapshot.findFirstOrThrow({ where: { poolId: POOL }, orderBy: { ts: 'desc' } });
+      await db.poolSnapshot.create({ data: { ...last, id: undefined, poolId: 'Other1111111111111111111111111111111111111', ts: new Date(now), riskFlags: [], scoreBreakdown: last.scoreBreakdown ?? [] } });
+      const r = await cycle();
+      expect(r.short).toBe('Exit JUP / USDC');
+      expect((await db.decision.findFirstOrThrow({ where: { type: 'exit' } })).reason).toMatch(/No fresh market data for this pool/);
+    });
   });
 
   it('does nothing while the kill switch is on', async () => {

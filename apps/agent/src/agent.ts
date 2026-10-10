@@ -81,6 +81,8 @@ export interface AgentDeps {
   now?: () => number;
   /** Active agent parameters (defaults to the database's active ParamSet) */
   params?: () => Promise<AgentParams>;
+  /** Runs `fn` under one lock shared by all vaults (live deploys and the LIVE_MAX_TOTAL_USD check) */
+  liveCapacityLock?: <T>(fn: () => Promise<T>) => Promise<T>;
   /** Manual mode: a new proposal needs the owner's approval (e.g. a Telegram message with buttons) */
   onProposal?: (vault: VaultWithStrategy, proposal: ProposalRow) => Promise<void>;
 }
@@ -138,7 +140,9 @@ async function poolView(
 ): Promise<PoolView | null> {
   const tx = tokens.get(snap.pool.mintA);
   const ty = tokens.get(snap.pool.mintB);
-  if (!tx || !ty || tx.priceUsd == null || ty.priceUsd == null) return null;
+  // A missing or zero price would make every size and cost NaN or infinite.
+  const priced = (t: Token | undefined): t is Token => !!t && t.priceUsd != null && Number.isFinite(t.priceUsd) && t.priceUsd > 0;
+  if (!priced(tx) || !priced(ty)) return null;
   const input = await assessmentInput(snap, tx, ty, params);
   const a = assessPool(input, s, w, params);
   const sx = isStable(tx);
@@ -160,8 +164,8 @@ async function poolView(
       decimalsX: tx.decimals,
       decimalsY: ty.decimals,
       price: snap.price,
-      usdX: tx.priceUsd,
-      usdY: ty.priceUsd,
+      usdX: tx.priceUsd!,
+      usdY: ty.priceUsd!,
       tvlUsd: snap.tvl,
       // The fee rate LPs were actually paid (includes the dynamic fee), not just the base fee.
       baseFeePct: snap.feeRatePct ?? snap.pool.baseFee,
@@ -229,10 +233,23 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
     await record('skip', 'Skipped cycle', text);
     return { short: 'Waiting for data', text, tx: false };
   }
-  const mints = [...new Set(snaps.flatMap((x) => [x.pool.mintA, x.pool.mintB]))];
+  // Pools we hold a position in are always valued and managed, even if they dropped out of the
+  // collector's list: use their latest snapshot, and exit if it gets too old (see below).
+  const positions = await db.position.findMany({ where: { vaultId: vault.id, status: 'open' } });
+  const fresh = new Set(snaps.map((x) => x.poolId));
+  const staleSnaps = (
+    await Promise.all(
+      [...new Set(positions.map((p) => p.poolId))]
+        .filter((id) => !fresh.has(id))
+        .map((poolId) => db.poolSnapshot.findFirst({ where: { poolId, ts: { gte: new Date(now - 24 * 3600_000) } }, orderBy: { ts: 'desc' }, include: { pool: true } })),
+    )
+  ).filter((x): x is SnapshotWithPool => !!x);
+  const cashMints = Object.keys(vault.cash as Record<string, number>);
+  const mints = [...new Set([...snaps, ...staleSnaps].flatMap((x) => [x.pool.mintA, x.pool.mintB]).concat(cashMints))];
   const tokens = new Map((await db.token.findMany({ where: { mint: { in: mints } } })).map((t) => [t.mint, t]));
   const views = (await Promise.all(snaps.map((x) => poolView(x, tokens, s, w, params)))).filter((v): v is PoolView => !!v);
   const byPool = new Map(views.map((v) => [v.snap.poolId, v]));
+  for (const v of (await Promise.all(staleSnaps.map((x) => poolView(x, tokens, s, w, params)))).filter((v): v is PoolView => !!v)) byPool.set(v.snap.poolId, v);
   const eligible = views.filter((v) => v.a.eligible).sort((a, b) => b.a.score - a.a.score);
   steps[0].done = `${views.length} pools, ${eligible.length} passed filters`;
 
@@ -244,7 +261,8 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
   // ---- Check positions
   emitStep(2);
   const executor = await deps.executorFor(vault);
-  const positions = await db.position.findMany({ where: { vaultId: vault.id, status: 'open' } });
+  if (executor.mode === 'live' && cycle % 5 === 0)
+    await reconcileLive(deps, vault, executor, now).catch((e) => log(`[agent] vault ${vault.id} reconcile: ${(e as Error).message}`));
   /** Open positions with their current USD value in X and Y (for the exposure cap) */
   const marked: { pos: Position; view: PoolView | null; xUsd: number; yUsd: number }[] = [];
   for (const p of positions) {
@@ -255,9 +273,24 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
     }
     const lastMark = await db.positionMark.findFirst({ where: { positionId: p.id }, orderBy: { ts: 'desc' } });
     const minutes = Math.min(10, (now - (lastMark?.ts ?? p.openedAt).getTime()) / 60_000);
-    const m = await executor.mark(ref(p), view.ctx, minutes);
+    let m: Awaited<ReturnType<Executor['mark']>>;
+    try {
+      m = await executor.mark(ref(p), view.ctx, minutes);
+    } catch (e) {
+      // One unreadable position must not stop exits and the loss stop for the others.
+      log(`[agent] vault ${vault.id} mark ${p.id} failed: ${(e as Error).message}`);
+      marked.push({ pos: p, view: null, xUsd: 0, yUsd: 0 });
+      continue;
+    }
+    if (m.gone) {
+      // Closed on-chain already (e.g. an earlier action stopped halfway): its funds are back in the wallet.
+      await db.position.update({ where: { id: p.id }, data: { status: 'closed', closedAt: new Date(now), feesUnclaimedUsd: 0 } });
+      await record('exit', `Closed ${pairOf(view)}`, 'This position no longer exists on-chain, so it is marked closed. Its funds are back in the vault wallet.', { poolId: p.poolId });
+      continue;
+    }
     const holdUsd = p.entryAmountA * view.ctx.usdX + p.entryAmountB * view.ctx.usdY;
-    const net = holdUsd > 0 ? ((m.valueUsd + m.feesUsd + p.feesClaimedUsd) / holdUsd - 1) * 100 : 0;
+    // Reinvested fees (compound, rebalance) are already inside the position value: don't count them twice.
+    const net = holdUsd > 0 ? ((m.valueUsd + m.feesUsd + p.feesClaimedUsd - p.feesReinvestedUsd) / holdUsd - 1) * 100 : 0;
     const { lo, hi } = rangePrices(p, view.ctx);
     const updated = await db.position.update({
       where: { id: p.id },
@@ -298,12 +331,23 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
   const plans: Plan[] = [];
   const killed = await deps.killSwitch.isKilled();
   let cash = await executor.holdings();
+  // Value counts everything the vault owns (live: including the SOL kept for fees), as the snapshots do.
+  const valueCash = executor.mode === 'live' ? await executor.holdings({ includeReserve: true }) : cash;
+  const unpriced = Object.keys(valueCash).filter((m) => !tokens.has(m));
+  if (unpriced.length) for (const t of await db.token.findMany({ where: { mint: { in: unpriced } } })) tokens.set(t.mint, t);
   const positionsUsd = marked.reduce((sum, x) => sum + x.pos.valueUsd + x.pos.feesUnclaimedUsd, 0);
-  const vaultValue = holdingsUsd(cash, tokens) + positionsUsd;
+  const vaultValue = holdingsUsd(valueCash, tokens) + positionsUsd;
 
-  // Daily loss stop
+  // Daily loss stop, net of money deposited or withdrawn since the snapshot (those aren't gains or losses).
   const dayAgo = await db.vaultSnapshot.findFirst({ where: { vaultId: vault.id, ts: { lte: new Date(now - 23 * 3600_000) } }, orderBy: { ts: 'desc' } });
-  const stopHit = !!dayAgo && dailyStopHit(vaultValue, dayAgo.value, s.dailyStopPct);
+  const flows = dayAgo
+    ? await db.decision.findMany({ where: { vaultId: vault.id, ts: { gt: dayAgo.ts }, type: { in: ['deploy', 'exit'] } }, select: { inputs: true } })
+    : [];
+  const netFlowUsd = flows.reduce((sum, d) => {
+    const f = (d.inputs as { flowUsd?: unknown } | null)?.flowUsd;
+    return sum + (typeof f === 'number' && Number.isFinite(f) ? f : 0);
+  }, 0);
+  const stopHit = !!dayAgo && dailyStopHit(vaultValue - netFlowUsd, dayAgo.value, s.dailyStopPct);
 
   // Exposure per token: idle cash plus what each position actually holds right now.
   const exposure = new Map<string, number>();
@@ -329,6 +373,17 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
     for (const { pos, view, xUsd, yUsd } of marked) {
       if (!view) {
         holds.push(`No fresh data for one position's pool, so it is left as is.`);
+        continue;
+      }
+      const staleMin = (now - view.snap.ts.getTime()) / 60_000;
+      if (staleMin > 15) {
+        plans.push({
+          kind: 'exit',
+          pos,
+          view,
+          reason: `No fresh market data for this pool for ${Math.round(staleMin)} minutes (it may have lost liquidity or volume). Exiting to be safe.`,
+          urgent: true,
+        });
         continue;
       }
       const urgent = view.flags.filter(isUrgent);
@@ -496,6 +551,7 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
   emitStep(4);
   const texts: string[] = [];
   let sentTx = false;
+  let failedExits = 0;
   for (const [i, plan] of plans.entries()) {
     const key = `${vault.id}:${cycle}:${i}:${plan.kind}`;
     if (!(await deps.claimKey(key))) continue;
@@ -513,6 +569,7 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
       if (s.toggles.telegramAlerts) await deps.notify?.(vault, `${r.title}. ${r.text}`).catch(() => {});
     } catch (e) {
       const msg = (e as Error).message;
+      if (plan.kind === 'exit') failedExits++;
       log(`[agent] vault ${vault.id} ${plan.kind} failed: ${msg}`);
       texts.push(`Couldn't ${plan.kind} ${pairOf(plan.view)}: ${msg}`);
       const costly = e instanceof SetupTooCostly;
@@ -526,8 +583,13 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
     }
   }
 
-  if (stopHit && !killed) {
+  if (stopHit && !killed && failedExits) {
+    // Pausing now would leave positions nobody manages: keep running and retry the exits.
+    texts.push(`Daily loss stop: ${failedExits} position(s) couldn't be closed yet. Retrying next cycle before pausing.`);
+    await deps.notify?.(vault, `Daily loss stop hit, but ${failedExits} position(s) couldn't be closed yet. Retrying every minute.`).catch(() => {});
+  } else if (stopHit && !killed) {
     await db.vault.update({ where: { id: vault.id }, data: { status: 'paused', pausedReason: `Daily loss stop: down more than ${s.dailyStopPct}% in 24h.` } });
+    await db.proposal.updateMany({ where: { vaultId: vault.id, status: 'pending' }, data: { status: 'expired' } });
     texts.push(`Vault fell more than ${s.dailyStopPct}% in 24 hours. Closed positions and paused the agent.`);
     await deps.notify?.(vault, `Daily loss stop hit. Binwise closed positions and paused your vault.`).catch(() => {});
   }
@@ -537,7 +599,7 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
 
   // Persist idle balances: paper keeps them in the database; live mirrors the vault wallet on-chain
   // so vault value, the daily loss stop and the dashboard all see the same numbers.
-  cash = executor.mode === 'paper' && 'balances' in executor ? (executor as unknown as { balances: Holdings }).balances : await executor.holdings();
+  cash = executor.mode === 'paper' && 'balances' in executor ? (executor as unknown as { balances: Holdings }).balances : await executor.holdings({ includeReserve: true });
   await db.vault.update({ where: { id: vault.id }, data: { cash } });
   await snapshotVault(deps, vault.id, tokens, now);
 
@@ -577,29 +639,40 @@ async function execute(
     );
 
   if (plan.kind === 'deploy') {
-    const r = await ex.open({ pool: v.ctx, valueUsd: plan.sizeUsd, binsEachSide: plan.binsEachSide, shape: plan.shape, side: plan.side, maxBinArrayCostPct: params.maxBinArrayCostPct, key });
-    sigs.push(...r.txSigs);
-    const pos = await db.position.create({
-      data: {
-        vaultId: vault.id,
-        openedAt: new Date(now),
-        poolId: v.snap.poolId,
-        address: r.address,
-        binStep: v.ctx.binStep,
-        lowerBin: r.lowerBin,
-        upperBin: r.upperBin,
-        shape: plan.shape,
-        bins: r.bins ?? undefined,
-        entryAmountA: r.amountX,
-        entryAmountB: r.amountY,
-        entryPriceA: v.ctx.usdX,
-        entryPriceB: v.ctx.usdY,
-        entryValueUsd: r.amountX * v.ctx.usdX + r.amountY * v.ctx.usdY,
-        price: v.ctx.price,
-        valueUsd: r.amountX * v.ctx.usdX + r.amountY * v.ctx.usdY,
-        costsUsd: r.costUsd,
-      },
-    });
+    // Live: re-check the all-vaults cap and open inside one global lock, so vaults running in
+    // parallel can't each see room and together exceed LIVE_MAX_TOTAL_USD.
+    const openAndRecord = async () => {
+      let size = plan.sizeUsd;
+      if (ex.mode === 'live') {
+        size = Math.min(size, liveLimits().maxTotalUsd - (await liveTotalUsd(db)));
+        if (size < MIN_POSITION_USD) throw new Error('Live capacity is full (LIVE_MAX_TOTAL_USD). Nothing was opened.');
+      }
+      const r = await ex.open({ pool: v.ctx, valueUsd: size, binsEachSide: plan.binsEachSide, shape: plan.shape, side: plan.side, maxBinArrayCostPct: params.maxBinArrayCostPct, key });
+      sigs.push(...r.txSigs);
+      const pos = await db.position.create({
+        data: {
+          vaultId: vault.id,
+          openedAt: new Date(now),
+          poolId: v.snap.poolId,
+          address: r.address,
+          binStep: v.ctx.binStep,
+          lowerBin: r.lowerBin,
+          upperBin: r.upperBin,
+          shape: plan.shape,
+          bins: r.bins ?? undefined,
+          entryAmountA: r.amountX,
+          entryAmountB: r.amountY,
+          entryPriceA: v.ctx.usdX,
+          entryPriceB: v.ctx.usdY,
+          entryValueUsd: r.amountX * v.ctx.usdX + r.amountY * v.ctx.usdY,
+          price: v.ctx.price,
+          valueUsd: r.amountX * v.ctx.usdX + r.amountY * v.ctx.usdY,
+          costsUsd: r.costUsd,
+        },
+      });
+      return { r, pos };
+    };
+    const { r, pos } = ex.mode === 'live' && deps.liveCapacityLock ? await deps.liveCapacityLock(openAndRecord) : await openAndRecord();
     const value = pos.entryValueUsd;
     return {
       title: `Deployed ${usd(value)} to ${pair}`,
@@ -620,38 +693,49 @@ async function execute(
     const r = await ex.compound(ref(pos), v.ctx, key);
     await db.position.update({
       where: { id: pos.id },
-      data: { feesUnclaimedUsd: 0, feesClaimedUsd: { increment: r.feesUsd }, costsUsd: { increment: r.costUsd }, ...(r.bins ? { bins: r.bins } : {}) },
+      data: {
+        feesUnclaimedUsd: 0,
+        feesClaimedUsd: { increment: r.feesUsd },
+        feesReinvestedUsd: { increment: r.feesUsd },
+        costsUsd: { increment: r.costUsd },
+        ...(r.bins ? { bins: r.bins } : {}),
+      },
     });
     return { title: `Compounded ${usd(r.feesUsd, 2)} in fees`, text: `Claimed from ${pair} and added back to the same bins. ${plan.reason}`, txSigs: r.txSigs, sent: r.txSigs.length > 0, inputs: { positionId: pos.id } };
   }
 
-  // exit and rebalance both start by closing the position
+  // exit and rebalance both start by closing the position. Record the close right away, so a
+  // failure in the next step (swap, reopen) can never leave the database pointing at a closed position.
   const closed = await ex.close(ref(pos), v.ctx, key);
   sigs.push(...closed.txSigs);
+  await db.position.update({
+    where: { id: pos.id },
+    data: { status: 'closed', closedAt: new Date(now), feesUnclaimedUsd: 0, feesClaimedUsd: { increment: closed.feesUsd }, costsUsd: { increment: closed.costUsd } },
+  });
 
   if (plan.kind === 'exit') {
     // Step aside: move the risky token into the pair's quote/stable token.
-    let swapCost = 0;
+    let swapNote = '';
     if (v.riskyMint && !plan.manual) {
       const risky = v.riskyMint;
-      // Sell the whole idle balance of the falling token, not just what this position returned.
-      const amt = (await ex.holdings())[risky] ?? 0;
-      const pr = (m: string) => (m === v.ctx.mintX ? v.ctx.usdX : v.ctx.usdY);
-      if (amt * pr(risky) > 1) {
-        const sw = await ex.swap(risky, v.quoteMint, amt, { from: pr(risky), to: pr(v.quoteMint), poolTvlUsd: v.ctx.tvlUsd }, key);
-        sigs.push(...sw.txSigs);
-        swapCost = sw.costUsd;
+      try {
+        // Sell the whole idle balance of the falling token, not just what this position returned.
+        const amt = (await ex.holdings())[risky] ?? 0;
+        const pr = (m: string) => (m === v.ctx.mintX ? v.ctx.usdX : v.ctx.usdY);
+        if (amt * pr(risky) > 1) {
+          const sw = await ex.swap(risky, v.quoteMint, amt, { from: pr(risky), to: pr(v.quoteMint), poolTvlUsd: v.ctx.tvlUsd }, key);
+          sigs.push(...sw.txSigs);
+          await db.position.update({ where: { id: pos.id }, data: { costsUsd: { increment: sw.costUsd } } });
+        }
+      } catch (e) {
+        swapNote = ` Couldn't swap into the stable token (${(e as Error).message}); the tokens stay in the vault.`;
       }
     }
-    await db.position.update({
-      where: { id: pos.id },
-      data: { status: 'closed', closedAt: new Date(now), feesUnclaimedUsd: 0, feesClaimedUsd: { increment: closed.feesUsd }, costsUsd: { increment: closed.costUsd + swapCost } },
-    });
     const backUsd = closed.amountX * v.ctx.usdX + closed.amountY * v.ctx.usdY + closed.feesUsd;
     const quoteSym = v.quoteMint === v.ctx.mintX ? v.snap.pool.tokenA : v.snap.pool.tokenB;
     return {
       title: `Closed ${pair}`,
-      text: `${plan.reason} ${usd(backUsd)} back in the vault${v.riskyMint && !plan.manual ? ` as ${quoteSym}` : ''}.`,
+      text: `${plan.reason} ${usd(backUsd)} back in the vault${v.riskyMint && !plan.manual && !swapNote ? ` as ${quoteSym}` : ''}.${swapNote}`,
       txSigs: sigs,
       sent: sigs.length > 0,
       inputs: { positionId: pos.id },
@@ -660,11 +744,25 @@ async function execute(
 
   // rebalance: re-open centred on the current price, keeping the position's history
   const valueUsd = closed.amountX * v.ctx.usdX + closed.amountY * v.ctx.usdY + closed.feesUsd - closed.costUsd;
-  const r = await ex.open({ pool: v.ctx, valueUsd, binsEachSide: plan.binsEachSide, shape: pos.shape, side: plan.side, key: `${key}:reopen` });
+  let r: Awaited<ReturnType<Executor['open']>>;
+  try {
+    r = await ex.open({ pool: v.ctx, valueUsd, binsEachSide: plan.binsEachSide, shape: pos.shape, side: plan.side, maxBinArrayCostPct: params.maxBinArrayCostPct, key: `${key}:reopen` });
+  } catch (e) {
+    // The old range is closed and recorded; its funds wait in the vault for the next deploy.
+    return {
+      title: `Closed ${pair}`,
+      text: `Price left the range, so the position was closed, but re-opening failed (${(e as Error).message}). ${usd(valueUsd)} is idle in the vault and the agent will deploy it again.`,
+      txSigs: sigs,
+      sent: sigs.length > 0,
+      inputs: { positionId: pos.id, reopenFailed: true },
+    };
+  }
   sigs.push(...r.txSigs);
   await db.position.update({
     where: { id: pos.id },
     data: {
+      status: 'open',
+      closedAt: null,
       address: r.address,
       lowerBin: r.lowerBin,
       upperBin: r.upperBin,
@@ -673,9 +771,9 @@ async function execute(
       ticksOut: 0,
       rebalances: { increment: 1 },
       lastRebalanceAt: new Date(now),
-      feesUnclaimedUsd: 0,
-      feesClaimedUsd: { increment: closed.feesUsd },
-      costsUsd: { increment: closed.costUsd + r.costUsd },
+      // The claimed fees went into the new range.
+      feesReinvestedUsd: { increment: closed.feesUsd },
+      costsUsd: { increment: r.costUsd },
     },
   });
   const { lo, hi } = rangePrices({ binStep: pos.binStep, lowerBin: r.lowerBin, upperBin: r.upperBin, address: r.address }, v.ctx);
@@ -761,6 +859,111 @@ async function propose(deps: AgentDeps, vault: VaultWithStrategy, plan: Plan, no
   return title;
 }
 
+type LiveChain = {
+  recentSignatures(limit?: number): Promise<string[]>;
+  depositIn(signature: string): Promise<Record<string, number>>;
+  listPositions(): Promise<{ address: string; pool: string; lowerBin: number; upperBin: number; amountX: string; amountY: string }[]>;
+};
+
+/**
+ * Live vaults, every few cycles: make the database match the chain.
+ * - Deposits the app never reported (the user closed the tab before it confirmed) are recorded.
+ * - Positions the agent opened but never saved (the process stopped mid-action) are adopted.
+ */
+async function reconcileLive(deps: AgentDeps, vault: VaultWithStrategy, executor: Executor, now: number) {
+  const live = executor as unknown as LiveChain;
+  if (typeof live.recentSignatures !== 'function') return;
+  const { db } = deps;
+
+  const sigs = await live.recentSignatures(15);
+  const seen = new Set([
+    ...(await db.decision.findMany({ where: { idempotencyKey: { in: sigs.map((x) => `deposit:${x}`) } }, select: { idempotencyKey: true } })).map((d) => d.idempotencyKey!.slice(8)),
+    // The agent's own transactions are never deposits.
+    ...(await db.tx.findMany({ where: { sig: { in: sigs } }, select: { sig: true } })).map((t) => t.sig!),
+  ]);
+  for (const sig of sigs) {
+    if (seen.has(sig)) continue;
+    const credited = await live.depositIn(sig);
+    if (!Object.keys(credited).length) continue;
+    const toks = await db.token.findMany({ where: { mint: { in: Object.keys(credited) } } });
+    const flowUsd = Object.entries(credited).reduce((sum, [m, a]) => sum + a * (toks.find((t) => t.mint === m)?.priceUsd ?? 0), 0);
+    const label = Object.entries(credited)
+      .map(([m, a]) => `${a.toLocaleString('en-US', { maximumFractionDigits: 4 })} ${toks.find((t) => t.mint === m)?.symbol ?? m.slice(0, 4)}`)
+      .join(' + ');
+    const v = await db.vault.findUniqueOrThrow({ where: { id: vault.id } });
+    const deposits = { ...(v.deposits as Record<string, number>) };
+    for (const [m, a] of Object.entries(credited)) deposits[m] = (deposits[m] ?? 0) + a;
+    try {
+      await db.$transaction([
+        db.decision.create({
+          data: {
+            vaultId: vault.id,
+            ts: new Date(now),
+            type: 'deploy',
+            title: `Deposited ${label}`,
+            reason: 'Found in the vault wallet on-chain. The agent places it on the next cycle.',
+            inputs: { flowUsd },
+            txSig: sig,
+            idempotencyKey: `deposit:${sig}`,
+          },
+        }),
+        db.vault.update({ where: { id: vault.id }, data: { deposits } }),
+      ]);
+    } catch (e) {
+      if ((e as { code?: string }).code !== 'P2002') throw e; // recorded by the app meanwhile
+    }
+  }
+
+  const known = new Set((await db.position.findMany({ where: { vaultId: vault.id, address: { not: null } }, select: { address: true, status: true } })).map((p) => p.address!));
+  for (const op of await live.listPositions()) {
+    if (known.has(op.address)) {
+      // Marked closed but still on-chain: manage it again.
+      await db.position.updateMany({ where: { vaultId: vault.id, address: op.address, status: 'closed' }, data: { status: 'open', closedAt: null } });
+      continue;
+    }
+    const snap = await db.poolSnapshot.findFirst({ where: { poolId: op.pool }, orderBy: { ts: 'desc' }, include: { pool: true } });
+    if (!snap) {
+      deps.log?.(`[agent] vault ${vault.id}: untracked position ${op.address} in unknown pool ${op.pool}`);
+      continue;
+    }
+    const [tx, ty] = await Promise.all([db.token.findUnique({ where: { mint: snap.pool.mintA } }), db.token.findUnique({ where: { mint: snap.pool.mintB } })]);
+    if (!tx?.priceUsd || !ty?.priceUsd) continue;
+    const ax = Number(op.amountX) / 10 ** tx.decimals;
+    const ay = Number(op.amountY) / 10 ** ty.decimals;
+    const valueUsd = ax * tx.priceUsd + ay * ty.priceUsd;
+    await db.position.create({
+      data: {
+        vaultId: vault.id,
+        poolId: op.pool,
+        address: op.address,
+        binStep: snap.pool.binStep,
+        lowerBin: op.lowerBin,
+        upperBin: op.upperBin,
+        shape: 'spot',
+        entryAmountA: ax,
+        entryAmountB: ay,
+        entryPriceA: tx.priceUsd,
+        entryPriceB: ty.priceUsd,
+        entryValueUsd: valueUsd,
+        price: snap.price,
+        valueUsd,
+        openedAt: new Date(now),
+      },
+    });
+    await db.decision.create({
+      data: {
+        vaultId: vault.id,
+        poolId: op.pool,
+        ts: new Date(now),
+        type: 'deploy',
+        title: `Found a ${snap.pool.tokenA} / ${snap.pool.tokenB} position`,
+        reason: `A position worth about ${usd(valueUsd)} was open on-chain but missing from the records (an action was interrupted). The agent manages it from now on.`,
+        inputs: { adopted: op.address },
+      },
+    });
+  }
+}
+
 /** USD in open positions across every live vault (checked against LIVE_MAX_TOTAL_USD). */
 async function liveTotalUsd(db: PrismaClient) {
   const r = await db.position.aggregate({ _sum: { valueUsd: true }, where: { status: 'open', vault: { mode: 'live' } } });
@@ -801,7 +1004,7 @@ export function runManualAction(deps: AgentDeps, vault: VaultWithStrategy, posit
   return runPositionAction(deps, vault, positionId, action === 'close' ? 'exit' : 'claim', requestId);
 }
 
-type PositionActionOpts = { reason?: string; binsEachSide?: number; side?: LiquiditySide };
+type PositionActionOpts = { reason?: string; binsEachSide?: number; side?: LiquiditySide; stepAside?: boolean };
 
 /** Close / claim / compound / rebalance one open position on the owner's request or approval. */
 async function runPositionAction(
@@ -828,7 +1031,7 @@ async function runPositionAction(
   const executor = await deps.executorFor(vault);
   const plan: Plan =
     kind === 'exit'
-      ? { kind: 'exit', pos, view, reason: opts.reason ?? 'Manual close. Funds returned to your vault.', manual: true }
+      ? { kind: 'exit', pos, view, reason: opts.reason ?? 'Manual close. Funds returned to your vault.', manual: !opts.stepAside }
       : kind === 'claim'
         ? { kind: 'claim', pos, view, reason: opts.reason ?? 'Manual claim. Sent to your vault balance.' }
         : kind === 'compound'
@@ -857,7 +1060,8 @@ export async function runApprovedProposal(deps: AgentDeps, vault: VaultWithStrat
     const r =
       p.kind === 'deploy'
         ? await runManualDeploy(deps, vault, p.poolId!, plan.sizeUsd ?? 0, requestId, 'Approved by you')
-        : await runPositionAction(deps, vault, p.positionId!, p.kind as 'exit' | 'compound' | 'rebalance', requestId, { reason: note, ...plan });
+        : // An approved exit is the agent's own exit, so it also steps aside into the stable token.
+          await runPositionAction(deps, vault, p.positionId!, p.kind as 'exit' | 'compound' | 'rebalance', requestId, { reason: note, stepAside: true, ...plan });
     await db.proposal.update({ where: { id: p.id }, data: { status: 'done', result: r ? `${r.title}. ${r.text}` : 'Already done.' } });
     return r;
   } catch (e) {
@@ -895,7 +1099,13 @@ export async function runManualDeploy(
   const s = strategySettings(vault.strategy!);
   const view = await poolView(snap, tokens, s, strategyWeights(vault.strategy!), params);
   if (!view) throw new Error('Token prices are missing for this pool.');
+  if (vault.status !== 'running') throw new Error(`The agent is paused${vault.pausedReason ? ` (${vault.pausedReason})` : ''}. Resume it first.`);
   if (!view.a.eligible) throw new Error(`The agent won't enter this pool right now. ${view.a.reason}`);
+  if (strategySettings(vault.strategy!).toggles.pauseOnVolSpikes && view.snap.volSpike) throw new Error('Volatility is spiking in this pool. The agent waits it out.');
+  const recentExit = await db.decision.findFirst({
+    where: { vaultId: vault.id, poolId, type: 'exit', ts: { gte: new Date(now - params.reentryCooldownHours * 3600_000) } },
+  });
+  if (recentExit) throw new Error(`The agent left this pool less than ${params.reentryCooldownHours}h ago and waits before going back in.`);
   const side = sideForRegime(view.regime, params, view.riskyIsY);
   if (!side) throw new Error('This pool is in a downtrend. The agent waits for the trend to turn.');
   const open = await db.position.findMany({ where: { vaultId: vault.id, status: 'open' } });
