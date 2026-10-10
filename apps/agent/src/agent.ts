@@ -19,9 +19,19 @@ import {
   type LiquidityShape,
   type PoolAssessment,
   type StrategySettings,
+  type AgentParams,
+  type LiquiditySide,
+  type Regime,
+  emaSignal,
+  exposureHeadroomUsd,
+  isUrgent,
+  sideForRegime,
+  singleSidedAfterExit,
 } from '@binwise/core';
-import { TX_COUNT, type Executor, type Holdings, type KillSwitch, type PoolCtx, type PositionRef } from '@binwise/chain';
+import { SetupTooCostly, TX_COUNT, type Executor, type Holdings, type KillSwitch, type PoolCtx, type PositionRef } from '@binwise/chain';
 import {
+  activeParams,
+  assessmentInput,
   isStable,
   latestSnapshots,
   startOfUtcDay,
@@ -65,11 +75,16 @@ export interface AgentDeps {
   notify?: (vault: VaultWithStrategy, text: string) => Promise<void>;
   log?: (msg: string) => void;
   now?: () => number;
+  /** Active agent parameters (defaults to the database's active ParamSet) */
+  params?: () => Promise<AgentParams>;
 }
 
 interface PoolView {
   snap: SnapshotWithPool;
   a: PoolAssessment;
+  regime: Regime;
+  /** Risk signals (depeg, TVL drain, price deviation, unlock) */
+  flags: string[];
   ctx: PoolCtx;
   stablePair: boolean;
   quoteMint: string;
@@ -79,9 +94,9 @@ interface PoolView {
 type Plan =
   | { kind: 'exit'; pos: Position; view: PoolView; reason: string; manual?: boolean }
   | { kind: 'claim'; pos: Position; view: PoolView; reason: string }
-  | { kind: 'rebalance'; pos: Position; view: PoolView; reason: string; binsEachSide: number }
+  | { kind: 'rebalance'; pos: Position; view: PoolView; reason: string; binsEachSide: number; side: LiquiditySide }
   | { kind: 'compound'; pos: Position; view: PoolView; reason: string }
-  | { kind: 'deploy'; view: PoolView; sizeUsd: number; shape: LiquidityShape; binsEachSide: number; reason: string };
+  | { kind: 'deploy'; view: PoolView; sizeUsd: number; shape: LiquidityShape; binsEachSide: number; side: LiquiditySide; reason: string };
 
 const usd = (n: number, d = 0) => '$' + n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 const pairOf = (v: PoolView) => `${v.snap.pool.tokenA} / ${v.snap.pool.tokenB}`;
@@ -106,31 +121,25 @@ const ref = (p: Position): PositionRef => ({
   feesUnclaimedUsd: p.feesUnclaimedUsd,
 });
 
-function poolView(snap: SnapshotWithPool, tokens: Map<string, Token>, s: StrategySettings, w: ReturnType<typeof strategyWeights>): PoolView | null {
+async function poolView(
+  snap: SnapshotWithPool,
+  tokens: Map<string, Token>,
+  s: StrategySettings,
+  w: ReturnType<typeof strategyWeights>,
+  params: AgentParams,
+): Promise<PoolView | null> {
   const tx = tokens.get(snap.pool.mintA);
   const ty = tokens.get(snap.pool.mintB);
   if (!tx || !ty || tx.priceUsd == null || ty.priceUsd == null) return null;
-  const allowed = (t: Token) => t.allowed ?? (t.isVerified && t.freezeAuthorityDisabled !== false);
-  const a = assessPool(
-    {
-      tvl: snap.tvl,
-      volume24h: snap.volume24h,
-      baseFeePct: snap.pool.baseFee,
-      volatilityPct: snap.volatility,
-      trend7d: snap.trend7d,
-      holderQuality: snap.holderQuality,
-      mcapM: snap.mcapM,
-      bothAllowed: allowed(tx) && allowed(ty),
-      emaBearish: snap.emaBearish,
-    },
-    s,
-    w,
-  );
+  const input = await assessmentInput(snap, tx, ty, params);
+  const a = assessPool(input, s, w, params);
   const sx = isStable(tx);
   const sy = isStable(ty);
   return {
     snap,
     a,
+    regime: input.regime ?? 'range',
+    flags: input.riskFlags,
     stablePair: sx && sy,
     quoteMint: sx && !sy ? tx.mint : ty.mint,
     riskyMint: sx && sy ? null : sx ? ty.mint : tx.mint,
@@ -145,10 +154,12 @@ function poolView(snap: SnapshotWithPool, tokens: Map<string, Token>, s: Strateg
       usdX: tx.priceUsd,
       usdY: ty.priceUsd,
       tvlUsd: snap.tvl,
-      baseFeePct: snap.pool.baseFee,
+      // The fee rate LPs were actually paid (includes the dynamic fee), not just the base fee.
+      baseFeePct: snap.feeRatePct ?? snap.pool.baseFee,
       volume24hUsd: snap.volume24h,
       protocolFeePct: snap.pool.protocolFeePct,
       activeBinLiqUsd: snap.activeBinLiqUsd,
+      farmAprPct: snap.farmAprPct,
     },
   };
 }
@@ -198,6 +209,7 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
 
   const s = strategySettings(vault.strategy!);
   const w = strategyWeights(vault.strategy!);
+  const params = deps.params ? await deps.params() : await activeParams(db);
 
   // ---- Scan
   emitStep(0);
@@ -209,7 +221,7 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
   }
   const mints = [...new Set(snaps.flatMap((x) => [x.pool.mintA, x.pool.mintB]))];
   const tokens = new Map((await db.token.findMany({ where: { mint: { in: mints } } })).map((t) => [t.mint, t]));
-  const views = snaps.map((x) => poolView(x, tokens, s, w)).filter((v): v is PoolView => !!v);
+  const views = (await Promise.all(snaps.map((x) => poolView(x, tokens, s, w, params)))).filter((v): v is PoolView => !!v);
   const byPool = new Map(views.map((v) => [v.snap.poolId, v]));
   const eligible = views.filter((v) => v.a.eligible).sort((a, b) => b.a.score - a.a.score);
   steps[0].done = `${views.length} pools, ${eligible.length} passed filters`;
@@ -245,7 +257,7 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
         netVsHold: net,
         inRange: m.inRange,
         ticksOut: m.inRange ? 0 : p.ticksOut + 1,
-        lowScoreStreak: view.a.score < DEFAULT_THRESHOLDS.exitScore ? p.lowScoreStreak + 1 : 0,
+        lowScoreStreak: view.a.score < params.exitScore ? p.lowScoreStreak + 1 : 0,
       },
     });
     await db.positionMark.create({ data: { positionId: p.id, price: view.ctx.price, lo, hi, valueUsd: m.valueUsd, holdUsd, netVsHold: net, inRange: m.inRange } });
@@ -292,17 +304,22 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
         holds.push(`No fresh data for one position's pool, so it is left as is.`);
         continue;
       }
+      const urgent = view.flags.filter(isUrgent);
+      if (urgent.length) {
+        plans.push({ kind: 'exit', pos, view, reason: urgent.join(' ') });
+        continue;
+      }
       const marks24 = await db.positionMark.findMany({ where: { positionId: pos.id, ts: { gte: new Date(now - 24 * 3600_000) } }, select: { netVsHold: true } });
       const oldEnough = now - pos.openedAt.getTime() >= 24 * 3600_000;
       const why = exitReason(
         {
           trend7d: view.snap.trend7d,
           trendExitPct: s.trendExitPct,
-          emaBearish: view.snap.emaBearish,
+          emaBearish: emaSignal(view.snap.emaBearish, view.regime, params),
           netVsHoldMax24h: oldEnough && marks24.length ? Math.max(...marks24.map((m) => m.netVsHold)) : null,
           lowScoreStreak: pos.lowScoreStreak,
         },
-        DEFAULT_THRESHOLDS,
+        params,
       );
       if (why) {
         plans.push({ kind: 'exit', pos, view, reason: why });
@@ -313,9 +330,20 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
           holds.push(`${pairOf(view)} is out of range during a volatility spike. Waiting it out.`);
           continue;
         }
-        const halfWidth = rangeHalfWidth(s.profile, view.snap.volatility, view.stablePair);
+        const halfWidth = rangeHalfWidth(s.profile, view.snap.volatility, view.stablePair, params);
         const binsEachSide = Math.min(MAX_BINS_EACH_SIDE, binsForHalfWidth(halfWidth, view.ctx.binStep));
-        const probe = openPosition(pos.valueUsd / view.ctx.usdY, view.ctx.price, view.ctx.binStep, binsEachSide, pos.shape);
+        const regimeSide = sideForRegime(view.regime, params);
+        if (!regimeSide) {
+          holds.push(`${pairOf(view)} is out of range in a downtrend. Not re-entering until the trend turns.`);
+          continue;
+        }
+        const { hi } = rangePrices(pos, view.ctx);
+        const priceAbove = view.ctx.price >= hi;
+        // In a ranging market the cheap mode re-opens one-sided with what we hold (no swap).
+        const side: LiquiditySide = params.rebalanceMode === 'single' && view.regime === 'range' ? singleSidedAfterExit(priceAbove) : regimeSide;
+        const needsSwap = side === 'both' || (side === 'x') === priceAbove;
+        const swapUsd = side === 'both' ? pos.valueUsd / 2 : needsSwap ? pos.valueUsd : 0;
+        const probe = openPosition(pos.valueUsd / view.ctx.usdY, view.ctx.price, view.ctx.binStep, binsEachSide, pos.shape, side);
         const fees6h = feesEarnedUsd({
           pos: probe,
           price: view.ctx.price,
@@ -330,13 +358,15 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
           minutesSinceLastRebalance: pos.lastRebalanceAt ? (now - pos.lastRebalanceAt.getTime()) / 60_000 : null,
           expectedFees6hUsd: fees6h,
           costs: {
-            txFeesUsd: executor.txCostUsd(TX_COUNT.close + TX_COUNT.open + TX_COUNT.swap),
-            slippageUsd: slippageUsd(pos.valueUsd / 2, view.ctx.tvlUsd),
+            txFeesUsd: executor.txCostUsd(TX_COUNT.close + TX_COUNT.open + (swapUsd > 0 ? TX_COUNT.swap : 0)),
+            slippageUsd: swapUsd > 0 ? slippageUsd(swapUsd, view.ctx.tvlUsd) : 0,
             priorityUsd: 0,
           },
           onlyWhenProfitable: s.toggles.rebalanceOnlyProfitable,
+          feeMultiple: params.rebalanceFeeMultiple,
+          cooldownMin: params.rebalanceCooldownMin,
         });
-        if (v.act) plans.push({ kind: 'rebalance', pos, view, reason: v.reason, binsEachSide });
+        if (v.act) plans.push({ kind: 'rebalance', pos, view, reason: v.reason + (side !== 'both' ? ` Re-opened one-sided (${side === 'x' ? 'above' : 'below'} price).` : ''), binsEachSide, side });
         else holds.push(`${pairOf(view)}: ${v.reason}`);
         continue;
       }
@@ -345,20 +375,48 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
         plans.push({ kind: 'compound', pos, view, reason: `Gas (${usd(gas, 2)}) is under 1% of the claim, so fees go back into the same bins.` });
     }
 
-    // Deploy idle funds into the best eligible pools.
+    // Deploy idle funds into the best eligible pools, within the per-token exposure cap.
     const held = new Set(marked.map((x) => x.pos.poolId));
     const maxPositions = Math.max(1, Math.floor(100 / s.maxAllocPct));
     let openCount = marked.length;
     let idleUsd = holdingsUsd(cash, tokens);
+    const exposure = new Map<string, number>();
+    const addExposure = (mint: string, usdAmt: number) => exposure.set(mint, (exposure.get(mint) ?? 0) + usdAmt);
+    for (const [mint, amt] of Object.entries(cash)) addExposure(mint, amt * (tokens.get(mint)?.priceUsd ?? 0));
+    for (const x of marked) if (x.view) {
+      // Without exact composition, count half the position in each token.
+      addExposure(x.view.ctx.mintX, x.pos.valueUsd / 2);
+      addExposure(x.view.ctx.mintY, x.pos.valueUsd / 2);
+    }
+    const stableMint = (m: string) => {
+      const t = tokens.get(m);
+      return !!t && isStable(t);
+    };
+    const recentExits = await db.decision.findMany({
+      where: { vaultId: vault.id, type: 'exit', ts: { gte: new Date(now - params.reentryCooldownHours * 3600_000) } },
+      select: { poolId: true },
+    });
+    const cooling = new Set(recentExits.map((d) => d.poolId));
     for (const v of eligible) {
       if (openCount >= maxPositions) break;
-      if (held.has(v.snap.poolId)) continue;
+      if (held.has(v.snap.poolId) || cooling.has(v.snap.poolId)) continue;
       if (s.toggles.pauseOnVolSpikes && v.snap.volSpike) continue;
-      const size = Math.min(positionSizeUsd(vaultValue, s.maxAllocPct, v.ctx.tvlUsd), idleUsd * 0.98);
-      if (size < MIN_POSITION_USD) break;
+      const side = sideForRegime(v.regime, params);
+      if (!side) continue;
+      let size = Math.min(positionSizeUsd(vaultValue, s.maxAllocPct, v.ctx.tvlUsd, params), idleUsd * 0.98);
+      // Respect the exposure cap for each non-stable token this position would add.
+      const shareX = side === 'both' ? 0.5 : side === 'x' ? 1 : 0;
+      for (const [mint, share] of [[v.ctx.mintX, shareX], [v.ctx.mintY, 1 - shareX]] as const) {
+        if (share <= 0) continue;
+        const room = exposureHeadroomUsd(exposure.get(mint) ?? 0, vaultValue, params.maxTokenExposurePct, stableMint(mint));
+        size = Math.min(size, room / share);
+      }
+      if (size < MIN_POSITION_USD) continue;
       const shape = shapeFor(s.profile, v.stablePair, v.snap.volatility);
-      const binsEachSide = Math.min(MAX_BINS_EACH_SIDE, binsForHalfWidth(rangeHalfWidth(s.profile, v.snap.volatility, v.stablePair), v.ctx.binStep));
-      plans.push({ kind: 'deploy', view: v, sizeUsd: size, shape, binsEachSide, reason: v.a.reason });
+      const binsEachSide = Math.min(MAX_BINS_EACH_SIDE, binsForHalfWidth(rangeHalfWidth(s.profile, v.snap.volatility, v.stablePair, params), v.ctx.binStep));
+      plans.push({ kind: 'deploy', view: v, sizeUsd: size, shape, binsEachSide, side, reason: v.a.reason });
+      addExposure(v.ctx.mintX, size * shareX);
+      addExposure(v.ctx.mintY, size * (1 - shareX));
       idleUsd -= size;
       openCount++;
       held.add(v.snap.poolId);
@@ -388,7 +446,7 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
     const key = `${vault.id}:${cycle}:${i}:${plan.kind}`;
     if (!(await deps.claimKey(key))) continue;
     try {
-      const r = await execute(deps, vault, executor, plan, key, s, tokens, now);
+      const r = await execute(deps, vault, executor, plan, key, s, tokens, now, params);
       sentTx = sentTx || r.sent;
       texts.push(r.text);
       await record(plan.kind === 'claim' ? 'compound' : plan.kind, r.title, r.text, {
@@ -404,7 +462,7 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
       log(`[agent] vault ${vault.id} ${plan.kind} failed: ${msg}`);
       texts.push(`Couldn't ${plan.kind} ${pairOf(plan.view)}: ${msg}`);
       await record('skip', `Skipped ${plan.kind} on ${pairOf(plan.view)}`, `${msg} Will retry next cycle if the reason still holds.`, { poolId: plan.view.snap.poolId });
-      await deps.notify?.(vault, `Action failed on ${pairOf(plan.view)}: ${msg}`).catch(() => {});
+      if (!(e instanceof SetupTooCostly)) await deps.notify?.(vault, `Action failed on ${pairOf(plan.view)}: ${msg}`).catch(() => {});
     }
   }
 
@@ -446,6 +504,7 @@ async function execute(
   s: StrategySettings,
   tokens: Map<string, Token>,
   now: number,
+  params: AgentParams,
 ): Promise<ExecResult> {
   const { db } = deps;
   const v = plan.view;
@@ -458,7 +517,7 @@ async function execute(
     );
 
   if (plan.kind === 'deploy') {
-    const r = await ex.open({ pool: v.ctx, valueUsd: plan.sizeUsd, binsEachSide: plan.binsEachSide, shape: plan.shape, key });
+    const r = await ex.open({ pool: v.ctx, valueUsd: plan.sizeUsd, binsEachSide: plan.binsEachSide, shape: plan.shape, side: plan.side, maxBinArrayCostPct: params.maxBinArrayCostPct, key });
     sigs.push(...r.txSigs);
     const pos = await db.position.create({
       data: {
@@ -483,7 +542,7 @@ async function execute(
     const value = pos.entryValueUsd;
     return {
       title: `Deployed ${usd(value)} to ${pair}`,
-      text: `Score ${v.a.score}, trend ${v.snap.trend7d != null ? (v.snap.trend7d >= 0 ? '+' : '−') + Math.abs(v.snap.trend7d).toFixed(1) + '%' : 'n/a'}, inside the ${s.maxAllocPct}% pool cap. ${plan.shape === 'bidask' ? 'Bid-ask' : plan.shape === 'curve' ? 'Curve' : 'Spot'} over ${plan.binsEachSide * 2 + 1} bins.`,
+      text: `${plan.side === 'x' ? 'Trending up, so liquidity sits above price. ' : ''}Score ${v.a.score}, trend ${v.snap.trend7d != null ? (v.snap.trend7d >= 0 ? '+' : '−') + Math.abs(v.snap.trend7d).toFixed(1) + '%' : 'n/a'}, inside the ${s.maxAllocPct}% pool cap. ${plan.shape === 'bidask' ? 'Bid-ask' : plan.shape === 'curve' ? 'Curve' : 'Spot'} over ${plan.binsEachSide * 2 + 1} bins.`,
       txSigs: sigs,
       sent: sigs.length > 0,
       inputs: { positionId: pos.id, sizeUsd: plan.sizeUsd, costUsd: r.costUsd },
@@ -540,7 +599,7 @@ async function execute(
 
   // rebalance: re-open centred on the current price, keeping the position's history
   const valueUsd = closed.amountX * v.ctx.usdX + closed.amountY * v.ctx.usdY + closed.feesUsd - closed.costUsd;
-  const r = await ex.open({ pool: v.ctx, valueUsd, binsEachSide: plan.binsEachSide, shape: pos.shape, key: `${key}:reopen` });
+  const r = await ex.open({ pool: v.ctx, valueUsd, binsEachSide: plan.binsEachSide, shape: pos.shape, side: plan.side, key: `${key}:reopen` });
   sigs.push(...r.txSigs);
   await db.position.update({
     where: { id: pos.id },
@@ -608,7 +667,8 @@ export async function runManualAction(deps: AgentDeps, vault: VaultWithStrategy,
   const snap = await db.poolSnapshot.findFirst({ where: { poolId: pos.poolId }, orderBy: { ts: 'desc' }, include: { pool: true } });
   if (!snap) throw new Error('No market data for this pool yet.');
   const tokens = new Map((await db.token.findMany({ where: { mint: { in: [snap.pool.mintA, snap.pool.mintB] } } })).map((t) => [t.mint, t]));
-  const view = poolView(snap, tokens, strategySettings(vault.strategy!), strategyWeights(vault.strategy!));
+  const params = deps.params ? await deps.params() : await activeParams(db);
+  const view = await poolView(snap, tokens, strategySettings(vault.strategy!), strategyWeights(vault.strategy!), params);
   if (!view) throw new Error('Token prices are missing for this pool.');
   const key = `${vault.id}:manual:${requestId}`;
   if (!(await deps.claimKey(key))) return;
@@ -617,7 +677,7 @@ export async function runManualAction(deps: AgentDeps, vault: VaultWithStrategy,
     action === 'close'
       ? { kind: 'exit', pos, view, reason: 'Manual close. Funds returned to your vault.', manual: true }
       : { kind: 'claim', pos, view, reason: 'Manual claim. Sent to your vault balance.' };
-  const r = await execute(deps, vault, executor, plan, key, strategySettings(vault.strategy!), tokens, (deps.now ?? Date.now)());
+  const r = await execute(deps, vault, executor, plan, key, strategySettings(vault.strategy!), tokens, (deps.now ?? Date.now)(), params);
   const d = await db.decision.create({
     data: { vaultId: vault.id, poolId: pos.poolId, type: action === 'close' ? 'exit' : 'compound', title: r.title, reason: r.text, inputs: { manual: true }, idempotencyKey: key },
   });

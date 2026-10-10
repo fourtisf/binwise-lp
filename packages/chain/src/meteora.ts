@@ -41,6 +41,18 @@ export interface MeteoraPool {
   fee_tvl_ratio: Windowed;
   is_blacklisted: boolean;
   tags: string[];
+  /** Current dynamic fee (base + variable), percent */
+  dynamic_fee_pct?: number;
+  has_farm?: boolean;
+  /** Farm reward APR, percent */
+  farm_apr?: number;
+}
+
+export interface MeteoraVolumePoint {
+  timestamp: number;
+  volume: number;
+  fees: number;
+  protocol_fees?: number;
 }
 
 export interface MeteoraPage<T> {
@@ -88,6 +100,14 @@ export class MeteoraClient {
 
   pool(address: string) {
     return this.get<MeteoraPool>(`/pools/${address}`);
+  }
+
+  /** Volume and LP fees per period (unix seconds). */
+  async volumeHistory(address: string, timeframe: MeteoraTimeframe, startTime: number, endTime: number): Promise<MeteoraVolumePoint[]> {
+    const r = await this.get<{ data: MeteoraVolumePoint[] }>(
+      `/pools/${address}/volume/history?timeframe=${timeframe}&start_time=${Math.floor(startTime)}&end_time=${Math.floor(endTime)}`,
+    );
+    return r.data ?? [];
   }
 
   /** Candles with USD volume. Times are unix seconds. */

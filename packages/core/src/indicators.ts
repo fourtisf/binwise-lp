@@ -93,16 +93,32 @@ export function efficiencyRatio(closes: number[], lookback = 24): number {
   return path > 0 ? Math.abs(w[w.length - 1] - w[0]) / path : 0;
 }
 
-/** Market regime from hourly closes: trending up/down when efficient and on the matching side of EMA50. */
-export function regimeOf(hourlyCloses: number[], erThreshold = 0.35, lookback = 24): Regime {
-  const er = efficiencyRatio(hourlyCloses, lookback);
-  if (er < erThreshold) return 'range';
-  const e50 = ema(hourlyCloses, 50) ?? hourlyCloses[0];
+export interface RegimeParts {
+  efficiency: number;
+  /** Net change over the lookback, percent */
+  changePct: number;
+  aboveEma50: boolean;
+}
+
+export function regimeParts(hourlyCloses: number[], lookback = 24): RegimeParts {
+  const efficiency = efficiencyRatio(hourlyCloses, lookback);
   const last = hourlyCloses[hourlyCloses.length - 1];
-  const move = last - hourlyCloses[hourlyCloses.length - 1 - lookback];
-  if (move > 0 && last >= e50) return 'up';
-  if (move < 0 && last <= e50) return 'down';
+  const from = hourlyCloses[Math.max(0, hourlyCloses.length - 1 - lookback)];
+  const e50 = ema(hourlyCloses, 50) ?? hourlyCloses[0];
+  return { efficiency, changePct: from > 0 ? (last / from - 1) * 100 : 0, aboveEma50: last >= e50 };
+}
+
+/** Trending up/down when the move is efficient and price sits on the matching side of EMA50. */
+export function regimeFrom(p: RegimeParts, erThreshold = 0.35): Regime {
+  if (p.efficiency < erThreshold) return 'range';
+  if (p.changePct > 0 && p.aboveEma50) return 'up';
+  if (p.changePct < 0 && !p.aboveEma50) return 'down';
   return 'range';
+}
+
+/** Market regime from hourly closes. */
+export function regimeOf(hourlyCloses: number[], erThreshold = 0.35, lookback = 24): Regime {
+  return regimeFrom(regimeParts(hourlyCloses, lookback), erThreshold);
 }
 
 /** Median of daily volume sums from hourly volumes (one-day buckets, most recent last). */

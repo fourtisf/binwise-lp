@@ -1,13 +1,21 @@
 import {
+  DEFAULT_PARAMS,
   DEFAULT_STRATEGY,
   DEFAULT_THRESHOLDS,
   DEFAULT_WEIGHTS,
+  RISK_LIMITS,
   assessPool,
+  effectiveFeePct,
+  medianDailyVolume,
   realizedVolatilityPct,
+  regimeParts,
+  riskFlags,
   trendState,
+  volumeForScoring,
+  type AgentParams,
 } from '@binwise/core';
 import { JupiterClient, MeteoraClient, metadataCheck, runHolderChecks, type HolderCheck, type MeteoraPool, type MeteoraToken } from '@binwise/chain';
-import { isAllowed, isStable, type PrismaClient, type Token } from '@binwise/db';
+import { assessmentInput, isAllowed, isStable, isStableSymbol, type PrismaClient, type Token } from '@binwise/db';
 
 /**
  * Data collector (build step 3): every minute, scan Meteora DLMM pools,
@@ -24,6 +32,8 @@ export interface CollectorDeps {
   activeBinLiq?: (pool: { address: string; decimalsX: number; decimalsY: number; usdX: number; usdY: number }) => Promise<number>;
   log?: (msg: string) => void;
   now?: () => number;
+  /** Active agent parameters (regime threshold etc.) */
+  params?: AgentParams;
 }
 
 export interface CollectorOptions {
@@ -211,14 +221,27 @@ async function snapshotPool(deps: CollectorDeps, p: MeteoraPool, now: number): P
   const { db } = deps;
   await refreshCandles(deps, p.address, '1h');
   await refreshCandles(deps, p.address, '5m');
-  const hourly = await closes(db, p.address, '1h', now - 8 * 24 * H);
+  const hourlyRows = await db.candle.findMany({
+    where: { poolId: p.address, timeframe: '1h', ts: { gte: new Date(now - 8 * 24 * H) } },
+    orderBy: { ts: 'asc' },
+    select: { close: true, volume: true },
+  });
+  const hourly = hourlyRows.map((r) => r.close).filter((c) => c > 0);
   const fiveMin = await closes(db, p.address, '5m', now - 24 * H);
   const volatility = fiveMin.length >= 12 ? realizedVolatilityPct(fiveMin, 288) : realizedVolatilityPct(hourly.slice(-25), 24);
   const trend = trendState(hourly);
+  const parts = hourly.length > 25 ? regimeParts(hourly) : null;
   // Volatility spike: the last 6 hours move more than 3x the 7-day norm.
   const recentVol = realizedVolatilityPct(hourly.slice(-7), 24);
   const normalVol = realizedVolatilityPct(hourly, 24);
   const volSpike = hourly.length > 48 && normalVol > 0 && recentVol > 3 * normalVol;
+
+  // Volume quality and the fees LPs were actually paid (dynamic fee included).
+  const volume24h = p.volume['24h'] ?? 0;
+  const fees24h = p.fees['24h'] ?? null;
+  const vq = volumeForScoring(volume24h, medianDailyVolume(hourlyRows.map((r) => r.volume)));
+  const feeRatePct = effectiveFeePct(fees24h, volume24h, p.pool_config.base_fee_pct);
+  const feeYieldDailyPct = fees24h != null && p.tvl > 0 ? (fees24h / p.tvl) * 100 : null;
 
   const [tx, ty] = await Promise.all([
     db.token.findUniqueOrThrow({ where: { mint: p.token_x.address } }),
@@ -230,35 +253,66 @@ async function snapshotPool(deps: CollectorDeps, p: MeteoraPool, now: number): P
   const mcapM = risky.length === 0 ? 1e6 : mcaps.some((m) => m == null) ? null : Math.min(...(mcaps as number[]));
   const holderQuality = Math.min(hx.holderQuality ?? 0.5, hy.holderQuality ?? 0.5);
 
-  const a = assessPool(
-    {
-      tvl: p.tvl,
-      volume24h: p.volume['24h'] ?? 0,
-      baseFeePct: p.pool_config.base_fee_pct,
-      volatilityPct: volatility,
-      trend7d: trend.trend7d,
-      holderQuality,
-      mcapM,
-      bothAllowed: isAllowed(hx) && isAllowed(hy),
-      emaBearish: trend.emaBearish,
-    },
-    DEFAULT_STRATEGY,
-    DEFAULT_WEIGHTS.balanced,
-  );
+  // Risk signals.
+  const hourAgo = await db.poolSnapshot.findFirst({
+    where: { poolId: p.address, ts: { gte: new Date(now - 75 * 60_000), lte: new Date(now - 45 * 60_000) } },
+    orderBy: { ts: 'asc' },
+    select: { tvl: true },
+  });
+  const implied = p.token_x.price && p.token_y.price ? p.token_x.price / p.token_y.price : null;
+  const unlocks = await db.tokenEvent.findMany({
+    where: { mint: { in: [hx.mint, hy.mint] }, kind: 'unlock', at: { gte: new Date(now), lte: new Date(now + RISK_LIMITS.unlockWarnHours * H) } },
+  });
+  const flags = riskFlags({
+    stablePrices: [hx, hy].filter(isStableSymbol).map((t) => ({ symbol: t.symbol, priceUsd: t.priceUsd ?? 1 })),
+    priceDeviationPct: implied && p.current_price > 0 ? (p.current_price / implied - 1) * 100 : null,
+    tvlChange1hPct: hourAgo && hourAgo.tvl > 0 ? (p.tvl / hourAgo.tvl - 1) * 100 : null,
+    upcomingUnlocks: unlocks.map((u) => ({ symbol: u.mint === hx.mint ? hx.symbol : hy.symbol, at: u.at, note: u.note })),
+  });
+
+  const params = deps.params ?? DEFAULT_PARAMS;
+  const snap = {
+    tvl: p.tvl,
+    volume24h,
+    scoringVolume: vq.volume,
+    volatility,
+    trend7d: trend.trend7d,
+    emaBearish: trend.emaBearish,
+    holderQuality,
+    mcapM,
+    feeYieldDailyPct,
+    farmAprPct: p.has_farm ? (p.farm_apr ?? null) : null,
+    efficiency: parts?.efficiency ?? null,
+    change24hPct: parts?.changePct ?? null,
+    aboveEma50: parts?.aboveEma50 ?? null,
+    riskFlags: flags,
+    pool: { baseFee: p.pool_config.base_fee_pct },
+  };
+  const a = assessPool(await assessmentInput(snap, hx, hy, params), DEFAULT_STRATEGY, DEFAULT_WEIGHTS.balanced, params);
 
   await db.poolSnapshot.create({
     data: {
       poolId: p.address,
       ts: new Date(now),
       tvl: p.tvl,
-      volume24h: p.volume['24h'] ?? 0,
-      fees24h: p.fees['24h'] ?? null,
+      volume24h,
+      fees24h,
       activeBinLiqUsd: await activeLiquidity(deps, p, now),
       price: p.current_price,
       volatility,
       trend7d: trend.trend7d,
       emaBearish: trend.emaBearish,
       volSpike,
+      feeRatePct,
+      dynamicFeePct: p.dynamic_fee_pct ?? null,
+      feeYieldDailyPct,
+      farmAprPct: snap.farmAprPct,
+      scoringVolume: vq.volume,
+      volumeSpike: vq.spike,
+      efficiency: snap.efficiency,
+      change24hPct: snap.change24hPct,
+      aboveEma50: snap.aboveEma50,
+      riskFlags: flags,
       mcapM,
       holderQuality,
       score: a.score,

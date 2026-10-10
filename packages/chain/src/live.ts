@@ -41,6 +41,8 @@ export interface IdempotencyGuard {
 }
 
 export class TradingHalted extends Error {}
+/** The open was skipped because one-off setup rent is too large for the position. */
+export class SetupTooCostly extends Error {}
 export class DuplicateAction extends Error {}
 
 import { DLMM, sdk } from './sdk';
@@ -236,24 +238,53 @@ export class LiveExecutor implements Executor {
   async open(req: OpenRequest): Promise<OpenResult> {
     const { pool } = req;
     const prices = { ...this.knownPrices, [pool.mintX]: pool.usdX, [pool.mintY]: pool.usdY };
-    const funding = [
-      ...(await this.acquire(pool.mintX, req.valueUsd / 2, prices, `${req.key}:x`, [pool.mintY])),
-      ...(await this.acquire(pool.mintY, req.valueUsd / 2, prices, `${req.key}:y`, [pool.mintX])),
-    ];
+    const side = req.side ?? 'both';
     const dlmm = await DLMM.create(this.d.conn, new PublicKey(pool.address));
     const active = await dlmm.getActiveBin();
-    const minBinId = active.binId - req.binsEachSide;
-    const maxBinId = active.binId + req.binsEachSide;
-    const strategy = { minBinId, maxBinId, strategyType: STRATEGY[req.shape] };
+    // One-sided ranges cover the same 2n+1 bins, starting at the active bin and going up (X) or down (Y).
+    const count = req.binsEachSide * 2 + 1;
+    const minBinId = side === 'both' ? active.binId - req.binsEachSide : side === 'x' ? active.binId : active.binId - count + 1;
+    const maxBinId = minBinId + count - 1;
+    const strategy = { minBinId, maxBinId, strategyType: STRATEGY[req.shape], ...(side === 'x' ? { singleSidedX: true } : {}) };
+
+    // New bin arrays cost rent that is never refunded; skip ranges where that eats the position.
+    if (req.maxBinArrayCostPct != null) {
+      const q = await dlmm.quoteCreatePosition({ strategy });
+      const setupUsd = (q.binArrayCost + q.bitmapExtensionCost) * (prices[NATIVE_MINT.toBase58()] ?? this.costs.solUsd);
+      if (setupUsd > (req.valueUsd * req.maxBinArrayCostPct) / 100)
+        throw new SetupTooCostly(
+          `Opening here needs ${q.binArraysCount} new bin array(s) costing $${setupUsd.toFixed(2)} in rent that is never refunded, more than ${req.maxBinArrayCostPct}% of the position.`,
+        );
+    }
+
+    const funding =
+      side === 'both'
+        ? [
+            ...(await this.acquire(pool.mintX, req.valueUsd / 2, prices, `${req.key}:x`, [pool.mintY])),
+            ...(await this.acquire(pool.mintY, req.valueUsd / 2, prices, `${req.key}:y`, [pool.mintX])),
+          ]
+        : side === 'x'
+          ? await this.acquire(pool.mintX, req.valueUsd, prices, `${req.key}:x`, [])
+          : await this.acquire(pool.mintY, req.valueUsd, prices, `${req.key}:y`, []);
     const have = await this.holdings();
 
-    // Balance X and Y for the strategy; scale down if Y is short.
-    let x = raw(Math.min(have[pool.mintX] ?? 0, req.valueUsd / 2 / pool.usdX), pool.decimalsX);
-    let y = sdk().autoFillYByStrategy(active.binId, pool.binStep, x, active.xAmount, active.yAmount, minBinId, maxBinId, strategy.strategyType);
-    const yAvail = raw(have[pool.mintY] ?? 0, pool.decimalsY);
-    if (y.gt(yAvail)) {
-      x = x.mul(yAvail).div(y.isZero() ? new BN(1) : y);
-      y = yAvail;
+    let x: BN;
+    let y: BN;
+    if (side === 'x') {
+      x = raw(Math.min(have[pool.mintX] ?? 0, req.valueUsd / pool.usdX), pool.decimalsX);
+      y = new BN(0);
+    } else if (side === 'y') {
+      x = new BN(0);
+      y = raw(Math.min(have[pool.mintY] ?? 0, req.valueUsd / pool.usdY), pool.decimalsY);
+    } else {
+      // Balance X and Y for the strategy; scale down if Y is short.
+      x = raw(Math.min(have[pool.mintX] ?? 0, req.valueUsd / 2 / pool.usdX), pool.decimalsX);
+      y = sdk().autoFillYByStrategy(active.binId, pool.binStep, x, active.xAmount, active.yAmount, minBinId, maxBinId, strategy.strategyType);
+      const yAvail = raw(have[pool.mintY] ?? 0, pool.decimalsY);
+      if (y.gt(yAvail)) {
+        x = x.mul(yAvail).div(y.isZero() ? new BN(1) : y);
+        y = yAvail;
+      }
     }
     if (x.isZero() && y.isZero()) throw new Error('Not enough balance to open a position.');
 
@@ -327,7 +358,8 @@ export class LiveExecutor implements Executor {
     const fy = pos.positionData.feeY;
     const feesUsd = ui(fx, pool.decimalsX) * pool.usdX + ui(fy, pool.decimalsY) * pool.usdY;
     const sigs: string[] = [];
-    for (const [i, t] of (await dlmm.claimSwapFee({ owner: this.me, position: pos })).entries()) sigs.push(await this.runLegacy(`${key}:claim:${i}`, t));
+    // Claims swap fees and any farm rewards; only the swap fees (pool tokens) are added back.
+    for (const [i, t] of (await dlmm.claimAllRewardsByPosition({ owner: this.me, position: pos })).entries()) sigs.push(await this.runLegacy(`${key}:claim:${i}`, t));
     const add = await dlmm.addLiquidityByStrategy({
       positionPubKey: pos.publicKey,
       totalXAmount: fx,
@@ -347,8 +379,18 @@ export class LiveExecutor implements Executor {
     if (amountRaw === '0') return { amountX: 0, amountY: 0, feesUsd: 0, costUsd: 0, txSigs: [] };
     const quote = await this.jupiter.quote(fromMint, toMint, amountRaw, 50);
     const { swapTransaction, lastValidBlockHeight } = await this.jupiter.swap(quote, this.me.toBase58());
-    const tx = VersionedTransaction.deserialize(Buffer.from(swapTransaction, 'base64'));
-    const sig = await this.execute(`${key}:swap`, tx, lastValidBlockHeight, [], this.policy());
+    let tx = VersionedTransaction.deserialize(Buffer.from(swapTransaction, 'base64'));
+    let extra: Partial<TxPolicy> = {};
+    if (this.d.jito) {
+      // Jito only lands bundles that pay a tip, so add the tip transfer to Jupiter's transaction.
+      const alts = await this.lookupTables(tx);
+      const msg = TransactionMessage.decompile(tx.message, { addressLookupTableAccounts: alts });
+      const tip = await this.d.jito.tipInstruction(this.me, this.d.tipLamports ?? 10_000);
+      msg.instructions.push(tip.ix);
+      tx = new VersionedTransaction(msg.compileToV0Message(alts));
+      extra = { transferDestinations: new Set([tip.tipAccount]) };
+    }
+    const sig = await this.execute(`${key}:swap`, tx, lastValidBlockHeight, [], this.policy(extra));
     return { amountX: 0, amountY: 0, feesUsd: 0, costUsd: this.txCostUsd(TX_COUNT.swap), txSigs: [sig] };
   }
 

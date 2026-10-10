@@ -10,7 +10,7 @@ import type { StrategySettings } from './types';
  */
 
 export interface OptimizeInput {
-  pools: { pool: BacktestPool; bars: BacktestBar[] }[];
+  pools: { pool: BacktestPool; bars: BacktestBar[]; feeModel?: FeeModel }[];
   strategy: StrategySettings;
   base?: AgentParams;
   /** Random candidates to try (besides the base set) */
@@ -103,17 +103,17 @@ export function optimizeParams(o: OptimizeInput): OptimizeResult {
 
   // Split every pool: train = warm-up + first part; test = its own warm-up + the rest.
   const splits = o.pools
-    .map(({ pool, bars }) => {
+    .map(({ pool, bars, feeModel }) => {
       const usable = bars.length - warm;
       const cut = warm + Math.floor(usable * frac);
-      return { pool, train: bars.slice(0, cut), test: bars.slice(cut - warm) };
+      return { pool, feeModel, train: bars.slice(0, cut), test: bars.slice(cut - warm) };
     })
     .filter((x) => x.train.length > warm + perDay && x.test.length > warm + perDay);
   if (!splits.length) throw new RangeError('Not enough history to optimise: each pool needs more than 9 days per split.');
 
   const evaluate = (params: AgentParams, part: 'train' | 'test') => {
     const runs = splits.map((x) =>
-      runBacktest({ pool: x.pool, strategy: o.strategy, thresholds: params, costs: o.costs, feeModel: o.feeModel, barsPerDay: perDay }, x[part]).stats,
+      runBacktest({ pool: x.pool, strategy: o.strategy, thresholds: params, costs: o.costs, feeModel: x.feeModel ?? o.feeModel, barsPerDay: perDay }, x[part]).stats,
     );
     const net = runs.reduce((s, x) => s + x.netVsHoldPct, 0) / runs.length;
     const dd = runs.reduce((s, x) => s + x.maxDrawdownPct, 0) / runs.length;

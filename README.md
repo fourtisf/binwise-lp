@@ -9,6 +9,7 @@ The full brief is in [CLAUDE.md](CLAUDE.md); the approved design is [design/binw
 - **Scoring + backtester (step 4):** pure functions in `packages/core` with unit tests; `pnpm --filter @binwise/agent backtest` writes an owner-readable report.
 - **Paper mode (step 5):** the agent runs Scan → Score → Check → Decide → Execute every 60s per vault on live prices, with simulated fills, and logs every decision with a reason.
 - **Live mode (step 6):** the executor is written (DLMM SDK, Jupiter, Jito, simulate-first, program allowlist, kill switch, withdraw only to the owner). It stays off until `LIVE_TRADING_ENABLED=true` and the owner confirms in the app.
+- **Smarter decisions:** the score weighs real fees (including Meteora's dynamic fee) against volatility loss, caps one-day volume spikes, and counts farm rewards. The agent reads the market regime (ranging, trending up or down), uses one-sided ranges in uptrends, stays out of downtrends, caps exposure to any one token, waits before re-entering a pool it just left, and exits immediately on a stablecoin depeg, a sudden TVL drain or a pool price far from the market. See [How the agent decides](#how-the-agent-decides).
 - **Website:** a rebuild of the approved prototype, with wallet sign-in (Phantom, Backpack, Solflare) and one vault per wallet. Without an API it falls back to its built-in simulation.
 
 ## Layout
@@ -41,6 +42,26 @@ pnpm --filter @binwise/agent collector   # terminal 1
 pnpm --filter @binwise/agent agent       # terminal 2
 pnpm dev                                  # web :3000 + API :4000
 pnpm --filter @binwise/agent seed        # once, after the first collector run
+```
+
+## How the agent decides
+
+Tunable settings (deploy/exit score, range width, rebalance rule and mode, regime, exposure cap, re-entry wait, EMA exit mode) live in `AgentParams` in `packages/core/src/scoring.ts`. The agent uses the active row in the `ParamSet` table, or the built-in defaults when there is none.
+
+```bash
+# Search for better settings on past data. Tunes on the first 60% of each pool's history and
+# judges on the rest, which it never saw. Writes reports/optimize-YYYY-MM-DD.md and stores the result.
+pnpm --filter @binwise/agent optimize --days 60 --pools 15
+# Same, but make the new settings active, only if they beat the current ones on unseen data.
+pnpm --filter @binwise/agent optimize --days 60 --apply
+```
+
+The report also appears in the app at ⌘K → Backtest report, under the latest backtest.
+
+Known token unlocks keep the agent out of a pool for the 48 hours before them. Add them by hand for now:
+
+```sql
+INSERT INTO "TokenEvent" (id, mint, at, kind, note) VALUES (gen_random_uuid()::text, '<mint>', '2026-11-01T00:00:00Z', 'unlock', '5% of supply');
 ```
 
 ## Checks

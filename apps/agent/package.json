@@ -7,6 +7,7 @@
     "collector": "node --env-file-if-exists=../../.env --import tsx src/collector-main.ts",
     "agent": "node --env-file-if-exists=../../.env --import tsx src/agent-main.ts",
     "backtest": "node --env-file-if-exists=../../.env --import tsx src/backtest-main.ts",
+    "optimize": "node --env-file-if-exists=../../.env --import tsx src/optimize-main.ts",
     "kill": "node --env-file-if-exists=../../.env --import tsx src/kill-main.ts",
     "seed": "node --env-file-if-exists=../../.env --import tsx src/seed-main.ts",
     "typecheck": "tsc --noEmit",

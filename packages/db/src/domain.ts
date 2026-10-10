@@ -12,6 +12,9 @@ import type { Prisma, PrismaClient, Strategy, Token } from './generated/prisma/c
 
 const STABLE_SYMBOLS = new Set(['USDC', 'USDT', 'PYUSD', 'USDS', 'USDG', 'FDUSD', 'USDE']);
 
+/** A verified token with a dollar-stablecoin symbol, whatever its price (used to spot depegs). */
+export const isStableSymbol = (t: Pick<Token, 'symbol' | 'isVerified'>) => t.isVerified && STABLE_SYMBOLS.has(t.symbol.toUpperCase());
+
 /** A verified dollar stablecoin trading near $1. */
 export const isStable = (t: Pick<Token, 'symbol' | 'isVerified' | 'priceUsd'>) =>
   t.isVerified && STABLE_SYMBOLS.has(t.symbol.toUpperCase()) && t.priceUsd != null && Math.abs(t.priceUsd - 1) < 0.02;
@@ -78,6 +81,13 @@ export async function latestSnapshots(db: PrismaClient, maxAgeMin = 10) {
 
 export type SnapshotWithPool = Awaited<ReturnType<typeof latestSnapshots>>[number];
 
+/** The active agent parameter set, or the defaults. */
+export async function activeParams(db: PrismaClient) {
+  const { DEFAULT_PARAMS } = await import('@binwise/core');
+  const row = await db.paramSet.findFirst({ where: { active: true }, orderBy: { createdAt: 'desc' } });
+  return { ...DEFAULT_PARAMS, ...((row?.params as object) ?? {}) } as typeof DEFAULT_PARAMS;
+}
+
 export const startOfUtcDay = (now: number) => new Date(Math.floor(now / 86_400_000) * 86_400_000);
 
 /**
@@ -98,4 +108,51 @@ export async function vaultValue(db: PrismaClient, vaultId: string, tokens?: Map
   const recent = await db.position.findMany({ where: { vaultId, OR: [{ status: 'open' }, { closedAt: { gte: since } }] }, select: { feesClaimedUsd: true, feesUnclaimedUsd: true } });
   const fees = recent.reduce((s, p) => s + p.feesClaimedUsd + p.feesUnclaimedUsd, 0);
   return { value: cashUsd + posUsd, hold, fees, mode: vault.mode, status: vault.status, cycle: vault.cycle };
+}
+
+type SnapshotLike = {
+  tvl: number;
+  volume24h: number;
+  scoringVolume: number | null;
+  volatility: number;
+  trend7d: number | null;
+  emaBearish: boolean;
+  holderQuality: number | null;
+  mcapM: number | null;
+  feeYieldDailyPct: number | null;
+  farmAprPct: number | null;
+  efficiency: number | null;
+  change24hPct: number | null;
+  aboveEma50: boolean | null;
+  riskFlags: unknown;
+  pool: { baseFee: number };
+};
+
+/** Turns a stored snapshot into scoring input, so the collector, agent and API judge pools identically. */
+export async function assessmentInput(
+  snap: SnapshotLike,
+  tokenX: Pick<Token, 'allowed' | 'isVerified' | 'freezeAuthorityDisabled'> | undefined,
+  tokenY: Pick<Token, 'allowed' | 'isVerified' | 'freezeAuthorityDisabled'> | undefined,
+  params: { regimeEr: number },
+) {
+  const { regimeFrom } = await import('@binwise/core');
+  const regime =
+    snap.efficiency != null && snap.change24hPct != null && snap.aboveEma50 != null
+      ? regimeFrom({ efficiency: snap.efficiency, changePct: snap.change24hPct, aboveEma50: snap.aboveEma50 }, params.regimeEr)
+      : undefined;
+  return {
+    tvl: snap.tvl,
+    volume24h: snap.scoringVolume ?? snap.volume24h,
+    baseFeePct: snap.pool.baseFee,
+    volatilityPct: snap.volatility,
+    trend7d: snap.trend7d,
+    holderQuality: snap.holderQuality,
+    feeYieldDailyPct: snap.feeYieldDailyPct,
+    farmAprPct: snap.farmAprPct,
+    mcapM: snap.mcapM,
+    bothAllowed: !!tokenX && !!tokenY && isAllowed(tokenX) && isAllowed(tokenY),
+    emaBearish: snap.emaBearish,
+    riskFlags: Array.isArray(snap.riskFlags) ? (snap.riskFlags as string[]) : [],
+    regime,
+  };
 }

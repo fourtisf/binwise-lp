@@ -208,9 +208,15 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
   });
 
   app.get('/backtests/latest', async () => {
-    const r = await db.backtestRun.findFirst({ orderBy: { createdAt: 'desc' } });
-    if (!r) throw new ApiError(404, 'no_backtest', 'No backtest has been run yet.');
-    return { createdAt: r.createdAt.getTime(), report: r.report, summary: r.summary };
+    // Latest backtest, with the latest settings search (optimiser) appended when there is one.
+    const runs = await db.backtestRun.findMany({ orderBy: { createdAt: 'desc' }, take: 50 });
+    const isOpt = (x: (typeof runs)[number]) => (x.params as { kind?: string } | null)?.kind === 'optimize';
+    const r = runs.find((x) => !isOpt(x));
+    const opt = runs.find(isOpt);
+    if (!r && !opt) throw new ApiError(404, 'no_backtest', 'No backtest has been run yet.');
+    const main = r ?? opt!;
+    const report = r && opt ? `${r.report}\n\n---\n\n${opt.report}` : main.report;
+    return { createdAt: main.createdAt.getTime(), report, summary: main.summary };
   });
 
   app.get<{ Querystring: { vault?: string } }>('/pools', async (req) => {

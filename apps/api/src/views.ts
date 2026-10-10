@@ -1,5 +1,4 @@
 import {
-  DEFAULT_THRESHOLDS,
   assessPool,
   feeAprPct,
   type Decision as DecisionView,
@@ -7,11 +6,13 @@ import {
   type PoolDetail,
   type PoolRow,
   type PositionView,
+  type AgentParams,
   type StrategySettings,
   type TokenRef,
 } from '@binwise/core';
 import {
-  isAllowed,
+  activeParams,
+  assessmentInput,
   latestSnapshots,
   startOfUtcDay,
   strategySettings,
@@ -64,7 +65,8 @@ export async function poolRows(db: PrismaClient, strategy: Strategy | null): Pro
   const mints = [...new Set(snaps.flatMap((s) => [s.pool.mintA, s.pool.mintB]))];
   const tokens = new Map((await db.token.findMany({ where: { mint: { in: mints } } })).map((t) => [t.mint, t]));
   const sparks = await sparkSeries(db, snaps.map((s) => s.poolId));
-  return snaps.map((s) => row(s, tokens, strategy, sparks.get(s.poolId) ?? [s.price, s.price]));
+  const params = strategy ? await activeParams(db) : null;
+  return Promise.all(snaps.map((s) => row(s, tokens, strategy, params, sparks.get(s.poolId) ?? [s.price, s.price])));
 }
 
 async function sparkSeries(db: PrismaClient, poolIds: string[]) {
@@ -75,7 +77,7 @@ async function sparkSeries(db: PrismaClient, poolIds: string[]) {
   return m;
 }
 
-function row(s: SnapshotWithPool, tokens: Map<string, Token>, strategy: Strategy | null, spark: number[]) {
+async function row(s: SnapshotWithPool, tokens: Map<string, Token>, strategy: Strategy | null, params: AgentParams | null, spark: number[]) {
   const base = {
     call: s.call,
     callLabel: s.callLabel,
@@ -84,25 +86,9 @@ function row(s: SnapshotWithPool, tokens: Map<string, Token>, strategy: Strategy
     breakdown: s.scoreBreakdown as unknown as PoolDetail['breakdown'],
   };
   let v = base;
-  if (strategy) {
-    const tx = tokens.get(s.pool.mintA);
-    const ty = tokens.get(s.pool.mintB);
-    const a = assessPool(
-      {
-        tvl: s.tvl,
-        volume24h: s.volume24h,
-        baseFeePct: s.pool.baseFee,
-        volatilityPct: s.volatility,
-        trend7d: s.trend7d,
-        holderQuality: s.holderQuality,
-        mcapM: s.mcapM,
-        bothAllowed: !!tx && !!ty && isAllowed(tx) && isAllowed(ty),
-        emaBearish: s.emaBearish,
-      },
-      strategySettings(strategy),
-      strategyWeights(strategy),
-      DEFAULT_THRESHOLDS,
-    );
+  if (strategy && params) {
+    // Same inputs the agent and collector use, re-assessed with this vault's strategy.
+    const a = assessPool(await assessmentInput(s, tokens.get(s.pool.mintA), tokens.get(s.pool.mintB), params), strategySettings(strategy), strategyWeights(strategy), params);
     v = { call: a.call, callLabel: a.callLabel, reason: a.reason, score: a.score, breakdown: a.breakdown };
   }
   return {
@@ -113,7 +99,8 @@ function row(s: SnapshotWithPool, tokens: Map<string, Token>, strategy: Strategy
     tvl: s.tvl,
     volume24h: s.volume24h,
     volTvl: s.tvl > 0 ? s.volume24h / s.tvl : 0,
-    feeApr: feeAprPct(s.volume24h, s.tvl, s.pool.baseFee),
+    // Fee rate actually paid (includes the dynamic fee) when known.
+    feeApr: feeAprPct(s.volume24h, s.tvl, s.feeRatePct ?? s.pool.baseFee),
     baseFee: s.pool.baseFee,
     trend7d: s.trend7d ?? 0,
     volatility: Math.round(s.volatility * 10) / 10,

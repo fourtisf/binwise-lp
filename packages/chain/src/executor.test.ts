@@ -29,6 +29,34 @@ describe('PaperExecutor', () => {
     expect(left + r.amountX * 150 + r.amountY).toBeCloseTo(10_000 - r.costUsd, 0);
   });
 
+  it('opens one-sided above price with X only, without swapping X it already holds', async () => {
+    const ex = new PaperExecutor({ SOL: 20 });
+    const r = await ex.open({ pool, valueUsd: 2_000, binsEachSide: 10, shape: 'spot', side: 'x', key: 'k' });
+    // Range starts at the active bin and covers 21 bins upward.
+    expect(r.upperBin - r.lowerBin).toBe(20);
+    expect(r.lowerBin).toBe(Math.floor(Math.log(150) / Math.log(1.002)));
+    expect(r.amountX * 150).toBeGreaterThan(1_900);
+    // Only network fees: no swap was needed.
+    expect(r.costUsd).toBeLessThan(0.1);
+  });
+
+  it('opens one-sided below price with Y only', async () => {
+    const ex = new PaperExecutor({ USDC: 5_000 });
+    const r = await ex.open({ pool, valueUsd: 2_000, binsEachSide: 10, shape: 'spot', side: 'y', key: 'k' });
+    expect(r.amountY).toBeGreaterThan(1_900);
+    expect(r.costUsd).toBeLessThan(0.1);
+  });
+
+  it('adds farm rewards to unclaimed fees while in range', async () => {
+    const ex = new PaperExecutor({ SOL: 10, USDC: 1500 });
+    const r = await ex.open({ pool, valueUsd: 3_000, binsEachSide: 10, shape: 'spot', key: 'k' });
+    const ref: PositionRef = { address: null, lowerBin: r.lowerBin, upperBin: r.upperBin, binStep: 20, shape: 'spot', bins: r.bins, feesUnclaimedUsd: 0 };
+    const plain = await ex.mark(ref, pool, 60);
+    const farmed = await ex.mark(ref, { ...pool, farmAprPct: 50 }, 60);
+    // 50% APR on ~$3,000 for an hour ≈ $0.17
+    expect(farmed.feesUsd - plain.feesUsd).toBeCloseTo((plain.valueUsd * 0.5) / (365 * 24), 3);
+  });
+
   it('accrues fees in range and pays them back on close', async () => {
     const ex = new PaperExecutor({ SOL: 10, USDC: 1500 });
     const r = await ex.open({ pool, valueUsd: 3_000, binsEachSide: 10, shape: 'spot', key: 'k' });

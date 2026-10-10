@@ -65,7 +65,7 @@ export const asMeteora = (f: FakeMeteora) => f as unknown as MeteoraClient;
 export async function resetDb() {
   const db = getDb();
   await db.$executeRawUnsafe(
-    'TRUNCATE "Tx","Decision","PositionMark","Position","VaultSnapshot","Strategy","Vault","User","Candle","PoolSnapshot","Pool","Token","BacktestRun" CASCADE',
+    'TRUNCATE "Tx","Decision","PositionMark","Position","VaultSnapshot","Strategy","Vault","User","Candle","PoolSnapshot","Pool","Token","BacktestRun","ParamSet","TokenEvent" CASCADE',
   );
   return db;
 }

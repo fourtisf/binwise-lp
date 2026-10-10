@@ -59,7 +59,7 @@ describe('collector', () => {
     expect(snap.score).toBeGreaterThan(62);
     expect(snap.call).toBe('in');
     expect(snap.trend7d!).toBeGreaterThan(0);
-    expect((snap.scoreBreakdown as unknown[]).length).toBe(5);
+    expect((snap.scoreBreakdown as unknown[]).length).toBe(7);
     expect(await db.candle.count({ where: { timeframe: '1h' } })).toBeGreaterThan(150);
     expect((await db.token.findUniqueOrThrow({ where: { mint: JUP } })).holderQuality).toBe(1);
   });
@@ -115,11 +115,23 @@ describe('agent cycle (paper)', () => {
     expect((await cycle()).short).toBe('Hold all positions'); // first tick out: wait
     advance(1);
     await collect();
+    // The jump reads as an uptrend, so the agent would re-open one-sided above price. That needs
+    // swapping the whole position, and at this volume 6h of fees don't cover 1.5× the cost.
+    const held = await cycle();
+    expect(held.short).toBe('Hold all positions');
+    expect(held.text).toMatch(/don't cover 1.5× the move cost/);
+    // With more volume the move pays for itself.
+    meteora.volume24h *= 3;
+    advance(1);
+    await collect();
     const d = await cycle();
     expect(d.short).toBe('Rebalance JUP / USDC');
+    expect(d.text).toMatch(/one-sided \(above price\)/);
     const pos = await db.position.findFirstOrThrow();
     expect(pos.rebalances).toBe(1);
     expect(pos.inRange).toBe(true);
+    // One-sided above price: the range starts at the active bin.
+    expect(pos.lowerBin).toBeLessThanOrEqual(Math.floor(Math.log(1.15) / Math.log(1 + pos.binStep / 10_000)) + 1);
     expect(events.some((e) => e.type === 'tick' && e.tick.marker)).toBe(true);
   });
 
@@ -138,6 +150,43 @@ describe('agent cycle (paper)', () => {
     const cash = (await vault()).cash as Record<string, number>;
     expect(cash[JUP] ?? 0).toBeLessThan(1);
     expect(cash[USDC]).toBeGreaterThan(9000);
+  });
+
+  it('exits at once when the pool is drained, then waits out the re-entry cooldown', async () => {
+    await collect();
+    await cycle();
+    advance(60);
+    meteora.tvl = 2_000_000; // −60% in an hour
+    await collect();
+    const d = await cycle();
+    expect(d.short).toBe('Exit JUP / USDC');
+    expect((await db.decision.findFirstOrThrow({ where: { type: 'exit' } })).reason).toMatch(/TVL fell 60% in the last hour/);
+    // An hour later TVL is steady again and the pool is eligible, but the agent waits before re-entering.
+    advance(60);
+    await collect();
+    expect((await db.poolSnapshot.findFirstOrThrow({ orderBy: { ts: 'desc' } })).call).toBe('in');
+    await cycle();
+    expect(await db.position.count({ where: { status: 'open' } })).toBe(0);
+    advance(6 * 60);
+    await collect();
+    expect((await cycle()).short).toBe('Deploy to JUP / USDC');
+  });
+
+  it('stays out of a pool with a token unlock coming up', async () => {
+    await db.tokenEvent.create({ data: { mint: JUP, at: new Date(now + 24 * 3600_000), kind: 'unlock', note: '5% of supply' } });
+    await collect();
+    const snap = await db.poolSnapshot.findFirstOrThrow();
+    expect(snap.callLabel).toBe('Avoid, risk');
+    expect(snap.reason).toMatch(/JUP unlock on .* \(5% of supply\)/);
+    await cycle();
+    expect(await db.position.count()).toBe(0);
+  });
+
+  it('uses the active parameter set from the database', async () => {
+    await db.paramSet.create({ data: { params: { deployScore: 99 }, source: 'manual', active: true } });
+    await collect();
+    await cycle();
+    expect(await db.position.count()).toBe(0);
   });
 
   it('does nothing while the kill switch is on', async () => {

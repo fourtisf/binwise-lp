@@ -171,6 +171,23 @@ model PoolSnapshot {
   emaBearish     Boolean  @default(false)
   /// Short-term volatility above 3x its 7-day norm
   volSpike       Boolean  @default(false)
+  /// Fee rate actually paid, percent (fees ÷ volume, includes the dynamic fee)
+  feeRatePct     Float?
+  /// Current dynamic fee from the API, percent
+  dynamicFeePct  Float?
+  /// Fees over 24h ÷ TVL, percent per day
+  feeYieldDailyPct Float?
+  /// Liquidity-mining reward APR, percent
+  farmAprPct     Float?
+  /// Volume used for scoring (24h capped at 2x the 7-day median)
+  scoringVolume  Float?
+  volumeSpike    Boolean  @default(false)
+  /// Trend efficiency (0–1), 24h change and side of EMA50: inputs for the market regime
+  efficiency     Float?
+  change24hPct   Float?
+  aboveEma50     Boolean?
+  /// Plain-language risk signals; any one blocks deploys, urgent ones force exits
+  riskFlags      Json     @default("[]")
   /// Smallest non-stable token market cap, $M
   mcapM          Float?
   holderQuality  Float?
@@ -319,4 +336,31 @@ model BacktestRun {
   summary   Json
   /// Markdown report shown to the owner
   report    String
+}
+
+/// Agent parameters. The optimiser writes candidates; one set is active.
+model ParamSet {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  /// AgentParams from packages/core
+  params    Json
+  /// "default", "optimizer" or "manual"
+  source    String
+  active    Boolean  @default(false)
+  /// Train/test scores and notes
+  metrics   Json     @default("{}")
+
+  @@index([active])
+}
+
+/// Known upcoming token events (e.g. unlocks). The agent avoids tokens with one in the next 48h.
+model TokenEvent {
+  id        String   @id @default(cuid())
+  mint      String
+  at        DateTime
+  kind      String
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@index([mint, at])
 }

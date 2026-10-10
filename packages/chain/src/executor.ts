@@ -8,7 +8,9 @@ import {
   slippageUsd,
   type CostModel,
   type FeeModel,
+  farmRewardsUsd,
   type LiquidityShape,
+  type LiquiditySide,
   type PositionBins,
 } from '@binwise/core';
 
@@ -37,6 +39,8 @@ export interface PoolCtx {
   protocolFeePct?: number | null;
   /** Real active-bin liquidity when known (live RPC), USD */
   activeBinLiqUsd?: number | null;
+  /** Liquidity-mining reward APR, percent */
+  farmAprPct?: number | null;
 }
 
 export interface PositionRef {
@@ -56,6 +60,10 @@ export interface OpenRequest {
   valueUsd: number;
   binsEachSide: number;
   shape: LiquidityShape;
+  /** both = around price; x = one-sided above price (holds X); y = one-sided below price (holds Y) */
+  side?: LiquiditySide;
+  /** Live: skip the open when new bin-array rent exceeds this share of the position, percent */
+  maxBinArrayCostPct?: number;
   /** Idempotency key for this action */
   key: string;
 }
@@ -184,12 +192,17 @@ export class PaperExecutor implements Executor {
   async open(req: OpenRequest): Promise<OpenResult> {
     const { pool } = req;
     const prices = { ...this.knownPrices, [pool.mintX]: pool.usdX, [pool.mintY]: pool.usdY };
-    let cost = this.acquire(pool.mintX, req.valueUsd / 2, prices, pool.tvlUsd);
-    cost += this.acquire(pool.mintY, req.valueUsd / 2, prices, pool.tvlUsd);
-    const availUsd = Math.min((this.cash[pool.mintX] ?? 0) * pool.usdX, (this.cash[pool.mintY] ?? 0) * pool.usdY) * 2;
-    const valueUsd = Math.min(req.valueUsd, availUsd);
+    const side = req.side ?? 'both';
+    const build = (usd: number) => openPosition(usd / pool.usdY, pool.price, pool.binStep, req.binsEachSide, req.shape, side);
+    // Acquire exactly the token mix this range needs (all X above price, all Y below).
+    const want = composition(build(req.valueUsd), pool.price);
+    let cost = want.x > 0 ? this.acquire(pool.mintX, want.x * pool.usdX, prices, pool.tvlUsd) : 0;
+    cost += want.y > 0 ? this.acquire(pool.mintY, want.y * pool.usdY, prices, pool.tvlUsd) : 0;
+    const fx = want.x > 0 ? ((this.cash[pool.mintX] ?? 0) * pool.usdX) / (want.x * pool.usdX) : Infinity;
+    const fy = want.y > 0 ? ((this.cash[pool.mintY] ?? 0) * pool.usdY) / (want.y * pool.usdY) : Infinity;
+    const valueUsd = req.valueUsd * Math.min(1, fx, fy);
     if (valueUsd <= 1) throw new Error('Not enough balance to open a position.');
-    const pos = openPosition(valueUsd / pool.usdY, pool.price, pool.binStep, req.binsEachSide, req.shape);
+    const pos = build(valueUsd);
     const c = composition(pos, pool.price);
     this.add(pool.mintX, -c.x);
     this.add(pool.mintY, -c.y);
@@ -216,12 +229,15 @@ export class PaperExecutor implements Executor {
             model: pool.protocolFeePct != null ? { ...this.feeModel, protocolFeeShare: pool.protocolFeePct / 100 } : this.feeModel,
           })
         : 0;
+    const valueUsd = c.x * pool.usdX + c.y * pool.usdY;
+    const live = inRange(pos, pool.price);
+    const farm = minutes > 0 && pool.farmAprPct ? farmRewardsUsd(valueUsd, pool.farmAprPct, minutes, live) : 0;
     return {
       amountX: c.x,
       amountY: c.y,
-      valueUsd: c.x * pool.usdX + c.y * pool.usdY,
-      feesUsd: p.feesUnclaimedUsd + earned,
-      inRange: inRange(pos, pool.price),
+      valueUsd,
+      feesUsd: p.feesUnclaimedUsd + earned + farm,
+      inRange: live,
     };
   }
 
