@@ -117,6 +117,8 @@ LIVE_WALLETS=
 # Hard limits per live vault while live trading is new
 LIVE_MAX_USD=200
 LIVE_MAX_POSITIONS=1
+LIVE_MAX_TOTAL_USD=2000
+DEFAULT_VAULT_MODE=paper
 # Seals agent keypairs. Keep an offline copy: losing it locks any live agent wallet.
 AGENT_KEY_ENCRYPTION_SECRET=$(openssl rand -base64 32)
 # Kill switch over HTTP: POST /api/admin/kill with header x-admin-token
@@ -142,6 +144,7 @@ TELEGRAM_BOT_USERNAME=
 NEXT_PUBLIC_API_URL=https://${DOMAIN}/api
 NEXT_PUBLIC_WS_URL=wss://${DOMAIN}/api
 NEXT_PUBLIC_RPC_URL=https://api.mainnet-beta.solana.com
+NEXT_PUBLIC_DEFAULT_VAULT_MODE=paper
 EOF
   umask 022
   chown "$APP_USER:$APP_USER" "$ENV_FILE"

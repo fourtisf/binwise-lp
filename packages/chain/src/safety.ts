@@ -20,15 +20,22 @@ export function liveWallets(env: Record<string, string | undefined> = process.en
   return new Set((env.LIVE_WALLETS ?? '').split(',').map((w) => w.trim()).filter(Boolean));
 }
 
+/** True when this wallet may use live mode. LIVE_WALLETS=* opens live mode to everyone. */
+export function isLiveWallet(wallet: string, env: Record<string, string | undefined> = process.env): boolean {
+  const w = liveWallets(env);
+  return w.has('*') || w.has(wallet);
+}
+
 export function assertLiveWallet(wallet: string, env: Record<string, string | undefined> = process.env): void {
-  if (!liveWallets(env).has(wallet)) throw new LiveTradingBlocked('Live mode is limited to approved wallets while it is being tested.');
+  if (!isLiveWallet(wallet, env)) throw new LiveTradingBlocked('Live mode is limited to approved wallets while it is being tested.');
 }
 
 /**
  * Hard limits for live vaults while live trading is new: the agent never has more than
- * LIVE_MAX_USD in positions, nor more than LIVE_MAX_POSITIONS positions (defaults $200, 1).
+ * LIVE_MAX_USD in positions per vault, nor more than LIVE_MAX_POSITIONS positions (defaults $200, 1),
+ * and never more than LIVE_MAX_TOTAL_USD across all live vaults together (default $2,000).
  */
-export function liveLimits(env: Record<string, string | undefined> = process.env): { maxUsd: number; maxPositions: number } {
+export function liveLimits(env: Record<string, string | undefined> = process.env): { maxUsd: number; maxPositions: number; maxTotalUsd: number } {
   const num = (v: string | undefined, d: number) => (v != null && v !== '' && Number.isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : d);
-  return { maxUsd: num(env.LIVE_MAX_USD, 200), maxPositions: Math.floor(num(env.LIVE_MAX_POSITIONS, 1)) };
+  return { maxUsd: num(env.LIVE_MAX_USD, 200), maxPositions: Math.floor(num(env.LIVE_MAX_POSITIONS, 1)), maxTotalUsd: num(env.LIVE_MAX_TOTAL_USD, 2000) };
 }

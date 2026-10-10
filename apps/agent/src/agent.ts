@@ -420,7 +420,9 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
     const maxPositions = Math.min(Math.max(1, Math.floor(100 / s.maxAllocPct)), live?.maxPositions ?? Infinity);
     let openCount = marked.length;
     let idleUsd = holdingsUsd(cash, tokens);
-    let liveRoomUsd = live ? live.maxUsd - marked.reduce((sum, x) => sum + x.pos.valueUsd, 0) : Infinity;
+    let liveRoomUsd = live
+      ? Math.min(live.maxUsd - marked.reduce((sum, x) => sum + x.pos.valueUsd, 0), live.maxTotalUsd - (await liveTotalUsd(db)))
+      : Infinity;
     // Pools recently exited, or where opening was skipped because setup rent was too high, wait out the cooldown.
     const recentExits = await db.decision.findMany({
       where: {
@@ -759,6 +761,12 @@ async function propose(deps: AgentDeps, vault: VaultWithStrategy, plan: Plan, no
   return title;
 }
 
+/** USD in open positions across every live vault (checked against LIVE_MAX_TOTAL_USD). */
+async function liveTotalUsd(db: PrismaClient) {
+  const r = await db.position.aggregate({ _sum: { valueUsd: true }, where: { status: 'open', vault: { mode: 'live' } } });
+  return r._sum.valueUsd ?? 0;
+}
+
 export type ManualAction = 'claim' | 'close';
 
 /** Outcome of a manual request, for the person who made it (app or Telegram). */
@@ -902,7 +910,7 @@ export async function runManualDeploy(
   if (executor.mode === 'live') {
     const live = liveLimits();
     if (open.length >= live.maxPositions) throw new Error(`Live vaults can hold ${live.maxPositions} position(s) for now (LIVE_MAX_POSITIONS).`);
-    size = Math.min(size, live.maxUsd - positionsUsd);
+    size = Math.min(size, live.maxUsd - positionsUsd, live.maxTotalUsd - (await liveTotalUsd(db)));
   }
   if (size < MIN_POSITION_USD) throw new Error(`Not enough idle funds within your limits: at least ${usd(MIN_POSITION_USD)} is needed.`);
   const binsEachSide = Math.min(MAX_BINS_EACH_SIDE, binsForHalfWidth(rangeHalfWidth(s.profile, view.snap.volatility, view.stablePair, params), view.ctx.binStep));

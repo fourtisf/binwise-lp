@@ -325,6 +325,35 @@ describe('agent cycle (paper)', () => {
     });
   });
 
+  it('keeps all live vaults together under LIVE_MAX_TOTAL_USD', async () => {
+    const prev = { one: process.env.LIVE_MAX_USD, all: process.env.LIVE_MAX_TOTAL_USD };
+    process.env.LIVE_MAX_USD = '300';
+    process.env.LIVE_MAX_TOTAL_USD = '180';
+    try {
+      await collect();
+      const main = await vault();
+      // Someone else's live vault already holds $100 in a position.
+      const other = await ensureUser(db, 'Other111111111111111111111111111111111111111');
+      const ov = await createVault(db, other.id);
+      await db.vault.update({ where: { id: ov.id }, data: { mode: 'live' } });
+      await db.position.create({
+        data: { vaultId: ov.id, poolId: POOL, binStep: 20, lowerBin: 0, upperBin: 10, shape: 'spot', entryAmountA: 0, entryAmountB: 100, entryPriceA: 1, entryPriceB: 1, entryValueUsd: 100, price: 1, valueUsd: 100 },
+      });
+      const d = (): AgentDeps => ({
+        ...deps(),
+        executorFor: async (v) => Object.defineProperty(new PaperExecutor({ ...(v.cash as Holdings) }), 'mode', { value: 'live' }),
+      });
+      await runVaultCycle(d(), main);
+      const mine = await db.position.findFirstOrThrow({ where: { vaultId: main.id } });
+      expect(mine.entryValueUsd).toBeLessThanOrEqual(80.01);
+      expect(mine.entryValueUsd).toBeGreaterThan(70);
+    } finally {
+      for (const [k, v] of [['LIVE_MAX_USD', prev.one], ['LIVE_MAX_TOTAL_USD', prev.all]] as const)
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+    }
+  });
+
   it('does nothing while the kill switch is on', async () => {
     await collect();
     killed = true;

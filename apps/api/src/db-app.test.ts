@@ -186,6 +186,32 @@ describe('vaults', () => {
     await redis.del(REDIS_KEYS.actions(id));
   });
 
+  it('starts new wallets on mainnet when DEFAULT_VAULT_MODE=live (and only then)', async () => {
+    const keys = ['DEFAULT_VAULT_MODE', 'LIVE_TRADING_ENABLED', 'LIVE_WALLETS', 'RPC_URL', 'AGENT_KEY_ENCRYPTION_SECRET'] as const;
+    const prev = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+    try {
+      const paper = await signIn();
+      expect((await app.inject({ url: '/me', headers: paper.headers })).json().vaults[0].mode).toBe('paper');
+      Object.assign(process.env, {
+        DEFAULT_VAULT_MODE: 'live',
+        LIVE_TRADING_ENABLED: 'true',
+        LIVE_WALLETS: '*',
+        RPC_URL: 'http://127.0.0.1:1',
+        AGENT_KEY_ENCRYPTION_SECRET: Buffer.alloc(32, 9).toString('base64'),
+      });
+      const live = await signIn();
+      const v = (await app.inject({ url: '/me', headers: live.headers })).json().vaults[0];
+      expect(v.mode).toBe('live');
+      const row = await db.vault.findUniqueOrThrow({ where: { id: v.id } });
+      expect(row.agentPubkey).toMatch(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
+      expect(row.encSecret).not.toBeNull();
+      expect(JSON.stringify(row.paperWallet)).toBe('{}');
+    } finally {
+      for (const k of keys) if (prev[k] === undefined) delete process.env[k];
+      else process.env[k] = prev[k];
+    }
+  });
+
   it('hides other users’ vaults', async () => {
     const a = await signIn();
     const b = await signIn();

@@ -23,10 +23,11 @@ describe('live safety limits', () => {
     expect(() => assertLiveWallet('A', {})).toThrow(LiveTradingBlocked);
     expect(() => assertLiveWallet('B', { LIVE_WALLETS: 'A, C' })).toThrow(LiveTradingBlocked);
     expect(() => assertLiveWallet('C', { LIVE_WALLETS: 'A, C' })).not.toThrow();
+    expect(() => assertLiveWallet('anyone', { LIVE_WALLETS: '*' })).not.toThrow();
   });
   it('caps capital and positions, with safe defaults', () => {
-    expect(liveLimits({})).toEqual({ maxUsd: 200, maxPositions: 1 });
-    expect(liveLimits({ LIVE_MAX_USD: '500', LIVE_MAX_POSITIONS: '2' })).toEqual({ maxUsd: 500, maxPositions: 2 });
-    expect(liveLimits({ LIVE_MAX_USD: 'lots' })).toEqual({ maxUsd: 200, maxPositions: 1 });
+    expect(liveLimits({})).toEqual({ maxUsd: 200, maxPositions: 1, maxTotalUsd: 2000 });
+    expect(liveLimits({ LIVE_MAX_USD: '500', LIVE_MAX_POSITIONS: '2', LIVE_MAX_TOTAL_USD: '9000' })).toEqual({ maxUsd: 500, maxPositions: 2, maxTotalUsd: 9000 });
+    expect(liveLimits({ LIVE_MAX_USD: 'lots' })).toEqual({ maxUsd: 200, maxPositions: 1, maxTotalUsd: 2000 });
   });
 });

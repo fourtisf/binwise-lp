@@ -57,13 +57,18 @@ export async function ensureUser(db: PrismaClient, wallet: string) {
 }
 
 /** New vault in paper mode with the default (balanced) strategy. */
-export async function createVault(db: PrismaClient, userId: string, opts: { name?: string; isDemo?: boolean; cash?: Record<string, number> } = {}) {
+export async function createVault(
+  db: PrismaClient,
+  userId: string,
+  opts: { name?: string; isDemo?: boolean; cash?: Record<string, number>; live?: { agentPubkey: string; encSecret: Uint8Array<ArrayBuffer> } } = {},
+) {
   return db.vault.create({
     data: {
       userId,
       name: opts.name ?? 'Main vault',
       isDemo: opts.isDemo ?? false,
       cash: opts.cash ?? {},
+      ...(opts.live ? { mode: 'live' as const, agentPubkey: opts.live.agentPubkey, encSecret: opts.live.encSecret } : {}),
       strategy: { create: strategyData(DEFAULT_STRATEGY) },
     },
     include: { strategy: true },

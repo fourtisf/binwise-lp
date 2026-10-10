@@ -25,11 +25,14 @@ export function DepositModal() {
   const [tok, setTok] = useState('SOL');
   const [amt, setAmt] = useState('10');
   const [busy, setBusy] = useState(false);
+  /** Live deposits need an explicit "I understand the risk" every time the modal opens. */
+  const [agree, setAgree] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   const on = layer === 'modal';
 
   useEffect(() => {
     if (!on) return;
+    setAgree(false);
     const t = setTimeout(() => input.current?.focus(), 60);
     return () => clearTimeout(t);
   }, [on]);
@@ -111,11 +114,20 @@ export function DepositModal() {
           <b id="mMode2">{overview?.mode === 'live' ? 'Live, real funds' : 'Paper, simulated funds'}</b>
         </div>
       </div>
+      {live && (
+        <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', marginTop: 14, fontSize: 12.5, lineHeight: 1.45, color: 'var(--muted)', cursor: 'pointer' }}>
+          <input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} style={{ marginTop: 2, accentColor: '#4BE3CF' }} />
+          <span>
+            I understand this sends real funds on Solana mainnet to my vault&apos;s agent wallet, which Binwise operates. Liquidity
+            positions can lose value and no strategy is guaranteed to profit. Withdrawals only go back to this wallet.
+          </span>
+        </label>
+      )}
       <button
         className="btn btn-white"
         id="mGo"
         style={{ width: '100%', marginTop: 16 }}
-        disabled={!a || over || busy || walletMismatch}
+        disabled={!a || over || busy || walletMismatch || (live && !agree)}
         onClick={async () => {
           setBusy(true);
           try {

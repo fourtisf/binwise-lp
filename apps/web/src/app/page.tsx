@@ -6,6 +6,7 @@ import { Nav } from '@/components/landing/Nav';
 import { Stage } from '@/components/landing/Stage';
 import { Logo } from '@/components/Logo';
 import { Icon } from '@/components/Sprite';
+import { LIVE_DEFAULT } from '@/lib/site';
 
 const Check = () => <Icon id="i-check" />;
 
@@ -19,7 +20,7 @@ export default function Landing() {
       <section className="hero">
         <div className="wrap">
           <a href="#how" className="announce">
-            <b>New</b>Paper mode is open to everyone
+            <b>New</b>{LIVE_DEFAULT ? 'Live on Solana mainnet' : 'Paper mode is open to everyone'}
             <Icon id="i-chev" />
           </a>
           <h1>Liquidity that manages itself.</h1>
@@ -29,13 +30,17 @@ export default function Landing() {
           </p>
           <div className="ctas">
             <Link className="btn btn-white" href="/app">
-              Start in paper mode
+              {LIVE_DEFAULT ? 'Launch app' : 'Start in paper mode'}
             </Link>
             <a href="#product" className="btn btn-dark">
               See how it decides
             </a>
           </div>
-          <p className="hero-note">No deposit needed to try. Non-custodial when you go live.</p>
+          <p className="hero-note">
+            {LIVE_DEFAULT
+              ? 'Real funds on mainnet. Start small: withdrawals only ever go back to your own wallet.'
+              : 'No deposit needed to try. Withdrawals only ever go back to your own wallet.'}
+          </p>
         </div>
 
         <div className="wrap">
@@ -185,7 +190,7 @@ export default function Landing() {
                 </li>
                 <li>
                   <Check />
-                  Live, non-custodial vaults
+                  Live vaults, withdrawals only to your wallet
                 </li>
                 <li>
                   <Check />
@@ -239,10 +244,10 @@ export default function Landing() {
       <div className="wrap">
         <div className="final">
           <h2>Put your liquidity to work.</h2>
-          <p>Start in paper mode today. Go live when the numbers convince you.</p>
+          <p>{LIVE_DEFAULT ? 'Connect a wallet, deposit a small amount, and watch every decision.' : 'Start in paper mode today. Go live when the numbers convince you.'}</p>
           <div className="ctas">
             <Link className="btn btn-white" href="/app">
-              Start in paper mode
+              {LIVE_DEFAULT ? 'Launch app' : 'Start in paper mode'}
             </Link>
             <a href="#pricing" className="btn btn-dark">
               View pricing

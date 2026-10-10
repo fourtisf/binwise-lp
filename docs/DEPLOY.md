@@ -97,6 +97,23 @@ sudo -u binwise -H bash -lc 'cd ~/binwise && pnpm --filter @binwise/agent kill o
 curl -X POST https://binwise.org/api/admin/kill -H "x-admin-token: $ADMIN_TOKEN" -H 'content-type: application/json' -d '{"on":true}'
 ```
 
+## Mainnet for everyone
+
+To let any visitor connect a wallet and have the agent trade real funds:
+
+```
+LIVE_TRADING_ENABLED=true
+LIVE_WALLETS=*                  # everyone may use live mode
+DEFAULT_VAULT_MODE=live         # new wallets start on mainnet
+NEXT_PUBLIC_DEFAULT_VAULT_MODE=live
+LIVE_MAX_USD=200                # per vault
+LIVE_MAX_TOTAL_USD=2000         # all vaults together
+```
+
+Rebuild the site after changing `NEXT_PUBLIC_*`. New wallets get a live vault with their own agent wallet; nothing trades
+until they deposit, and every live deposit requires ticking a real-funds risk acknowledgment. Anyone can still switch
+their vault to Paper. The landing-page demo stays a simulated paper vault.
+
 ## Going live (build step 6, owner approval required)
 
 Live mode sends real transactions from a per-vault agent wallet. Safety rails, all on by default:

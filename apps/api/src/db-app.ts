@@ -17,7 +17,7 @@ import {
 } from '@binwise/core';
 import {
   LiveExecutor,
-  liveWallets,
+  isLiveWallet,
   createAgentKey,
   loadAgentKey,
   makeConnection,
@@ -75,6 +75,9 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
   await hub.start();
   const rpc = o.rpc ?? (() => makeConnection());
   const liveEnabled = () => process.env.LIVE_TRADING_ENABLED === 'true';
+  /** DEFAULT_VAULT_MODE=live: new wallets start on mainnet (needs live trading on, an RPC, and the wallet allowed). */
+  const liveByDefault = (wallet: string) =>
+    process.env.DEFAULT_VAULT_MODE === 'live' && liveEnabled() && !!process.env.RPC_URL && isLiveWallet(wallet);
 
   const app = Fastify({ logger: o.logger ?? false, trustProxy: true });
   await app.register(cors, { origin: o.corsOrigins?.length ? o.corsOrigins : false, credentials: true });
@@ -173,9 +176,16 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     await redis.del(REDIS_KEYS.nonce(wallet));
     const user = await ensureUser(db, wallet);
     if (!(await db.vault.count({ where: { userId: user.id } }))) {
-      const usdc = await db.token.findFirst({ where: { symbol: 'USDC', isVerified: true }, orderBy: { mcapUsd: 'desc' } });
-      const v = await createVault(db, user.id);
-      await db.vault.update({ where: { id: v.id }, data: { paperWallet: { [SOL_MINT]: 100, ...(usdc ? { [usdc.mint]: 10_000 } : {}) } } });
+      if (liveByDefault(wallet)) {
+        // Mainnet by default: the vault gets its own agent wallet now; nothing trades until the owner deposits.
+        const key = createAgentKey();
+        const v = await createVault(db, user.id, { live: { agentPubkey: key.pubkey, encSecret: new Uint8Array(key.encSecret) } });
+        await logDecision(v.id, 'scan', 'Live vault created', 'Runs on Solana mainnet with real funds. Deposit a small amount to start; withdrawals only go back to your wallet.');
+      } else {
+        const usdc = await db.token.findFirst({ where: { symbol: 'USDC', isVerified: true }, orderBy: { mcapUsd: 'desc' } });
+        const v = await createVault(db, user.id);
+        await db.vault.update({ where: { id: v.id }, data: { paperWallet: { [SOL_MINT]: 100, ...(usdc ? { [usdc.mint]: 10_000 } : {}) } } });
+      }
     }
     reply.setCookie(SESSION_COOKIE, makeSession(user.id), {
       httpOnly: true,
@@ -319,7 +329,7 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     if (mode === 'live') {
       if (!liveEnabled()) throw new ApiError(403, 'live_disabled', "Live mode isn't available yet. Paper mode stays on.");
       if (req.body?.confirm !== true) throw new ApiError(400, 'confirm_required', 'Confirm that real funds will be used.');
-      if (!liveWallets().has(v.user.wallet)) throw new ApiError(403, 'live_not_allowed', 'Live mode is limited to approved wallets while it is being tested.');
+      if (!isLiveWallet(v.user.wallet)) throw new ApiError(403, 'live_not_allowed', 'Live mode is limited to approved wallets while it is being tested.');
     }
     if (await db.position.count({ where: { vaultId: v.id, status: 'open' } }))
       throw new ApiError(409, 'positions_open', 'Close all positions before switching modes.');
