@@ -18,7 +18,10 @@ export function PoolDrawer() {
   useEffect(() => {
     if (!client || !drawerPoolId) return;
     let live = true;
-    client.pool(drawerPoolId).then((d) => live && setX(d));
+    client
+      .pool(drawerPoolId)
+      .then((d) => live && setX(d))
+      .catch(() => live && setX(null));
     return () => {
       live = false;
     };

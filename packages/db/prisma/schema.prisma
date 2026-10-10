@@ -160,6 +160,8 @@ model PoolSnapshot {
   tvl            Float
   volume24h      Float
   fees24h        Float?
+  /// Liquidity in the active bin, USD, read from chain (null when no RPC is configured)
+  activeBinLiqUsd Float?
   /// Quote per base (UI units)
   price          Float
   volatility     Float

@@ -148,7 +148,6 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     (async () => {
       const c = await getClient();
       if (cancelled) return;
-      setClient(c);
       let vaultId = c.vaultId;
       if (c.kind === 'http') {
         const who = await c.me();
@@ -156,12 +155,15 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
         setMe(who);
         vaultId = who?.vaults[0]?.id ?? (await c.demoVaultId()) ?? '';
         if (!vaultId) {
+          setClient(c);
           setEmpty(true);
           setReady(true);
           return;
         }
         c.useVault(vaultId);
       }
+      // Expose the client only once it points at the right vault.
+      setClient(c);
       setEmpty(false);
       seriesRef.current.clear();
       off = c.subscribe((e) => onEvent(e, c));
@@ -219,6 +221,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       setDraft,
       guard,
       reload: () => {
+        setClient(null);
         setReady(false);
         setOverview(null);
         setPositions([]);

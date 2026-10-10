@@ -114,6 +114,7 @@ CREATE TABLE "PoolSnapshot" (
     "tvl" DOUBLE PRECISION NOT NULL,
     "volume24h" DOUBLE PRECISION NOT NULL,
     "fees24h" DOUBLE PRECISION,
+    "activeBinLiqUsd" DOUBLE PRECISION,
     "price" DOUBLE PRECISION NOT NULL,
     "volatility" DOUBLE PRECISION NOT NULL,
     "trend7d" DOUBLE PRECISION,

@@ -2,7 +2,11 @@
 export const fmt = (n: number, d = 0) =>
   Number(n).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 export const usd = (n: number, d = 0) => (n < 0 ? '−$' : '$') + fmt(Math.abs(n), d);
-export const pct = (n: number, d = 2) => (n >= 0 ? '+' : '−') + fmt(Math.abs(n), d) + '%';
+export const pct = (n: number, d = 2) => {
+  // Round first so a tiny negative doesn't show as "−0.00%".
+  const r = Number(n.toFixed(d));
+  return (r >= 0 ? '+' : '−') + fmt(Math.abs(r), d) + '%';
+};
 export const fmtM = (v: number) => (v >= 1000 ? '$' + (v / 1000).toFixed(1).replace('.0', '') + 'B' : '$' + v + 'M');
 export const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 export const lerp = (a: number, b: number, t: number) => a + (b - a) * t;

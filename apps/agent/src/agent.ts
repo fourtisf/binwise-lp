@@ -148,6 +148,7 @@ function poolView(snap: SnapshotWithPool, tokens: Map<string, Token>, s: Strateg
       baseFeePct: snap.pool.baseFee,
       volume24hUsd: snap.volume24h,
       protocolFeePct: snap.pool.protocolFeePct,
+      activeBinLiqUsd: snap.activeBinLiqUsd,
     },
   };
 }
@@ -322,6 +323,7 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
           volumeUsd: view.ctx.volume24hUsd / 4,
           baseFeePct: view.ctx.baseFeePct,
           poolTvlUsd: view.ctx.tvlUsd,
+          poolActiveLiqUsd: view.ctx.activeBinLiqUsd,
         });
         const v = shouldRebalance({
           ticksOutOfRange: pos.ticksOut,

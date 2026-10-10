@@ -18,6 +18,8 @@ export interface CollectorDeps {
   db: PrismaClient;
   meteora: MeteoraClient;
   holderChecks?: HolderCheck[];
+  /** Reads real active-bin liquidity (USD) from chain; refreshed every 10 minutes per pool */
+  activeBinLiq?: (pool: { address: string; decimalsX: number; decimalsY: number; usdX: number; usdY: number }) => Promise<number>;
   log?: (msg: string) => void;
   now?: () => number;
 }
@@ -107,6 +109,27 @@ async function refreshHolders(deps: CollectorDeps, token: Token) {
     holders: token.holders,
   });
   return deps.db.token.update({ where: { mint: token.mint }, data: { holderQuality: v.quality, topHoldersPct: v.topHoldersPct ?? null, holderCheckedAt: new Date() } });
+}
+
+const activeCache = new Map<string, { usd: number; at: number }>();
+
+async function activeLiquidity(deps: CollectorDeps, p: MeteoraPool, now: number): Promise<number | null> {
+  if (!deps.activeBinLiq) return null;
+  const hit = activeCache.get(p.address);
+  if (hit && now - hit.at < 10 * 60_000) return hit.usd;
+  try {
+    const usd = await deps.activeBinLiq({
+      address: p.address,
+      decimalsX: p.token_x.decimals,
+      decimalsY: p.token_y.decimals,
+      usdX: p.token_x.price ?? 0,
+      usdY: p.token_y.price ?? 0,
+    });
+    activeCache.set(p.address, { usd, at: now });
+    return usd;
+  } catch {
+    return hit?.usd ?? null;
+  }
 }
 
 export interface CollectResult {
@@ -203,6 +226,7 @@ async function snapshotPool(deps: CollectorDeps, p: MeteoraPool, now: number): P
       tvl: p.tvl,
       volume24h: p.volume['24h'] ?? 0,
       fees24h: p.fees['24h'] ?? null,
+      activeBinLiqUsd: await activeLiquidity(deps, p, now),
       price: p.current_price,
       volatility,
       trend7d: trend.trend7d,

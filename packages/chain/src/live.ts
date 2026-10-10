@@ -1,4 +1,3 @@
-import { createRequire } from 'node:module';
 import type DLMMClass from '@meteora-ag/dlmm';
 import type { LbPosition, StrategyType as StrategyTypeEnum } from '@meteora-ag/dlmm';
 import {
@@ -44,16 +43,7 @@ export interface IdempotencyGuard {
 export class TradingHalted extends Error {}
 export class DuplicateAction extends Error {}
 
-/**
- * The SDK's ESM build imports a directory path that Node's ESM loader rejects,
- * so load its CommonJS build, and only when live mode actually needs it.
- */
-type DlmmModule = typeof import('@meteora-ag/dlmm');
-let sdkModule: DlmmModule | null = null;
-const sdk = (): DlmmModule => (sdkModule ??= createRequire(import.meta.url)('@meteora-ag/dlmm') as DlmmModule);
-const DLMM = {
-  create: (...a: Parameters<typeof DLMMClass.create>) => sdk().default.create(...a),
-};
+import { DLMM, sdk } from './sdk';
 type DLMM = DLMMClass;
 
 // StrategyType values from the SDK: Spot = 0, Curve = 1, BidAsk = 2.

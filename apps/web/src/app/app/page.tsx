@@ -26,11 +26,15 @@ export default function OverviewPage() {
 
   useEffect(() => {
     let live = true;
-    client?.performance(range).then((p) => live && setPerf(p));
+    if (!o?.id) return;
+    client
+      ?.performance(range)
+      .then((p) => live && setPerf(p))
+      .catch(() => live && setPerf(null));
     return () => {
       live = false;
     };
-  }, [client, range]);
+  }, [client, range, o?.id]);
 
   useEffect(() => {
     if (!perf || !eq.current) return;

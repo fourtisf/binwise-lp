@@ -41,5 +41,5 @@ if (process.env.DATABASE_URL) {
     },
   });
   await db.$disconnect();
-  console.log('Saved to the database (visible at /app/backtest).');
+  console.log('Saved to the database (open the app, press ⌘K → Backtest report).');
 }
