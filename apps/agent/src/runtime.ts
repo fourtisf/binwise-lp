@@ -4,6 +4,7 @@ import {
   LiveExecutor,
   PaperExecutor,
   assertLiveTradingAllowed,
+  assertLiveWallet,
   loadAgentKey,
   makeConnection,
   type Executor,
@@ -41,6 +42,7 @@ export function makeAgentDeps(redis: Redis, db: PrismaClient = getDb(), telegram
       assertLiveTradingAllowed(vault);
       if (!vault.encSecret) throw new Error('Live vault has no agent key.');
       const user = await db.user.findUniqueOrThrow({ where: { id: vault.userId } });
+      assertLiveWallet(user.wallet);
       return new LiveExecutor({
         conn: makeConnection(),
         agent: loadAgentKey(vault.encSecret),

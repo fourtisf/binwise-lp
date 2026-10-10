@@ -126,6 +126,37 @@ describe('vaults', () => {
     expect(res.json().error).toBe('live_disabled');
   });
 
+  it('allows live mode only for approved wallets, and lets live vaults withdraw even with the flag off', async () => {
+    const owner = wallet();
+    const { headers } = await signIn(owner);
+    const id = (await app.inject({ url: '/me', headers })).json().vaults[0].id;
+    const prev = { flag: process.env.LIVE_TRADING_ENABLED, wallets: process.env.LIVE_WALLETS, secret: process.env.AGENT_KEY_ENCRYPTION_SECRET };
+    process.env.LIVE_TRADING_ENABLED = 'true';
+    process.env.AGENT_KEY_ENCRYPTION_SECRET = Buffer.alloc(32, 7).toString('base64');
+    try {
+      process.env.LIVE_WALLETS = 'SomeOtherWallet1111111111111111111111111111';
+      const refused = await app.inject({ method: 'POST', url: `/vaults/${id}/mode`, headers, payload: { mode: 'live', confirm: true } });
+      expect(refused.statusCode).toBe(403);
+      expect(refused.json().error).toBe('live_not_allowed');
+      process.env.LIVE_WALLETS = `SomeOtherWallet1111111111111111111111111111, ${owner.address}`;
+      const ok = await app.inject({ method: 'POST', url: `/vaults/${id}/mode`, headers, payload: { mode: 'live', confirm: true } });
+      expect(ok.statusCode).toBe(200);
+      expect(ok.json().mode).toBe('live');
+      // Turning the global flag off must not trap funds: the withdraw route still gets past the live gate.
+      process.env.LIVE_TRADING_ENABLED = 'false';
+      const w = await app.inject({ method: 'POST', url: `/vaults/${id}/withdraw`, headers, payload: { token: 'NOPE', amount: 1 } });
+      expect(w.statusCode).toBe(400);
+      expect(w.json().error).toBe('unknown_token');
+    } finally {
+      process.env.LIVE_TRADING_ENABLED = prev.flag;
+      process.env.LIVE_WALLETS = prev.wallets;
+      process.env.AGENT_KEY_ENCRYPTION_SECRET = prev.secret;
+      if (prev.flag === undefined) delete process.env.LIVE_TRADING_ENABLED;
+      if (prev.wallets === undefined) delete process.env.LIVE_WALLETS;
+      if (prev.secret === undefined) delete process.env.AGENT_KEY_ENCRYPTION_SECRET;
+    }
+  });
+
   it('hides other users’ vaults', async () => {
     const a = await signIn();
     const b = await signIn();

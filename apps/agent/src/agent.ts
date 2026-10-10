@@ -29,7 +29,7 @@ import {
   singleSidedAfterExit,
   useSingleRebalance,
 } from '@binwise/core';
-import { SetupTooCostly, TX_COUNT, type Executor, type Holdings, type KillSwitch, type PoolCtx, type PositionRef } from '@binwise/chain';
+import { SetupTooCostly, TX_COUNT, liveLimits, type Executor, type Holdings, type KillSwitch, type PoolCtx, type PositionRef } from '@binwise/chain';
 import {
   activeParams,
   assessmentInput,
@@ -408,9 +408,12 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
 
     // Deploy idle funds into the best eligible pools, within the per-token exposure cap.
     const held = new Set(marked.map((x) => x.pos.poolId));
-    const maxPositions = Math.max(1, Math.floor(100 / s.maxAllocPct));
+    // Live vaults also respect the hard limits set in .env (LIVE_MAX_USD, LIVE_MAX_POSITIONS).
+    const live = executor.mode === 'live' ? liveLimits() : null;
+    const maxPositions = Math.min(Math.max(1, Math.floor(100 / s.maxAllocPct)), live?.maxPositions ?? Infinity);
     let openCount = marked.length;
     let idleUsd = holdingsUsd(cash, tokens);
+    let liveRoomUsd = live ? live.maxUsd - marked.reduce((sum, x) => sum + x.pos.valueUsd, 0) : Infinity;
     // Pools recently exited, or where opening was skipped because setup rent was too high, wait out the cooldown.
     const recentExits = await db.decision.findMany({
       where: {
@@ -427,7 +430,7 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
       if (s.toggles.pauseOnVolSpikes && v.snap.volSpike) continue;
       const side = sideForRegime(v.regime, params, v.riskyIsY);
       if (!side) continue;
-      let size = Math.min(positionSizeUsd(vaultValue, s.maxAllocPct, v.ctx.tvlUsd, params), idleUsd * 0.98);
+      let size = Math.min(positionSizeUsd(vaultValue, s.maxAllocPct, v.ctx.tvlUsd, params), idleUsd * 0.98, liveRoomUsd);
       // Respect the exposure cap for each non-stable token this position would add.
       const shareX = side === 'both' ? 0.5 : side === 'x' ? 1 : 0;
       for (const [mint, share] of [[v.ctx.mintX, shareX], [v.ctx.mintY, 1 - shareX]] as const) {
@@ -441,6 +444,7 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
       addExposure(v.ctx.mintX, size * shareX);
       addExposure(v.ctx.mintY, size * (1 - shareX));
       idleUsd -= size;
+      liveRoomUsd -= size;
       openCount++;
       held.add(v.snap.poolId);
     }

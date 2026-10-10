@@ -17,7 +17,7 @@ import {
 } from '@binwise/core';
 import {
   LiveExecutor,
-  assertLiveTradingAllowed,
+  liveWallets,
   createAgentKey,
   loadAgentKey,
   makeConnection,
@@ -308,6 +308,7 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     if (mode === 'live') {
       if (!liveEnabled()) throw new ApiError(403, 'live_disabled', "Live mode isn't available yet. Paper mode stays on.");
       if (req.body?.confirm !== true) throw new ApiError(400, 'confirm_required', 'Confirm that real funds will be used.');
+      if (!liveWallets().has(v.user.wallet)) throw new ApiError(403, 'live_not_allowed', 'Live mode is limited to approved wallets while it is being tested.');
     }
     if (await db.position.count({ where: { vaultId: v.id, status: 'open' } }))
       throw new ApiError(409, 'positions_open', 'Close all positions before switching modes.');
@@ -405,7 +406,8 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
       return overview(db, v.id, { readOnly: false });
     }
     // Live: only to the owner's registered wallet, enforced by the executor's transaction policy.
-    assertLiveTradingAllowed(v);
+    // Deliberately not gated on LIVE_TRADING_ENABLED: users can always take their funds out.
+    if (v.mode !== 'live') throw new ApiError(400, 'not_live', 'This vault is not in live mode.');
     if (await killed()) throw new ApiError(423, 'kill_switch', 'Trading is halted right now. Try again later.');
     if (!v.encSecret) throw new ApiError(400, 'no_agent', 'This vault has no agent wallet.');
     const token = symbol === 'SOL' ? { mint: SOL_MINT } : await db.token.findFirst({ where: { symbol, isVerified: true }, orderBy: { mcapUsd: 'desc' } });

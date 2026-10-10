@@ -112,6 +112,11 @@ JITO_TIP_LAMPORTS=10000
 
 # Safety. Live trading needs the owner's explicit approval; keep false.
 LIVE_TRADING_ENABLED=false
+# Only these wallets (comma-separated) may switch a vault to live. Empty = nobody.
+LIVE_WALLETS=
+# Hard limits per live vault while live trading is new
+LIVE_MAX_USD=200
+LIVE_MAX_POSITIONS=1
 # Seals agent keypairs. Keep an offline copy: losing it locks any live agent wallet.
 AGENT_KEY_ENCRYPTION_SECRET=$(openssl rand -base64 32)
 # Kill switch over HTTP: POST /api/admin/kill with header x-admin-token

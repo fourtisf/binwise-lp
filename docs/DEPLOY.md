@@ -77,8 +77,19 @@ sudo -u binwise -H bash -lc 'cd ~/binwise && pnpm --filter @binwise/agent kill o
 curl -X POST https://binwise.org/api/admin/kill -H "x-admin-token: $ADMIN_TOKEN" -H 'content-type: application/json' -d '{"on":true}'
 ```
 
-## Before going live (build step 6, owner approval required)
+## Going live (build step 6, owner approval required)
 
-1. Run paper mode for 2–4 weeks and read the backtest and paper results.
-2. Test on devnet: set `RPC_URL` to a devnet RPC, `LIVE_TRADING_ENABLED=true`, switch a test vault to live, deposit devnet funds, check deploy / close / withdraw-to-owner and the kill switch.
-3. Mainnet with one pool and $100–500, owner watching.
+Live mode sends real transactions from a per-vault agent wallet. Safety rails, all on by default:
+
+- `LIVE_TRADING_ENABLED=true` **and** the wallet listed in `LIVE_WALLETS` **and** the owner confirming in the app.
+- `LIVE_MAX_USD` (default 200) and `LIVE_MAX_POSITIONS` (default 1): the agent never deploys more, whatever is deposited.
+- A private `RPC_URL` is required. Every transaction is simulated first, checked against the program allowlist, and the kill switch is checked before sending.
+- Withdrawals go only to the wallet that signed in, and keep working even if `LIVE_TRADING_ENABLED` is switched off again.
+
+Steps:
+
+1. Put a Helius mainnet URL in `RPC_URL` and `NEXT_PUBLIC_RPC_URL`, a Jupiter key in `JUPITER_API_KEY`, your wallet address in `LIVE_WALLETS`, and set `LIVE_TRADING_ENABLED=true`.
+2. Rebuild the site and restart: `sudo -u binwise -H bash -lc 'cd ~/binwise && pnpm --filter @binwise/web build && pm2 restart all'`.
+3. In the app: Connect wallet → switch **Live** → confirm. Deposit a small amount of SOL (keep at least 0.25 SOL for fees and rent) and/or USDC.
+4. Watch Activity. Test **Withdraw** and the kill switch with the small amount before adding more.
+5. To stop at once: `sudo -u binwise -H bash -lc 'cd ~/binwise && pnpm --filter @binwise/agent kill on'`.

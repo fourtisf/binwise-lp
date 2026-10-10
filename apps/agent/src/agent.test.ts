@@ -225,6 +225,30 @@ describe('agent cycle (paper)', () => {
     expect(opens).toBe(2);
   });
 
+  it('never deploys more than LIVE_MAX_USD in a live vault', async () => {
+    const prev = process.env.LIVE_MAX_USD;
+    process.env.LIVE_MAX_USD = '300';
+    try {
+      const d = (): AgentDeps => ({
+        ...deps(),
+        // Same fills as paper, but reported as the live executor so live limits apply.
+        executorFor: async (v) => Object.defineProperty(new PaperExecutor({ ...(v.cash as Holdings) }), 'mode', { value: 'live' }),
+      });
+      await collect();
+      await runVaultCycle(d(), await vault());
+      const pos = await db.position.findFirstOrThrow();
+      expect(pos.entryValueUsd).toBeLessThanOrEqual(300);
+      expect(pos.entryValueUsd).toBeGreaterThan(250); // normally 25% of $10k = $2,500
+      advance(1);
+      await collect();
+      await runVaultCycle(d(), await vault());
+      expect(await db.position.count({ where: { status: 'open' } })).toBe(1); // LIVE_MAX_POSITIONS defaults to 1
+    } finally {
+      if (prev === undefined) delete process.env.LIVE_MAX_USD;
+      else process.env.LIVE_MAX_USD = prev;
+    }
+  });
+
   it('does nothing while the kill switch is on', async () => {
     await collect();
     killed = true;
