@@ -209,7 +209,7 @@ sed -e "s/YOUR_DOMAIN/${DOMAIN}/g" -e "s/WEB_PORT/${WEB_PORT}/g" -e "s/API_PORT/
 # Servers without IPv6 can't bind [::]:80.
 [[ -f /proc/net/if_inet6 ]] || sed -i '/listen \[::\]/d' /etc/nginx/sites-available/binwise
 ln -sf /etc/nginx/sites-available/binwise /etc/nginx/sites-enabled/binwise
-rm -f /etc/nginx/sites-enabled/default
+# The default site is left alone: on a shared server another app may rely on it.
 nginx -t -q || die "Nginx configuration test failed (see the message above)."
 systemctl reload nginx
 ok "Nginx serving ${DOMAIN}"
