@@ -1,0 +1,22 @@
+{
+  "name": "@binwise/chain",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Meteora DLMM / Jupiter / Jito wrappers, tx builder and simulator. Filled in during build steps 5-6.",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "3.2.7"
+  },
+  "dependencies": {
+    "@binwise/core": "workspace:*"
+  }
+}

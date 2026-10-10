@@ -1,0 +1,27 @@
+{
+  "name": "@binwise/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --env-file-if-exists=../../.env src/server.ts",
+    "build": "tsup",
+    "start": "node --env-file-if-exists=../../.env dist/server.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fastify/cors": "11.3.1",
+    "@fastify/websocket": "11.3.4",
+    "fastify": "5.12.5"
+  },
+  "devDependencies": {
+    "@binwise/core": "workspace:*",
+    "@binwise/mock": "workspace:*",
+    "tsup": "8.5.1",
+    "tsx": "4.23.15",
+    "vitest": "3.2.7",
+    "ws": "8.22.0",
+    "@types/ws": "^8.5.13"
+  }
+}

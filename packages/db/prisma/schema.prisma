@@ -1,0 +1,198 @@
+// Binwise database. Starting point from CLAUDE.md §4.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum VaultMode {
+  paper
+  live
+}
+
+enum VaultStatus {
+  running
+  paused
+}
+
+enum RiskProfile {
+  conservative
+  balanced
+  aggressive
+}
+
+enum LiquidityShape {
+  spot
+  curve
+  bidask
+}
+
+enum PositionStatus {
+  open
+  closed
+}
+
+enum DecisionType {
+  scan
+  deploy
+  rebalance
+  exit
+  compound
+  hold
+  skip
+}
+
+enum TxStatus {
+  simulated
+  sent
+  confirmed
+  failed
+}
+
+model User {
+  id        String   @id @default(cuid())
+  /// Registered wallet. Withdrawals may only go here.
+  wallet    String   @unique
+  createdAt DateTime @default(now())
+  vaults    Vault[]
+}
+
+model Vault {
+  id            String      @id @default(cuid())
+  userId        String
+  user          User        @relation(fields: [userId], references: [id])
+  name          String
+  /// Paper is the default. Live also needs LIVE_TRADING_ENABLED=true.
+  mode          VaultMode   @default(paper)
+  status        VaultStatus @default(running)
+  agentPubkey   String?
+  /// Agent secret key, sealed with AGENT_KEY_ENCRYPTION_SECRET. Never plaintext.
+  encSecret     Bytes?
+  createdAt     DateTime    @default(now())
+  strategy      Strategy?
+  positions     Position[]
+  decisions     Decision[]
+  snapshots     VaultSnapshot[]
+
+  @@index([userId])
+}
+
+model Strategy {
+  id           String      @id @default(cuid())
+  vaultId      String      @unique
+  vault        Vault       @relation(fields: [vaultId], references: [id], onDelete: Cascade)
+  profile      RiskProfile @default(balanced)
+  maxAllocPct  Float       @default(25)
+  /// Minimum token market cap in $M
+  minMcap      Float       @default(500)
+  trendExitPct Float       @default(-12)
+  dailyStopPct Float       @default(4)
+  /// Score weights per component (w1..w5)
+  weights      Json
+  /// autoCompound, rebalanceOnlyProfitable, holderSafety, pauseOnVolSpikes, telegramAlerts
+  toggles      Json
+  updatedAt    DateTime    @updatedAt
+}
+
+model Pool {
+  id        String         @id @default(cuid())
+  address   String         @unique
+  tokenA    String
+  tokenB    String
+  binStep   Int
+  /// Base fee in percent
+  baseFee   Float
+  updatedAt DateTime       @updatedAt
+  snapshots PoolSnapshot[]
+  positions Position[]
+  decisions Decision[]
+}
+
+model PoolSnapshot {
+  id             String   @id @default(cuid())
+  poolId         String
+  pool           Pool     @relation(fields: [poolId], references: [id], onDelete: Cascade)
+  ts             DateTime @default(now())
+  tvl            Float
+  volume24h      Float
+  price          Float
+  volatility     Float
+  trend7d        Float
+  score          Float
+  scoreBreakdown Json
+
+  @@index([poolId, ts])
+  @@index([ts])
+}
+
+model Position {
+  id           String         @id @default(cuid())
+  vaultId      String
+  vault        Vault          @relation(fields: [vaultId], references: [id])
+  poolId       String
+  pool         Pool           @relation(fields: [poolId], references: [id])
+  /// On-chain position account (null in paper mode)
+  address      String?
+  lowerBin     Int
+  upperBin     Int
+  shape        LiquidityShape
+  entryAmountA Float
+  entryAmountB Float
+  entryPriceA  Float
+  entryPriceB  Float
+  openedAt     DateTime       @default(now())
+  closedAt     DateTime?
+  status       PositionStatus @default(open)
+
+  @@index([vaultId, status])
+}
+
+model Decision {
+  id      String       @id @default(cuid())
+  vaultId String
+  vault   Vault        @relation(fields: [vaultId], references: [id])
+  poolId  String?
+  pool    Pool?        @relation(fields: [poolId], references: [id])
+  ts      DateTime     @default(now())
+  type    DecisionType
+  title   String
+  /// Plain-language reason shown in the activity feed
+  reason  String
+  inputs  Json
+  txSig   String?
+  txs     Tx[]
+
+  @@index([vaultId, ts])
+  @@index([vaultId, type, ts])
+}
+
+model Tx {
+  id          String   @id @default(cuid())
+  decisionId  String
+  decision    Decision @relation(fields: [decisionId], references: [id])
+  sig         String?  @unique
+  status      TxStatus
+  feeLamports BigInt?
+  simulated   Boolean
+  ts          DateTime @default(now())
+
+  @@index([decisionId])
+}
+
+model VaultSnapshot {
+  id        String   @id @default(cuid())
+  vaultId   String
+  vault     Vault    @relation(fields: [vaultId], references: [id], onDelete: Cascade)
+  ts        DateTime @default(now())
+  value     Float
+  holdValue Float
+  feesTotal Float
+  /// Fraction: 0.068 = +6.8%
+  netVsHold Float
+
+  @@index([vaultId, ts])
+}
