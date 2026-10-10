@@ -104,7 +104,8 @@ export class MockEngine {
       ['compound', 'Compounded $41.80 in fees', 'Claimed from JUP / SOL and added back to the same bins.', true],
       ['rebalance', 'Rebalanced SOL / USDC', 'Price left range by 2 bins. Expected fees beat cost 22x.', true],
     ];
-    seed.forEach(([type, title, reason, tx]) => this.addDecision(type, title, reason, tx, false));
+    // Oldest first, so the scan ends up at the top of the feed like the prototype.
+    [...seed].reverse().forEach(([type, title, reason, tx]) => this.addDecision(type, title, reason, tx, false));
   }
 
   start(): this {
@@ -171,7 +172,7 @@ export class MockEngine {
   }
 
   getPools(): PoolRow[] {
-    return POOLS.map((p) => poolRow(p, this.strategy)).sort((a, b) => b.score - a.score);
+    return POOLS.map((p) => poolRow(p, this.strategy));
   }
 
   getPool(id: string): PoolDetail {

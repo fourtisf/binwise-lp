@@ -23,9 +23,10 @@ describe('MockEngine', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it('ranks pools by score and flags downtrends as Avoid', () => {
+  it('scores every pool and flags downtrends as Avoid', () => {
     const pools = new MockEngine().getPools();
-    expect(pools.map((p) => p.score)).toEqual([...pools.map((p) => p.score)].sort((a, b) => b - a));
+    expect(pools).toHaveLength(9);
+    expect(pools.every((p) => p.score >= 3 && p.score <= 99)).toBe(true);
     expect(pools.find((p) => p.id === 'wif-sol')?.call).toBe('out');
   });
 
