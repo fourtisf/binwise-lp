@@ -206,8 +206,40 @@ export class LiveExecutor implements Executor {
 
   // ---------- actions ----------
 
+  /** USD prices for tokens outside the pool (set by the agent each cycle), used to fund swaps. */
+  knownPrices: Record<string, number> = {};
+
+  /** Swap from the vault's largest other holdings until it holds `usdNeeded` of `mint`. */
+  private async acquire(mint: string, usdNeeded: number, prices: Record<string, number>, key: string, keep: string[]): Promise<string[]> {
+    const sigs: string[] = [];
+    const have = await this.holdings();
+    let missing = usdNeeded - (have[mint] ?? 0) * (prices[mint] ?? 0);
+    if (missing <= Math.max(1, usdNeeded * 0.02)) return sigs;
+    const sources = Object.keys(have)
+      .filter((m) => m !== mint && prices[m] && !keep.includes(m))
+      .concat(keep.filter((m) => m !== mint && prices[m]))
+      .sort((a, b) => (keep.includes(a) ? 1 : 0) - (keep.includes(b) ? 1 : 0) || have[b] * prices[b] - have[a] * prices[a]);
+    for (const [i, m] of sources.entries()) {
+      if (missing <= 1) break;
+      const availUsd = have[m] * prices[m];
+      // Don't drain the other pool token below what the position needs from it.
+      const spendable = keep.includes(m) ? Math.max(0, availUsd - usdNeeded) : availUsd;
+      const takeUsd = Math.min(spendable, missing * 1.01);
+      if (takeUsd < 1) continue;
+      const r = await this.swap(m, mint, takeUsd / prices[m], { from: prices[m], to: prices[mint] }, `${key}:fund:${i}`);
+      sigs.push(...r.txSigs);
+      missing -= takeUsd;
+    }
+    return sigs;
+  }
+
   async open(req: OpenRequest): Promise<OpenResult> {
     const { pool } = req;
+    const prices = { ...this.knownPrices, [pool.mintX]: pool.usdX, [pool.mintY]: pool.usdY };
+    const funding = [
+      ...(await this.acquire(pool.mintX, req.valueUsd / 2, prices, `${req.key}:x`, [pool.mintY])),
+      ...(await this.acquire(pool.mintY, req.valueUsd / 2, prices, `${req.key}:y`, [pool.mintX])),
+    ];
     const dlmm = await DLMM.create(this.d.conn, new PublicKey(pool.address));
     const active = await dlmm.getActiveBin();
     const minBinId = active.binId - req.binsEachSide;
@@ -226,7 +258,7 @@ export class LiveExecutor implements Executor {
     if (x.isZero() && y.isZero()) throw new Error('Not enough balance to open a position.');
 
     const positionKp = Keypair.generate();
-    const sigs: string[] = [];
+    const sigs: string[] = [...funding];
     const bins = maxBinId - minBinId + 1;
     if (bins <= SINGLE_TX_BINS) {
       const t = await dlmm.initializePositionAndAddLiquidityByStrategy({ positionPubKey: positionKp.publicKey, totalXAmount: x, totalYAmount: y, strategy, user: this.me, slippage: 1 });

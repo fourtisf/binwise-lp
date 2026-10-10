@@ -417,11 +417,10 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
   const text = texts.length ? texts.join(' ') : holds.join(' ');
   if (!plans.length) await record(killed ? 'skip' : 'hold', killed ? 'Trading halted' : 'Holding', text);
 
-  // Persist paper balances.
-  if (executor.mode === 'paper' && 'balances' in executor) {
-    cash = (executor as unknown as { balances: Holdings }).balances;
-    await db.vault.update({ where: { id: vault.id }, data: { cash } });
-  }
+  // Persist idle balances: paper keeps them in the database; live mirrors the vault wallet on-chain
+  // so vault value, the daily loss stop and the dashboard all see the same numbers.
+  cash = executor.mode === 'paper' && 'balances' in executor ? (executor as unknown as { balances: Holdings }).balances : await executor.holdings();
+  await db.vault.update({ where: { id: vault.id }, data: { cash } });
   await snapshotVault(deps, vault.id, tokens, now);
 
   steps[4].done = !plans.length ? 'No transaction needed' : executor.mode === 'paper' ? 'Simulated fill, paper mode' : sentTx ? 'Confirmed on Solana' : 'Nothing sent';
@@ -452,10 +451,13 @@ async function execute(
   const v = plan.view;
   const pair = pairOf(v);
   const sigs: string[] = [];
+  // Prices for idle tokens outside this pool, so the executor can fund positions by swapping.
+  if ('knownPrices' in ex)
+    (ex as unknown as { knownPrices: Record<string, number> }).knownPrices = Object.fromEntries(
+      [...tokens.values()].filter((t) => t.priceUsd).map((t) => [t.mint, t.priceUsd!]),
+    );
 
   if (plan.kind === 'deploy') {
-    if (ex.mode === 'paper' && 'knownPrices' in ex)
-      (ex as unknown as { knownPrices: Record<string, number> }).knownPrices = Object.fromEntries([...tokens.values()].filter((t) => t.priceUsd).map((t) => [t.mint, t.priceUsd!]));
     const r = await ex.open({ pool: v.ctx, valueUsd: plan.sizeUsd, binsEachSide: plan.binsEachSide, shape: plan.shape, key });
     sigs.push(...r.txSigs);
     const pos = await db.position.create({
