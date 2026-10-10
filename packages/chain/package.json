@@ -14,9 +14,16 @@
     "test": "vitest run"
   },
   "devDependencies": {
+    "@types/bn.js": "^5.2.0",
+    "@types/libsodium-wrappers": "^0.8.2",
     "vitest": "3.2.7"
   },
   "dependencies": {
-    "@binwise/core": "workspace:*"
+    "@binwise/core": "workspace:*",
+    "@meteora-ag/dlmm": "1.9.14",
+    "@solana/spl-token": "0.4.14",
+    "@solana/web3.js": "1.98.4",
+    "bn.js": "5.2.2",
+    "libsodium-wrappers": "0.7.15"
   }
 }
