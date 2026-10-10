@@ -29,6 +29,7 @@ export const DEFAULT_STRATEGY: StrategySettings = {
     holderSafety: true,
     pauseOnVolSpikes: false,
     telegramAlerts: false,
+    askBeforeTrading: false,
   },
 };
 

@@ -39,8 +39,11 @@ import {
   vaultValue,
   strategySettings,
   strategyWeights,
+  REJECT_QUIET_HOURS,
+  PROPOSAL_TTL_MIN,
   type Position,
   type PrismaClient,
+  type Proposal as ProposalRow,
   type SnapshotWithPool,
   type Strategy,
   type Token,
@@ -78,6 +81,8 @@ export interface AgentDeps {
   now?: () => number;
   /** Active agent parameters (defaults to the database's active ParamSet) */
   params?: () => Promise<AgentParams>;
+  /** Manual mode: a new proposal needs the owner's approval (e.g. a Telegram message with buttons) */
+  onProposal?: (vault: VaultWithStrategy, proposal: ProposalRow) => Promise<void>;
 }
 
 interface PoolView {
@@ -95,7 +100,7 @@ interface PoolView {
 }
 
 type Plan =
-  | { kind: 'exit'; pos: Position; view: PoolView; reason: string; manual?: boolean }
+  | { kind: 'exit'; pos: Position; view: PoolView; reason: string; manual?: boolean; urgent?: boolean }
   | { kind: 'claim'; pos: Position; view: PoolView; reason: string }
   | { kind: 'rebalance'; pos: Position; view: PoolView; reason: string; binsEachSide: number; side: LiquiditySide }
   | { kind: 'compound'; pos: Position; view: PoolView; reason: string }
@@ -189,6 +194,7 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
     const d = await db.decision.create({
       data: {
         vaultId: vault.id,
+        ts: new Date(now),
         poolId: extra.poolId,
         type,
         title,
@@ -217,7 +223,7 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
 
   // ---- Scan
   emitStep(0);
-  const snaps = await latestSnapshots(db, 10);
+  const snaps = await latestSnapshots(db, 10, now);
   if (!snaps.length) {
     const text = "No fresh market data. The collector hasn't reported in the last 10 minutes, so the agent waits.";
     await record('skip', 'Skipped cycle', text);
@@ -265,7 +271,7 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
         lowScoreStreak: view.a.score < params.exitScore ? p.lowScoreStreak + 1 : 0,
       },
     });
-    await db.positionMark.create({ data: { positionId: p.id, price: view.ctx.price, lo, hi, valueUsd: m.valueUsd, holdUsd, netVsHold: net, inRange: m.inRange } });
+    await db.positionMark.create({ data: { positionId: p.id, ts: new Date(now), price: view.ctx.price, lo, hi, valueUsd: m.valueUsd, holdUsd, netVsHold: net, inRange: m.inRange } });
     deps.emit(vault.id, {
       type: 'tick',
       tick: {
@@ -317,7 +323,8 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
   if (killed) {
     holds.push('Kill switch is on. No trades this cycle.');
   } else if (stopHit) {
-    for (const x of marked) if (x.view) plans.push({ kind: 'exit', pos: x.pos, view: x.view, reason: `Vault fell more than ${s.dailyStopPct}% in 24 hours. Daily loss stop.` });
+    for (const x of marked)
+      if (x.view) plans.push({ kind: 'exit', pos: x.pos, view: x.view, reason: `Vault fell more than ${s.dailyStopPct}% in 24 hours. Daily loss stop.`, urgent: true });
   } else {
     for (const { pos, view, xUsd, yUsd } of marked) {
       if (!view) {
@@ -326,7 +333,7 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
       }
       const urgent = view.flags.filter(isUrgent);
       if (urgent.length) {
-        plans.push({ kind: 'exit', pos, view, reason: urgent.join(' ') });
+        plans.push({ kind: 'exit', pos, view, reason: urgent.join(' '), urgent: true });
         continue;
       }
       const marks24 = await db.positionMark.findMany({ where: { positionId: pos.id, ts: { gte: new Date(now - 24 * 3600_000) } }, select: { netVsHold: true } });
@@ -455,11 +462,29 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
     }
   }
 
+  // ---- Manual mode: the agent proposes and waits. Only protective exits (risk alarms,
+  // daily loss stop) still run on their own, so a missed message can't cost the vault.
+  const waiting: string[] = [];
+  if (s.toggles.askBeforeTrading && !killed) {
+    await db.proposal.updateMany({ where: { vaultId: vault.id, status: 'pending', expiresAt: { lt: new Date(now) } }, data: { status: 'expired' } });
+    for (const p of plans.filter((x) => !(x.kind === 'exit' && x.urgent))) {
+      const title = await propose(deps, vault, p, now);
+      if (title) waiting.push(title);
+    }
+    plans.splice(0, plans.length, ...plans.filter((x) => x.kind === 'exit' && x.urgent));
+    if (waiting.length) {
+      holds.unshift(`Waiting for your approval: ${waiting.join('; ')}.`);
+      deps.emit(vault.id, { type: 'proposals', pending: await db.proposal.count({ where: { vaultId: vault.id, status: 'pending' } }) });
+    }
+  }
+
   const first = plans[0];
   const short = !plans.length
     ? killed
       ? 'Trading halted'
-      : 'Hold all positions'
+      : waiting.length
+        ? 'Waiting for approval'
+        : 'Hold all positions'
     : first.kind === 'deploy'
       ? `Deploy to ${pairOf(first.view)}`
       : `${first.kind[0].toUpperCase()}${first.kind.slice(1)} ${pairOf(first.view)}`;
@@ -506,7 +531,7 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
   }
 
   const text = texts.length ? texts.join(' ') : holds.join(' ');
-  if (!plans.length) await record(killed ? 'skip' : 'hold', killed ? 'Trading halted' : 'Holding', text);
+  if (!plans.length) await record(killed ? 'skip' : 'hold', killed ? 'Trading halted' : waiting.length ? 'Waiting for approval' : 'Holding', text);
 
   // Persist idle balances: paper keeps them in the database; live mirrors the vault wallet on-chain
   // so vault value, the daily loss stop and the dashboard all see the same numbers.
@@ -555,6 +580,7 @@ async function execute(
     const pos = await db.position.create({
       data: {
         vaultId: vault.id,
+        openedAt: new Date(now),
         poolId: v.snap.poolId,
         address: r.address,
         binStep: v.ctx.binStep,
@@ -652,7 +678,7 @@ async function execute(
   });
   const { lo, hi } = rangePrices({ binStep: pos.binStep, lowerBin: r.lowerBin, upperBin: r.upperBin, address: r.address }, v.ctx);
   await db.positionMark.create({
-    data: { positionId: pos.id, price: v.ctx.price, lo, hi, valueUsd: r.amountX * v.ctx.usdX + r.amountY * v.ctx.usdY, holdUsd: pos.entryAmountA * v.ctx.usdX + pos.entryAmountB * v.ctx.usdY, netVsHold: pos.netVsHold, inRange: true, rebalanced: true },
+    data: { positionId: pos.id, ts: new Date(now), price: v.ctx.price, lo, hi, valueUsd: r.amountX * v.ctx.usdX + r.amountY * v.ctx.usdY, holdUsd: pos.entryAmountA * v.ctx.usdX + pos.entryAmountB * v.ctx.usdY, netVsHold: pos.netVsHold, inRange: true, rebalanced: true },
   });
   deps.emit(vault.id, {
     type: 'tick',
@@ -690,6 +716,49 @@ async function snapshotVault(deps: AgentDeps, vaultId: string, tokens: Map<strin
   });
 }
 
+/**
+ * Manual mode: turns a plan into a proposal for the owner. One open proposal per action;
+ * nothing is re-asked for a while after the owner rejects it, and a lapsed proposal is
+ * re-created quietly (no new message) so the owner isn't nagged.
+ * Returns the title when a proposal is waiting, or null when the owner said no recently.
+ */
+async function propose(deps: AgentDeps, vault: VaultWithStrategy, plan: Plan, now: number): Promise<string | null> {
+  const { db } = deps;
+  const kind = plan.kind === 'claim' ? 'compound' : plan.kind;
+  const poolId = plan.view.snap.poolId;
+  const positionId = 'pos' in plan ? plan.pos.id : null;
+  const pair = pairOf(plan.view);
+  const same = { vaultId: vault.id, kind, poolId, positionId };
+  const quiet = await db.proposal.findFirst({ where: { ...same, status: 'rejected', decidedAt: { gte: new Date(now - REJECT_QUIET_HOURS * 3600_000) } } });
+  if (quiet) return null;
+  const title =
+    plan.kind === 'deploy'
+      ? `Deploy ${usd(plan.sizeUsd)} to ${pair}`
+      : plan.kind === 'rebalance'
+        ? `Rebalance ${pair}`
+        : plan.kind === 'exit'
+          ? `Exit ${pair}`
+          : `Compound fees in ${pair}`;
+  const details =
+    plan.kind === 'deploy'
+      ? { pair, sizeUsd: plan.sizeUsd, binsEachSide: plan.binsEachSide, side: plan.side, shape: plan.shape }
+      : plan.kind === 'rebalance'
+        ? { pair, binsEachSide: plan.binsEachSide, side: plan.side }
+        : { pair };
+  const open = await db.proposal.findFirst({ where: { ...same, status: 'pending', expiresAt: { gte: new Date(now) } } });
+  if (open) {
+    // Keep the original expiry; refresh what it says so it reflects the latest data.
+    await db.proposal.update({ where: { id: open.id }, data: { title, reason: plan.reason, plan: details } });
+    return title;
+  }
+  const askedRecently = await db.proposal.findFirst({ where: { ...same, createdAt: { gte: new Date(now - REJECT_QUIET_HOURS * 3600_000) } } });
+  const created = await db.proposal.create({
+    data: { ...same, title, reason: plan.reason, plan: details, createdAt: new Date(now), expiresAt: new Date(now + PROPOSAL_TTL_MIN * 60_000) },
+  });
+  if (!askedRecently) await deps.onProposal?.(vault, created).catch((e) => deps.log?.(`[agent] proposal notice: ${(e as Error).message}`));
+  return title;
+}
+
 export type ManualAction = 'claim' | 'close';
 
 /** Outcome of a manual request, for the person who made it (app or Telegram). */
@@ -704,14 +773,14 @@ async function recordManual(
   vault: VaultWithStrategy,
   executor: Executor,
   poolId: string,
-  type: 'deploy' | 'exit' | 'compound',
+  type: 'deploy' | 'exit' | 'compound' | 'rebalance',
   r: ExecResult,
   key: string,
   inputs: object,
 ) {
   const { db } = deps;
   const d = await db.decision.create({
-    data: { vaultId: vault.id, poolId, type, title: r.title, reason: r.text, inputs: { manual: true, ...inputs }, idempotencyKey: key },
+    data: { vaultId: vault.id, ts: new Date((deps.now ?? Date.now)()), poolId, type, title: r.title, reason: r.text, inputs: { manual: true, ...inputs }, idempotencyKey: key },
   });
   const txSig = executor.mode === 'paper' ? `sim-${d.id}` : r.txSigs.at(-1);
   if (txSig) await db.decision.update({ where: { id: d.id }, data: { txSig } });
@@ -720,32 +789,75 @@ async function recordManual(
 }
 
 /** Runs a user's manual Claim / Close (Positions page or Telegram), with the same executor and logging. */
-export async function runManualAction(
+export function runManualAction(deps: AgentDeps, vault: VaultWithStrategy, positionId: string, action: ManualAction, requestId: string) {
+  return runPositionAction(deps, vault, positionId, action === 'close' ? 'exit' : 'claim', requestId);
+}
+
+type PositionActionOpts = { reason?: string; binsEachSide?: number; side?: LiquiditySide };
+
+/** Close / claim / compound / rebalance one open position on the owner's request or approval. */
+async function runPositionAction(
   deps: AgentDeps,
   vault: VaultWithStrategy,
   positionId: string,
-  action: ManualAction,
+  kind: 'exit' | 'claim' | 'compound' | 'rebalance',
   requestId: string,
+  opts: PositionActionOpts = {},
 ): Promise<ManualResult | null> {
   const { db } = deps;
+  const key = `${vault.id}:manual:${requestId}`;
   const pos = await db.position.findFirst({ where: { id: positionId, vaultId: vault.id, status: 'open' } });
-  if (!pos) return null;
+  if (!pos) return opts.reason ? { title: 'Nothing to do', text: 'That position is already closed.' } : null;
+  if (kind === 'rebalance' && pos.inRange) return { title: 'No rebalance needed', text: 'Price came back into range, so nothing was done.' };
   const snap = await db.poolSnapshot.findFirst({ where: { poolId: pos.poolId }, orderBy: { ts: 'desc' }, include: { pool: true } });
   if (!snap) throw new Error('No market data for this pool yet.');
   const tokens = new Map((await db.token.findMany({ where: { mint: { in: [snap.pool.mintA, snap.pool.mintB] } } })).map((t) => [t.mint, t]));
   const params = deps.params ? await deps.params() : await activeParams(db);
-  const view = await poolView(snap, tokens, strategySettings(vault.strategy!), strategyWeights(vault.strategy!), params);
+  const s = strategySettings(vault.strategy!);
+  const view = await poolView(snap, tokens, s, strategyWeights(vault.strategy!), params);
   if (!view) throw new Error('Token prices are missing for this pool.');
-  const key = `${vault.id}:manual:${requestId}`;
   if (!(await deps.claimKey(key))) return null;
   const executor = await deps.executorFor(vault);
   const plan: Plan =
-    action === 'close'
-      ? { kind: 'exit', pos, view, reason: 'Manual close. Funds returned to your vault.', manual: true }
-      : { kind: 'claim', pos, view, reason: 'Manual claim. Sent to your vault balance.' };
-  const r = await execute(deps, vault, executor, plan, key, strategySettings(vault.strategy!), tokens, (deps.now ?? Date.now)(), params);
-  await recordManual(deps, vault, executor, pos.poolId, action === 'close' ? 'exit' : 'compound', r, key, {});
+    kind === 'exit'
+      ? { kind: 'exit', pos, view, reason: opts.reason ?? 'Manual close. Funds returned to your vault.', manual: true }
+      : kind === 'claim'
+        ? { kind: 'claim', pos, view, reason: opts.reason ?? 'Manual claim. Sent to your vault balance.' }
+        : kind === 'compound'
+          ? { kind: 'compound', pos, view, reason: opts.reason ?? 'Fees go back into the same bins.' }
+          : {
+              kind: 'rebalance',
+              pos,
+              view,
+              reason: opts.reason ?? 'Manual rebalance.',
+              binsEachSide: opts.binsEachSide ?? Math.min(MAX_BINS_EACH_SIDE, binsForHalfWidth(rangeHalfWidth(s.profile, view.snap.volatility, view.stablePair, params), view.ctx.binStep)),
+              side: opts.side ?? 'both',
+            };
+  const r = await execute(deps, vault, executor, plan, key, s, tokens, (deps.now ?? Date.now)(), params);
+  await recordManual(deps, vault, executor, pos.poolId, kind === 'claim' ? 'compound' : kind, r, key, {});
   return { title: r.title, text: r.text };
+}
+
+/** Carries out a proposal the owner approved (manual mode), re-checking it against the market now. */
+export async function runApprovedProposal(deps: AgentDeps, vault: VaultWithStrategy, proposalId: string, requestId: string): Promise<ManualResult | null> {
+  const { db } = deps;
+  const p = await db.proposal.findFirst({ where: { id: proposalId, vaultId: vault.id } });
+  if (!p || p.status !== 'approved') return null;
+  const plan = p.plan as { sizeUsd?: number; binsEachSide?: number; side?: LiquiditySide };
+  const note = `Approved by you. ${p.reason}`;
+  try {
+    const r =
+      p.kind === 'deploy'
+        ? await runManualDeploy(deps, vault, p.poolId!, plan.sizeUsd ?? 0, requestId, 'Approved by you')
+        : await runPositionAction(deps, vault, p.positionId!, p.kind as 'exit' | 'compound' | 'rebalance', requestId, { reason: note, ...plan });
+    await db.proposal.update({ where: { id: p.id }, data: { status: 'done', result: r ? `${r.title}. ${r.text}` : 'Already done.' } });
+    return r;
+  } catch (e) {
+    await db.proposal.update({ where: { id: p.id }, data: { status: 'failed', result: (e as Error).message } });
+    throw e;
+  } finally {
+    deps.emit(vault.id, { type: 'proposals', pending: await db.proposal.count({ where: { vaultId: vault.id, status: 'pending' } }) });
+  }
 }
 
 /**
@@ -760,6 +872,7 @@ export async function runManualDeploy(
   poolId: string,
   requestedUsd: number,
   requestId: string,
+  source = 'Requested from Telegram',
 ): Promise<ManualResult | null> {
   const { db } = deps;
   const now = (deps.now ?? Date.now)();
@@ -804,7 +917,7 @@ export async function runManualDeploy(
   };
   const r = await execute(deps, vault, executor, plan, key, s, tokens, now, params);
   const reduced = requestedUsd > 0 && size < requestedUsd - 1 ? ` Sized down from ${usd(requestedUsd)} to stay within your limits.` : '';
-  const result = { title: r.title, text: `${r.text}${reduced} Requested from Telegram; the agent manages it from here.` };
+  const result = { title: r.title, text: `${r.text}${reduced} ${source}; the agent manages it from here.` };
   await recordManual(deps, vault, executor, poolId, 'deploy', { ...r, text: result.text }, key, { requestedUsd, sizeUsd: size });
   return result;
 }

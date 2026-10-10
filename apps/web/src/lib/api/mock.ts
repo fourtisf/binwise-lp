@@ -46,6 +46,10 @@ export function createMockClient(): BinwiseClient {
     claim: (id) => call(() => engine.claim(id)),
     close: (id) => call(() => engine.close(id)),
     telegramLink: unsupported,
+    // The built-in simulation trades automatically; approvals need the real API.
+    proposals: () => Promise.resolve([]),
+    approve: unsupported,
+    reject: unsupported,
     latestBacktest: () => Promise.resolve(null),
     subscribe: (fn) => engine.subscribe(fn),
     demoPairs: () => Promise.resolve(MOCK_DEMO_PAIRS),

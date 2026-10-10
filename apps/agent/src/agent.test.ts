@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { StreamEvent } from '@binwise/core';
-import { createVault, ensureUser, getDb } from '@binwise/db';
+import { approveProposal, createVault, ensureUser, getDb, rejectProposal } from '@binwise/db';
 import { collectOnce, DEFAULT_COLLECTOR } from './collector';
-import { runVaultCycle, type AgentDeps, type VaultWithStrategy } from './agent';
+import { runApprovedProposal, runVaultCycle, type AgentDeps, type VaultWithStrategy } from './agent';
 import { FakeMeteora, JUP, POOL, USDC, asMeteora, resetDb } from './test-helpers';
 import { PaperExecutor, SetupTooCostly, type Holdings } from '@binwise/chain';
 
@@ -247,6 +247,82 @@ describe('agent cycle (paper)', () => {
       if (prev === undefined) delete process.env.LIVE_MAX_USD;
       else process.env.LIVE_MAX_USD = prev;
     }
+  });
+
+  describe('manual mode (ask before trading)', () => {
+    const manualMode = async () => {
+      const st = await db.strategy.findFirstOrThrow();
+      await db.strategy.update({ where: { id: st.id }, data: { toggles: { ...(st.toggles as object), askBeforeTrading: true } } });
+    };
+
+    it('proposes a deploy instead of trading, and carries it out once approved', async () => {
+      await manualMode();
+      const proposals: string[] = [];
+      const d = (): AgentDeps => ({ ...deps(), onProposal: async (_v, p) => void proposals.push(p.title) });
+      await collect();
+      const c1 = await runVaultCycle(d(), await vault());
+      expect(c1.short).toBe('Waiting for approval');
+      expect(await db.position.count()).toBe(0);
+      const p = await db.proposal.findFirstOrThrow();
+      expect(p).toMatchObject({ kind: 'deploy', status: 'pending', poolId: POOL });
+      expect(p.title).toMatch(/^Deploy \$2,\d{3} to JUP \/ USDC$/);
+      expect(proposals).toEqual([p.title]);
+      expect(events.some((e) => e.type === 'proposals')).toBe(true);
+
+      // Next cycle: same proposal, no duplicate and no second message.
+      advance(1);
+      await collect();
+      await runVaultCycle(d(), await vault());
+      expect(await db.proposal.count()).toBe(1);
+      expect(proposals).toHaveLength(1);
+
+      await approveProposal(db, p.vaultId, p.id, now);
+      const r = await runApprovedProposal(d(), await vault(), p.id, `approve-${p.id}`);
+      expect(r?.title).toMatch(/^Deployed \$2,\d{3} to JUP \/ USDC$/);
+      expect(r?.text).toMatch(/Approved by you/);
+      expect(await db.position.count({ where: { status: 'open' } })).toBe(1);
+      expect((await db.proposal.findUniqueOrThrow({ where: { id: p.id } })).status).toBe('done');
+      // Running it again does nothing.
+      expect(await runApprovedProposal(d(), await vault(), p.id, `approve-${p.id}`)).toBeNull();
+      expect(await db.position.count()).toBe(1);
+    });
+
+    it("doesn't ask again for a while after a rejection", async () => {
+      await manualMode();
+      await collect();
+      await cycle();
+      const p = await db.proposal.findFirstOrThrow();
+      await rejectProposal(db, p.vaultId, p.id, now);
+      expect((await db.decision.findFirstOrThrow({ where: { title: { startsWith: 'You rejected' } } })).reason).toMatch(/won't propose this again/);
+      advance(1);
+      await collect();
+      const c = await cycle();
+      expect(c.short).toBe('Hold all positions');
+      expect(await db.proposal.count({ where: { status: 'pending' } })).toBe(0);
+      expect(await db.position.count()).toBe(0);
+    });
+
+    it('lets a proposal lapse after an hour; approving it then is refused', async () => {
+      await manualMode();
+      await collect();
+      await cycle();
+      const p = await db.proposal.findFirstOrThrow();
+      await expect(approveProposal(db, p.vaultId, p.id, now + 61 * 60_000)).rejects.toThrow(/expired/);
+      await expect(approveProposal(db, p.vaultId, p.id, now)).rejects.toThrow(/already expired/);
+    });
+
+    it('still exits on its own when a risk alarm fires, without waiting for approval', async () => {
+      await collect();
+      await cycle(); // automatic deploy first
+      await manualMode();
+      advance(60);
+      meteora.tvl = 2_000_000; // −60% in an hour
+      await collect();
+      const c = await cycle();
+      expect(c.short).toBe('Exit JUP / USDC');
+      expect((await db.position.findFirstOrThrow()).status).toBe('closed');
+      expect(await db.proposal.count()).toBe(0);
+    });
   });
 
   it('does nothing while the kill switch is on', async () => {

@@ -35,7 +35,7 @@ beforeAll(async () => {
   const dbName = new URL(process.env.DATABASE_URL!).pathname.slice(1);
   execSync(`psql -h localhost -U binwise -d postgres -c "create database ${dbName}" 2>/dev/null || true`, { stdio: 'ignore' });
   execSync('pnpm --filter @binwise/db exec prisma migrate deploy', { stdio: 'ignore', env: { ...process.env } });
-  await db.$executeRawUnsafe('TRUNCATE "Tx","Decision","PositionMark","Position","VaultSnapshot","Strategy","Vault","User","Candle","PoolSnapshot","Pool","Token","BacktestRun" CASCADE');
+  await db.$executeRawUnsafe('TRUNCATE "Tx","Decision","PositionMark","Position","VaultSnapshot","Strategy","Vault","User","Candle","PoolSnapshot","Pool","Token","BacktestRun","Proposal" CASCADE');
   await redis.flushdb();
   await db.token.createMany({
     data: [
@@ -155,6 +155,35 @@ describe('vaults', () => {
       if (prev.wallets === undefined) delete process.env.LIVE_WALLETS;
       if (prev.secret === undefined) delete process.env.AGENT_KEY_ENCRYPTION_SECRET;
     }
+  });
+
+  it('lists, approves and rejects proposals (manual mode), only for the owner', async () => {
+    const { headers } = await signIn();
+    const id = (await app.inject({ url: '/me', headers })).json().vaults[0].id;
+    const mk = (title: string) =>
+      db.proposal.create({ data: { vaultId: id, kind: 'deploy', poolId: null, title, reason: 'Score 80.', plan: { pair: 'SOL / USDC' }, expiresAt: new Date(Date.now() + 3600_000) } });
+    const a = await mk('Deploy $500 to SOL / USDC');
+    const b = await mk('Deploy $300 to JUP / USDC');
+    const list = (await app.inject({ url: `/vaults/${id}/proposals`, headers })).json();
+    expect(list.map((p: { title: string }) => p.title).sort()).toEqual([a.title, b.title].sort());
+    expect(list[0].pair).toBe('SOL / USDC');
+
+    // Someone else can't approve it.
+    const other = await signIn();
+    expect((await app.inject({ method: 'POST', url: `/proposals/${a.id}/approve`, headers: other.headers })).statusCode).toBe(404);
+
+    await redis.del(REDIS_KEYS.actions(id));
+    const ok = await app.inject({ method: 'POST', url: `/proposals/${a.id}/approve`, headers });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json().map((p: { id: string }) => p.id)).toEqual([b.id]);
+    expect(JSON.parse((await redis.lindex(REDIS_KEYS.actions(id), 0))!)).toEqual({ id: `approve-${a.id}`, action: 'proposal', proposalId: a.id });
+    const again = await app.inject({ method: 'POST', url: `/proposals/${a.id}/approve`, headers });
+    expect(again.statusCode).toBe(409);
+    expect(again.json().error).toBe('not_pending');
+
+    expect((await app.inject({ method: 'POST', url: `/proposals/${b.id}/reject`, headers })).json()).toEqual([]);
+    expect((await db.proposal.findUniqueOrThrow({ where: { id: b.id } })).status).toBe('rejected');
+    await redis.del(REDIS_KEYS.actions(id));
   });
 
   it('hides other users’ vaults', async () => {

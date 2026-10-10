@@ -90,6 +90,7 @@ model Vault {
   positions     Position[]
   decisions     Decision[]
   snapshots     VaultSnapshot[]
+  proposals     Proposal[]
 
   @@index([userId])
 }
@@ -106,7 +107,7 @@ model Strategy {
   dailyStopPct Float       @default(4)
   /// Score weights (ScoreWeights in packages/core)
   weights      Json
-  /// autoCompound, rebalanceOnlyProfitable, holderSafety, pauseOnVolSpikes, telegramAlerts
+  /// autoCompound, rebalanceOnlyProfitable, holderSafety, pauseOnVolSpikes, telegramAlerts, askBeforeTrading
   toggles      Json
   updatedAt    DateTime    @updatedAt
 }
@@ -363,4 +364,28 @@ model TokenEvent {
   createdAt DateTime @default(now())
 
   @@index([mint, at])
+}
+
+/// Manual mode: a trade the agent wants to make, waiting for the owner's approval.
+model Proposal {
+  id         String    @id @default(cuid())
+  vaultId    String
+  vault      Vault     @relation(fields: [vaultId], references: [id], onDelete: Cascade)
+  /// deploy | rebalance | exit | compound
+  kind       String
+  poolId     String?
+  positionId String?
+  title      String
+  reason     String
+  /// Plan details needed to carry it out (size, range, side)
+  plan       Json      @default("{}")
+  /// pending | approved | rejected | expired | done | failed
+  status     String    @default("pending")
+  createdAt  DateTime  @default(now())
+  expiresAt  DateTime
+  decidedAt  DateTime?
+  /// What happened when it was carried out
+  result     String?
+
+  @@index([vaultId, status])
 }

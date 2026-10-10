@@ -11,6 +11,7 @@ import type {
   PoolDetail,
   PoolRow,
   PositionView,
+  Proposal,
   StrategySettings,
   StreamEvent,
   VaultMode,
@@ -62,6 +63,10 @@ export interface BinwiseClient {
   claim(positionId: string): Promise<{ amount?: number; queued?: boolean }>;
   close(positionId: string): Promise<{ ok?: true; queued?: boolean }>;
   telegramLink(): Promise<{ url: string | null; code: string }>;
+  /** Manual mode: trades waiting for the owner's approval */
+  proposals(): Promise<Proposal[]>;
+  approve(id: string): Promise<Proposal[]>;
+  reject(id: string): Promise<Proposal[]>;
   latestBacktest(): Promise<BacktestSummary | null>;
   /** Live vault stream. Returns an unsubscribe function. */
   subscribe(fn: (e: StreamEvent) => void): () => void;

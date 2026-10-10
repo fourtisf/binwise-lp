@@ -13,9 +13,10 @@ import { useUi } from '@/lib/ui';
 import { useAppData } from '@/lib/store';
 
 const SHAPE_LABEL = { spot: 'spot', curve: 'curve', bidask: 'bid-ask' } as const;
+const PROPOSAL_ICON = { deploy: 'i-plus', rebalance: 'i-swap', exit: 'i-exit', compound: 'i-comp' } as const;
 
 export default function OverviewPage() {
-  const { overview: o, positions, decisions, cycle, decisionText, client, empty } = useAppData();
+  const { overview: o, positions, decisions, proposals, approve, reject, cycle, decisionText, client, empty } = useAppData();
   const { openConnect } = useUi();
   const [range, setRange] = useState<PerformanceRange>(30);
   const [perf, setPerf] = useState<PerformanceSeries | null>(null);
@@ -84,6 +85,38 @@ export default function OverviewPage() {
 
   return (
     <div className="page on" id="p-overview">
+      {proposals.length > 0 && (
+        <div className="panel card" id="approvals" style={{ marginBottom: 12 }}>
+          <div className="ph">
+            <div>
+              <h3>Waiting for your approval</h3>
+              <p>Manual mode: the agent found these trades. Nothing runs until you approve.</p>
+            </div>
+          </div>
+          <div className="feed" style={{ maxHeight: 'none' }}>
+            {proposals.map((p) => (
+              <div className="fi" key={p.id}>
+                <span className={`fic ${p.kind}`}>
+                  <Icon id={PROPOSAL_ICON[p.kind]} />
+                </span>
+                <div>
+                  <b>{p.title}</b>
+                  <span>{p.reason}</span>
+                  <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+                    <button className="btn btn-white btn-sm" onClick={() => approve(p)}>
+                      Approve
+                    </button>
+                    <button className="btn btn-dark btn-sm" onClick={() => reject(p)}>
+                      Reject
+                    </button>
+                  </div>
+                </div>
+                <time>{Math.max(0, Math.round((p.expiresAt - Date.now()) / 60_000))}m left</time>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="kpis">
         <div className="kpi card">
           <small>Vault value</small>

@@ -3,7 +3,7 @@ import { createVault, ensureUser, getDb } from '@binwise/db';
 import { PaperExecutor, type Holdings } from '@binwise/chain';
 import { collectOnce, DEFAULT_COLLECTOR } from './collector';
 import { runManualAction, runManualDeploy, type AgentDeps, type VaultWithStrategy } from './agent';
-import { makeBot, resultMessage, type ManualRequest } from './bot';
+import { makeBot, proposalMessage, resultMessage, type ManualRequest } from './bot';
 import type { Keyboard, TelegramApi, TgUpdate } from './telegram';
 import { FakeMeteora, POOL, USDC, asMeteora, resetDb } from './test-helpers';
 
@@ -72,7 +72,7 @@ describe('telegram bot', () => {
     expect(last().text).toMatch(/isn't connected to a vault yet/);
     await say('/start code123');
     expect(last().text).toMatch(/^✅ Connected/);
-    expect(buttons().map((b) => b.text)).toEqual(['📊 Status', '➕ Add LP', '💼 Positions', '⏸ Pause agent', '🌐 Open app']);
+    expect(buttons().map((b) => b.text)).toEqual(['📊 Status', '➕ Add LP', '💼 Positions', '🗳 Approvals', '🤖 Mode: Auto', '⏸ Pause agent', '🌐 Open app']);
     // The code works once.
     await say('/start code123');
     expect(last().text).toMatch(/not valid or was already used/);
@@ -144,6 +144,38 @@ describe('telegram bot', () => {
     await press(`cx|${foreign.id}`);
     expect(queue).toEqual([]);
     expect(answers.at(-1)).toMatch(/already closed/);
+  });
+
+  it('switches between automatic and manual, and approves proposals with buttons', async () => {
+    await say('/start code123');
+    await press('mode');
+    expect(last().text).toMatch(/✋ Manual: the agent asks before every trade/);
+    expect(buttons().map((b) => b.text)).toContain('✋ Mode: Manual');
+    const st = await db.strategy.findFirstOrThrow();
+    expect((st.toggles as { askBeforeTrading: boolean }).askBeforeTrading).toBe(true);
+
+    const v = await vault();
+    const p = await db.proposal.create({
+      data: { vaultId: v.id, kind: 'deploy', poolId: POOL, title: 'Deploy $2,500 to JUP / USDC', reason: 'Score 80.', plan: { pair: 'JUP / USDC', sizeUsd: 2500 }, expiresAt: new Date(now + 3600_000) },
+    });
+    const msg = proposalMessage(p, now);
+    expect(msg.text).toMatch(/Approval needed/);
+    expect(msg.text).toMatch(/Expires in 60 min/);
+    await press('apv');
+    expect(last().text).toMatch(/Waiting for your approval/);
+    await press(`ok|${p.id}`);
+    expect(last().text).toMatch(/^✅ Approved/);
+    expect(queue.at(-1)).toEqual({ id: `approve-${p.id}`, action: 'proposal', proposalId: p.id, chatId: String(CHAT) });
+    // A second tap can't approve twice.
+    queue = [];
+    await press(`ok|${p.id}`);
+    expect(queue).toEqual([]);
+    expect(last().text).toMatch(/already approved/);
+
+    // Back to automatic: anything still waiting is dropped (the agent now acts by itself).
+    await db.proposal.create({ data: { vaultId: v.id, kind: 'exit', title: 'Exit X', reason: 'r', expiresAt: new Date(now + 3600_000) } });
+    await press('mode');
+    expect(await db.proposal.count({ where: { status: 'pending' } })).toBe(0);
   });
 
   it('pauses and resumes the agent', async () => {

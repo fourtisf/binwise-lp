@@ -18,6 +18,7 @@ import type {
   PositionChart,
   PositionTick,
   PositionView,
+  Proposal,
   StrategySettings,
   StreamEvent,
   VaultMode,
@@ -40,6 +41,10 @@ interface AppData {
   overview: VaultOverview | null;
   positions: PositionView[];
   decisions: Decision[];
+  /** Manual mode: trades waiting for approval */
+  proposals: Proposal[];
+  approve: (p: Proposal) => void;
+  reject: (p: Proposal) => void;
   pools: PoolRow[];
   cycle: CycleState | null;
   /** performance.now() when the current cycle started, in this browser. */
@@ -79,6 +84,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   const [overview, setOverview] = useState<VaultOverview | null>(null);
   const [positions, setPositions] = useState<PositionView[]>([]);
   const [decisions, setDecisions] = useState<Decision[]>([]);
+  const [proposals, setProposals] = useState<Proposal[]>([]);
   const [pools, setPools] = useState<PoolRow[]>([]);
   const [cycle, setCycle] = useState<CycleState | null>(null);
   const [cycleStart, setCycleStart] = useState(0);
@@ -137,6 +143,9 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
           // Deploys, exits and rebalances change the position list.
           if (e.decision.type !== 'scan') void reloadPositions(c);
           break;
+        case 'proposals':
+          void c.proposals().then(setProposals).catch(() => {});
+          break;
       }
     },
     [applyCycle, reloadPositions],
@@ -168,19 +177,21 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       seriesRef.current.clear();
       off = c.subscribe((e) => onEvent(e, c));
       try {
-        const [o, ps, ds, pl, cy, st] = await Promise.all([
+        const [o, ps, ds, pl, cy, st, pr] = await Promise.all([
           c.overview(),
           c.positions(),
           c.decisions({ exclude: ['hold'] }),
           c.pools(),
           c.cycle(),
           c.strategy(),
+          c.proposals().catch(() => [] as Proposal[]),
         ]);
         if (cancelled) return;
         ps.forEach((p) => seriesRef.current.set(p.id, structuredClone(p.chart)));
         setOverview(o);
         setPositions(ps);
         setDecisions(ds);
+        setProposals(pr);
         setPools(pl);
         applyCycle(cy);
         if (o.status === 'paused') setDecisionText(o.pausedReason ?? 'Agent paused. Resume to continue.');
@@ -213,6 +224,15 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       overview,
       positions,
       decisions,
+      proposals,
+      approve: (p) => guard(() => run(client?.approve(p.id), (list) => {
+        setProposals(list);
+        toast(`Approved: ${p.title}. The agent is on it.`);
+      })),
+      reject: (p) => guard(() => run(client?.reject(p.id), (list) => {
+        setProposals(list);
+        toast(`Rejected: ${p.title}`);
+      })),
       pools,
       cycle,
       cycleStart,
@@ -226,6 +246,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
         setOverview(null);
         setPositions([]);
         setDecisions([]);
+        setProposals([]);
         setGeneration((g) => g + 1);
       },
       saveStrategy: () =>
@@ -305,7 +326,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
         return () => set.delete(fn);
       },
     };
-  }, [client, me, ready, empty, overview, positions, decisions, pools, cycle, cycleStart, decisionText, draft, toast, openConnect, openConfirmLive]);
+  }, [client, me, ready, empty, overview, positions, decisions, proposals, pools, cycle, cycleStart, decisionText, draft, toast, openConnect, openConfirmLive]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

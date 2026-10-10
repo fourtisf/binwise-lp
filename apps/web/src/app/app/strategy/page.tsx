@@ -18,6 +18,7 @@ const TOGGLES: { key: keyof StrategyToggles; title: string; text: string }[] = [
   { key: 'holderSafety', title: 'Holder safety check', text: 'Skips bundled or dev-heavy tokens.' },
   { key: 'pauseOnVolSpikes', title: 'Pause on volatility spikes', text: 'Waits out moves above 3x normal.' },
   { key: 'telegramAlerts', title: 'Telegram alerts', text: 'Deploys, rebalances and exits in your chat.' },
+  { key: 'askBeforeTrading', title: 'Manual approval', text: 'The agent finds pools and asks before every trade. Off: fully automatic.' },
 ];
 
 type NumKey = keyof typeof STRATEGY_LIMITS;

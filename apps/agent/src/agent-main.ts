@@ -1,7 +1,7 @@
 import { JupiterClient } from '@binwise/chain';
 import { getDb } from '@binwise/db';
-import { CYCLE_MS, runManualAction, runManualDeploy, runVaultCycle, type ManualResult } from './agent';
-import { BOT_COMMANDS, makeBot, resultMessage, type ManualRequest } from './bot';
+import { CYCLE_MS, runApprovedProposal, runManualAction, runManualDeploy, runVaultCycle, type ManualResult } from './agent';
+import { BOT_COMMANDS, makeBot, proposalMessage, resultMessage, type ManualRequest } from './bot';
 import { KEYS, makeRedis, publish, withVaultLock } from './redis';
 import { makeAgentDeps } from './runtime';
 import { Telegram } from './telegram';
@@ -75,10 +75,12 @@ async function manualActions() {
           result =
             req.action === 'deploy'
               ? await runManualDeploy(deps, vault, req.poolId!, req.usd ?? 0, req.id)
-              : await runManualAction(deps, vault, req.positionId!, req.action, req.id);
+              : req.action === 'proposal'
+                ? await runApprovedProposal(deps, vault, req.proposalId!, req.id)
+                : await runManualAction(deps, vault, req.positionId!, req.action, req.id);
         } catch (e) {
           error = (e as Error).message;
-          const verb = req.action === 'deploy' ? 'add LP' : req.action;
+          const verb = req.action === 'deploy' ? 'add LP' : req.action === 'proposal' ? 'carry out the approved trade' : req.action;
           await db.decision.create({ data: { vaultId, poolId: req.poolId ?? null, type: 'skip', title: `Couldn't ${verb}`, reason: error, inputs: { manual: true } } });
         }
         if (req.chatId && telegram) await telegram.send(req.chatId, resultMessage(result, error)).catch((e) => console.error(`[telegram] ${(e as Error).message}`));

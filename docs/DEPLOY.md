@@ -50,6 +50,16 @@ bash install.sh binwise.org                 # update to the latest code (keeps .
 
 The site's NEXT_PUBLIC_* settings are baked in at build time; the install script rebuilds every time.
 
+## Automatic or manual trading
+
+**Strategy → Manual approval** (or 🤖/✋ Mode in the Telegram bot) switches how the agent acts:
+
+- **Off (automatic):** the agent scans, decides and trades by itself every minute.
+- **On (manual):** the agent still scans and decides every minute, but each trade (deploy, rebalance, compound, exit)
+  becomes a proposal: a card on Overview and a Telegram message with ✅ Approve / ❌ Reject. Nothing runs until you approve.
+  Proposals lapse after 60 minutes; after a rejection the agent doesn't ask about the same thing for 6 hours.
+  Protective exits (stablecoin depeg, TVL drain, pool price far from market, daily loss stop) still run on their own.
+
 ## Telegram bot
 
 One bot does alerts and control: 📊 Status, ➕ Add LP, 💼 Positions (claim / close), ⏸ Pause / ▶️ Resume.

@@ -22,7 +22,18 @@ import {
   loadAgentKey,
   makeConnection,
 } from '@binwise/chain';
-import { createVault, ensureUser, strategyData, type PrismaClient, type Vault } from '@binwise/db';
+import {
+  ProposalError,
+  approveProposal,
+  createVault,
+  ensureUser,
+  pendingProposals,
+  proposalView,
+  rejectProposal,
+  strategyData,
+  type PrismaClient,
+  type Vault,
+} from '@binwise/db';
 import { SESSION_COOKIE, SESSION_DAYS, makeSession, newNonce, readSession, signInMessage, verifyWalletSignature } from './auth';
 import { EventHub } from './events';
 import { decisionView, overview, performance, poolRows, positionViews, tokenMap, tokenRef } from './views';
@@ -438,6 +449,33 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
   };
   app.post<{ Params: { id: string } }>('/positions/:id/claim', queueAction('claim'));
   app.post<{ Params: { id: string } }>('/positions/:id/close', queueAction('close'));
+
+  // ---------- manual mode: proposals waiting for the owner's approval ----------
+
+  app.get<VP>('/vaults/:id/proposals', async (req) => {
+    const { vault } = await readable(req, req.params.id);
+    return (await pendingProposals(db, vault.id)).map(proposalView);
+  });
+
+  const decide = (approve: boolean) => async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    const p = await db.proposal.findUnique({ where: { id: req.params.id } });
+    if (!p) throw new ApiError(404, 'not_found', 'No such proposal.');
+    const v = await writable(req, p.vaultId);
+    try {
+      if (approve) {
+        await approveProposal(db, v.id, p.id);
+        // Carried out by the agent worker, like every other trade.
+        await redis.lpush(REDIS_KEYS.actions(v.id), JSON.stringify({ id: `approve-${p.id}`, action: 'proposal', proposalId: p.id }));
+      } else await rejectProposal(db, v.id, p.id);
+    } catch (e) {
+      if (!(e instanceof ProposalError)) throw e;
+      throw new ApiError(e.code === 'not_found' ? 404 : 409, e.code, e.message);
+    }
+    await publish(v.id, { type: 'proposals', pending: await db.proposal.count({ where: { vaultId: v.id, status: 'pending' } }) });
+    return (await pendingProposals(db, v.id)).map(proposalView);
+  };
+  app.post<{ Params: { id: string } }>('/proposals/:id/approve', decide(true));
+  app.post<{ Params: { id: string } }>('/proposals/:id/reject', decide(false));
 
   // ---------- admin ----------
 

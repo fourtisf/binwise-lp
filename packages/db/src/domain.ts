@@ -7,6 +7,7 @@ import {
   type StrategyToggles,
 } from '@binwise/core';
 import type { Prisma, PrismaClient, Strategy, Token } from './generated/prisma/client';
+import type { Proposal as ProposalView, ProposalKind } from '@binwise/core';
 
 /** Shared rules about tokens, strategies and vaults used by the agent and the API. */
 
@@ -70,9 +71,9 @@ export async function createVault(db: PrismaClient, userId: string, opts: { name
 }
 
 /** Latest snapshot per pool, no older than `maxAgeMin` minutes. */
-export async function latestSnapshots(db: PrismaClient, maxAgeMin = 10) {
+export async function latestSnapshots(db: PrismaClient, maxAgeMin = 10, now = Date.now()) {
   return db.poolSnapshot.findMany({
-    where: { ts: { gte: new Date(Date.now() - maxAgeMin * 60_000) } },
+    where: { ts: { gte: new Date(now - maxAgeMin * 60_000) } },
     distinct: ['poolId'],
     orderBy: [{ poolId: 'asc' }, { ts: 'desc' }],
     include: { pool: true },
@@ -156,4 +157,78 @@ export async function assessmentInput(
     riskFlags: Array.isArray(snap.riskFlags) ? (snap.riskFlags as string[]) : [],
     regime,
   };
+}
+
+// ---------------------------------------------------------------- manual approval
+
+/** How long a proposal waits for an answer before it lapses (the market moves on). */
+export const PROPOSAL_TTL_MIN = 60;
+/** After the owner rejects something, the agent doesn't ask about it again for this long. */
+export const REJECT_QUIET_HOURS = 6;
+
+type ProposalRow = Prisma.ProposalGetPayload<object>;
+
+export function proposalView(p: ProposalRow): ProposalView {
+  const plan = (p.plan ?? {}) as { pair?: string };
+  return {
+    id: p.id,
+    vaultId: p.vaultId,
+    kind: p.kind as ProposalKind,
+    poolId: p.poolId ?? undefined,
+    positionId: p.positionId ?? undefined,
+    pair: plan.pair ?? '',
+    title: p.title,
+    reason: p.reason,
+    createdAt: p.createdAt.getTime(),
+    expiresAt: p.expiresAt.getTime(),
+  };
+}
+
+/** Proposals still waiting for the owner, newest first (lapsed ones are marked expired). */
+export async function pendingProposals(db: PrismaClient, vaultId: string, now = Date.now()) {
+  await db.proposal.updateMany({ where: { vaultId, status: 'pending', expiresAt: { lt: new Date(now) } }, data: { status: 'expired' } });
+  return db.proposal.findMany({ where: { vaultId, status: 'pending' }, orderBy: { createdAt: 'desc' } });
+}
+
+export class ProposalError extends Error {
+  constructor(
+    readonly code: 'not_found' | 'not_pending' | 'expired',
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * Marks a pending proposal approved (atomically, so a double click can't approve twice).
+ * The caller then queues it for the agent worker.
+ */
+export async function approveProposal(db: PrismaClient, vaultId: string, id: string, now = Date.now()) {
+  const p = await db.proposal.findFirst({ where: { id, vaultId } });
+  if (!p) throw new ProposalError('not_found', 'No such proposal.');
+  if (p.status === 'pending' && p.expiresAt.getTime() < now) {
+    await db.proposal.update({ where: { id }, data: { status: 'expired' } });
+    throw new ProposalError('expired', 'This proposal expired. The agent will propose again if it still makes sense.');
+  }
+  const r = await db.proposal.updateMany({ where: { id, vaultId, status: 'pending' }, data: { status: 'approved', decidedAt: new Date(now) } });
+  if (!r.count) throw new ProposalError('not_pending', `This proposal was already ${p.status}.`);
+  return { ...p, status: 'approved' };
+}
+
+export async function rejectProposal(db: PrismaClient, vaultId: string, id: string, now = Date.now()) {
+  const p = await db.proposal.findFirst({ where: { id, vaultId } });
+  if (!p) throw new ProposalError('not_found', 'No such proposal.');
+  const r = await db.proposal.updateMany({ where: { id, vaultId, status: 'pending' }, data: { status: 'rejected', decidedAt: new Date(now) } });
+  if (!r.count) throw new ProposalError('not_pending', `This proposal was already ${p.status}.`);
+  await db.decision.create({
+    data: {
+      vaultId,
+      poolId: p.poolId,
+      type: 'skip',
+      title: `You rejected: ${p.title}`,
+      reason: `The agent won't propose this again for ${REJECT_QUIET_HOURS} hours.`,
+      inputs: { proposalId: p.id, manual: true },
+    },
+  });
+  return p;
 }

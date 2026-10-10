@@ -16,6 +16,7 @@ import type { Redis } from 'ioredis';
 import { publish, redisIdempotency, redisKillSwitch } from './redis';
 import type { AgentDeps, VaultWithStrategy } from './agent';
 import { Telegram } from './telegram';
+import { proposalMessage } from './bot';
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 
@@ -34,6 +35,15 @@ export function makeAgentDeps(redis: Redis, db: PrismaClient = getDb(), telegram
       ? async (vault, text) => {
           const user = await db.user.findUnique({ where: { id: vault.userId } });
           if (user?.telegramChatId) await telegram.send(user.telegramChatId, `${vault.name}: ${text}`);
+        }
+      : undefined,
+    // Manual mode: each new proposal goes to the owner's chat with Approve / Reject buttons.
+    onProposal: telegram
+      ? async (vault, proposal) => {
+          const user = await db.user.findUnique({ where: { id: vault.userId } });
+          if (!user?.telegramChatId) return;
+          const m = proposalMessage(proposal);
+          await telegram.send(user.telegramChatId, m.text, { html: true, keyboard: m.keyboard });
         }
       : undefined,
     executorFor: async (vault: VaultWithStrategy): Promise<Executor> => {

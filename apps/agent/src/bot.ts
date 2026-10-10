@@ -1,12 +1,18 @@
 import { assessPool, positionSizeUsd, type AgentParams } from '@binwise/core';
 import { liveLimits } from '@binwise/chain';
 import {
+  ProposalError,
   activeParams,
+  approveProposal,
   assessmentInput,
+  pendingProposals,
+  rejectProposal,
+  strategySettings as settingsOf,
   strategySettings,
   strategyWeights,
   vaultValue,
   type PrismaClient,
+  type Proposal,
   type Strategy,
   type Vault,
 } from '@binwise/db';
@@ -23,8 +29,10 @@ import type { Keyboard, TelegramApi, TgCallback, TgMessage, TgUpdate } from './t
 /** A manual request for the agent worker (shared with the website's Claim / Close). */
 export interface ManualRequest {
   id: string;
-  action: 'claim' | 'close' | 'deploy';
+  action: 'claim' | 'close' | 'deploy' | 'proposal';
   positionId?: string;
+  /** Manual mode: an approved proposal to carry out */
+  proposalId?: string;
   poolId?: string;
   /** Deploy size in USD; 0 = let the agent pick */
   usd?: number;
@@ -58,21 +66,47 @@ export const BOT_COMMANDS = [
   { command: 'status', description: 'Vault value and what the agent is doing' },
   { command: 'add', description: 'Add liquidity to a pool' },
   { command: 'positions', description: 'Your open positions' },
+  { command: 'approvals', description: 'Trades waiting for your approval (manual mode)' },
 ];
+
+const KIND_ICON: Record<string, string> = { deploy: '➕', rebalance: '🔁', exit: '🚪', compound: '♻️' };
+const minutesLeft = (p: Proposal, now: number) => Math.max(0, Math.round((p.expiresAt.getTime() - now) / 60_000));
+
+/** The message the owner gets for a new proposal in manual mode. */
+export function proposalMessage(p: Proposal, now = Date.now()): { text: string; keyboard: Keyboard } {
+  return {
+    text:
+      `🗳 <b>Approval needed</b>\n\n${KIND_ICON[p.kind] ?? '•'} <b>${esc(p.title)}</b>\n${esc(p.reason)}\n\n` +
+      `Nothing happens until you approve. Expires in ${minutesLeft(p, now)} min.`,
+    keyboard: [
+      [
+        { text: '✅ Approve', callback_data: `ok|${p.id}` },
+        { text: '❌ Reject', callback_data: `no|${p.id}` },
+      ],
+    ],
+  };
+}
 
 export function makeBot(d: BotDeps) {
   const { db, tg } = d;
   const now = () => (d.now ?? Date.now)();
 
   const modeLabel = (v: Vault) => (v.mode === 'live' ? '🔴 LIVE (real funds)' : '🧪 Paper (simulated money)');
+  const manual = (v: { strategy: Strategy | null }) => !!v.strategy && settingsOf(v.strategy).toggles.askBeforeTrading;
+  const tradingLabel = (v: { strategy: Strategy | null }) =>
+    manual(v) ? '✋ Manual: the agent asks before every trade' : '🤖 Automatic: the agent trades by itself';
 
-  const menu = (v: Vault): Keyboard => [
+  const menu = (v: Vault & { strategy: Strategy | null }): Keyboard => [
     [
       { text: '📊 Status', callback_data: 'st' },
       { text: '➕ Add LP', callback_data: 'add' },
     ],
     [
       { text: '💼 Positions', callback_data: 'pos' },
+      { text: '🗳 Approvals', callback_data: 'apv' },
+    ],
+    [
+      { text: manual(v) ? '✋ Mode: Manual' : '🤖 Mode: Auto', callback_data: 'mode' },
       v.status === 'running' ? { text: '⏸ Pause agent', callback_data: 'pause' } : { text: '▶️ Resume agent', callback_data: 'resume' },
     ],
     [{ text: '🌐 Open app', url: `${d.appUrl}/app` }],
@@ -94,8 +128,10 @@ export function makeBot(d: BotDeps) {
 
   const welcome = (c: Ctx): Screen => ({
     text:
-      `👋 <b>Binwise</b> · ${esc(c.vault.name)}\n${modeLabel(c.vault)}\n\n` +
-      `The agent runs by itself every minute: it picks pools, adds liquidity, rebalances when it pays and exits before downtrends.\n\n` +
+      `👋 <b>Binwise</b> · ${esc(c.vault.name)}\n${modeLabel(c.vault)}\n${tradingLabel(c.vault)}\n\n` +
+      (manual(c.vault)
+        ? `The agent scans pools every minute and sends you each trade it wants to make. Nothing runs until you tap ✅ Approve.\n\n`
+        : `The agent runs by itself every minute: it picks pools, adds liquidity, rebalances when it pays and exits before downtrends.\n\n`) +
       `Use the buttons to check on it, or add LP yourself.`,
     keyboard: menu(c.vault),
   });
@@ -113,7 +149,7 @@ export function makeBot(d: BotDeps) {
     const agent = c.vault.status === 'running' ? `▶️ Running · cycle ${c.vault.cycle}` : `⏸ Paused${c.vault.pausedReason ? ` (${esc(c.vault.pausedReason)})` : ''}`;
     return {
       text:
-        `📊 <b>${esc(c.vault.name)}</b>\n${modeLabel(c.vault)}\nAgent: ${agent}\n\n` +
+        `📊 <b>${esc(c.vault.name)}</b>\n${modeLabel(c.vault)}\n${tradingLabel(c.vault)}\nAgent: ${agent}\n\n` +
         `Value: <b>${usd(m.value)}</b>\n` +
         `Net vs holding: <b>${pct(m.netVsHold)}</b>\n` +
         `Idle (not in a pool): ${usd(m.idle)}\n` +
@@ -233,6 +269,29 @@ export function makeBot(d: BotDeps) {
     };
   }
 
+  async function approvals(c: Ctx): Promise<Screen> {
+    const list = await pendingProposals(db, c.vault.id, now());
+    if (!list.length)
+      return {
+        text: manual(c.vault)
+          ? '🗳 <b>Approvals</b>\n\nNothing is waiting. The agent sends each trade here as soon as it wants to make one.'
+          : '🗳 <b>Approvals</b>\n\nThe agent is in <b>Automatic</b> mode, so it trades by itself. Switch to ✋ Manual to approve each trade first.',
+        keyboard: menu(c.vault),
+      };
+    return {
+      text: `🗳 <b>Waiting for your approval</b>\n\n${list
+        .map((p, i) => `${i + 1}. ${KIND_ICON[p.kind] ?? '•'} <b>${esc(p.title)}</b>\n    ${esc(p.reason).slice(0, 160)}\n    Expires in ${minutesLeft(p, now())} min`)
+        .join('\n')}`,
+      keyboard: [
+        ...list.map((p, i) => [
+          { text: `✅ Approve #${i + 1}`, callback_data: `ok|${p.id}` },
+          { text: `❌ Reject #${i + 1}`, callback_data: `no|${p.id}` },
+        ]),
+        ...back,
+      ],
+    };
+  }
+
   // ---------------------------------------------------------------- input
 
   async function link(chatId: string, code: string) {
@@ -258,7 +317,15 @@ export function makeBot(d: BotDeps) {
     if (!c) return tg.send(chatId, notLinked.text, { html: true });
     const cmd = text.split(/[\s@]/)[0].toLowerCase();
     const screen =
-      cmd === '/status' ? await status(c) : cmd === '/add' ? await pools(c) : cmd === '/positions' ? await positions(c) : welcome(c);
+      cmd === '/status'
+        ? await status(c)
+        : cmd === '/add'
+          ? await pools(c)
+          : cmd === '/positions'
+            ? await positions(c)
+            : cmd === '/approvals'
+              ? await approvals(c)
+              : welcome(c);
     await tg.send(chatId, screen.text, { html: true, keyboard: screen.keyboard });
   }
 
@@ -317,6 +384,39 @@ export function makeBot(d: BotDeps) {
         await d.enqueue(c.vault.id, { id: requestId + (op === 'f' ? `-f-${p.id}` : ''), action: op === 'f' ? 'claim' : 'close', positionId: p.id, chatId });
         if (op === 'f') return tg.answer(q.id, 'Claiming fees…');
         return show({ text: `⏳ Closing <b>${esc(pair)}</b>…\n\nYou'll get a message here when it's done.` }, 'Sent to the agent');
+      }
+      case 'apv':
+        return show(await approvals(c));
+      case 'ok':
+      case 'no': {
+        try {
+          const p = op === 'ok' ? await approveProposal(db, c.vault.id, a, now()) : await rejectProposal(db, c.vault.id, a, now());
+          if (op === 'ok') {
+            await d.enqueue(c.vault.id, { id: `approve-${p.id}`, action: 'proposal', proposalId: p.id, chatId });
+            return show({ text: `✅ Approved: <b>${esc(p.title)}</b>\n\n⏳ The agent is doing it now. You'll get a message when it's done.` }, 'Approved');
+          }
+          return show({ text: `❌ Rejected: <b>${esc(p.title)}</b>\n\nThe agent won't propose this again for a few hours.`, keyboard: back }, 'Rejected');
+        } catch (e) {
+          if (!(e instanceof ProposalError)) throw e;
+          return show({ text: `ℹ️ ${esc(e.message)}`, keyboard: back }, e.message.slice(0, 190));
+        }
+      }
+      case 'mode': {
+        if (!c.vault.strategy) return show(welcome(c));
+        const next = !manual(c.vault);
+        const toggles = { ...settingsOf(c.vault.strategy).toggles, askBeforeTrading: next };
+        const strategy = await db.strategy.update({ where: { id: c.vault.strategy.id }, data: { toggles } });
+        await db.decision.create({
+          data: {
+            vaultId: c.vault.id,
+            type: 'hold',
+            title: next ? 'Manual mode on' : 'Automatic mode on',
+            reason: next ? 'Set from Telegram: the agent asks before every trade.' : 'Set from Telegram: the agent trades by itself.',
+            inputs: { manual: true },
+          },
+        });
+        if (!next) await db.proposal.updateMany({ where: { vaultId: c.vault.id, status: 'pending' }, data: { status: 'expired' } });
+        return show(welcome({ ...c, vault: { ...c.vault, strategy } }), next ? 'Manual mode: approve each trade' : 'Automatic mode');
       }
       case 'pause':
       case 'resume': {

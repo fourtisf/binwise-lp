@@ -172,6 +172,25 @@ export interface StrategyToggles {
   holderSafety: boolean;
   pauseOnVolSpikes: boolean;
   telegramAlerts: boolean;
+  /** Manual mode: the agent proposes trades and waits for the owner's approval */
+  askBeforeTrading: boolean;
+}
+
+export type ProposalKind = 'deploy' | 'rebalance' | 'exit' | 'compound';
+
+/** A trade the agent wants to make, waiting for the owner's approval (manual mode). */
+export interface Proposal {
+  id: string;
+  vaultId: string;
+  kind: ProposalKind;
+  poolId?: string;
+  positionId?: string;
+  pair: string;
+  title: string;
+  reason: string;
+  /** Unix ms */
+  createdAt: number;
+  expiresAt: number;
 }
 
 export interface StrategySettings {
@@ -235,7 +254,9 @@ export type StreamEvent =
   | { type: 'tick'; tick: PositionTick }
   | { type: 'vault'; vault: VaultLive }
   | { type: 'cycle'; cycle: CycleState }
-  | { type: 'decision'; decision: Decision };
+  | { type: 'decision'; decision: Decision }
+  /** Manual mode: the list of proposals waiting for approval changed */
+  | { type: 'proposals'; pending: number };
 
 /** Public read-only demo stream for the landing page window. */
 export interface DemoStats {
