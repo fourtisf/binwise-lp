@@ -11,11 +11,12 @@ import { useAppData } from '@/lib/store';
 import { useUi } from '@/lib/ui';
 
 /**
- * Recommended: pools the agent would enter now, plus strong near-misses that only miss on the
- * user's own market-cap floor or the deploy score: score 50+, 7-day trend up, tokens on the allowlist.
+ * Recommended: pools the agent would enter now, plus good candidates that pass every safety check
+ * and are rising over 7 days (score 45+), but miss only on the deploy score, the user's market-cap
+ * floor, or a short dip on the hourly chart. Never: unsafe tokens, holder or pool risk, 7-day downtrends.
  */
-const NEAR_MISS = new Set(['Below cap floor', 'Watch']);
-const recommended = (r: PoolRow) => r.call === 'in' || (r.call === 'watch' && NEAR_MISS.has(r.callLabel) && r.score >= 50 && r.trend7d > 0);
+const NEAR_MISS = new Set(['Watch', 'Below cap floor', 'Avoid, short-term dip']);
+const recommended = (r: PoolRow) => r.call === 'in' || (NEAR_MISS.has(r.callLabel) && r.score >= 45 && r.trend7d > 0);
 
 export default function PoolsPage() {
   const { pools, ready } = useAppData();
@@ -126,7 +127,7 @@ export default function PoolsPage() {
       </div>
       <p className="dim" style={{ fontSize: 13, marginTop: 12 }}>
         {filter === 'rec'
-          ? 'Recommended: pools the agent would enter now, plus strong pools (score 50+, rising 7-day trend, allowlisted tokens) that only miss your market-cap floor or the deploy score. Lower the floor in Strategy to let the agent use them.'
+          ? 'Recommended: pools the agent would enter now (Deploy), plus safe candidates rising over 7 days (score 45+) that only miss the deploy score, your market-cap floor, or are in a short hourly dip. The agent enters those by itself once they pass; you can add LP by hand any time.'
           : 'Select a pool to see how the agent scored it.'}
       </p>
     </div>
