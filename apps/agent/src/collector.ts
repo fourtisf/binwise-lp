@@ -53,9 +53,9 @@ export interface CollectorOptions {
 
 export const DEFAULT_COLLECTOR: CollectorOptions = {
   scanLimit: 1000,
-  storeMinTvl: 100_000,
+  storeMinTvl: 50_000,
   trackMinTvl: DEFAULT_THRESHOLDS.minTvl,
-  trackLimit: 60,
+  trackLimit: 150,
   bigCapMinUsd: 100_000_000,
   bigCapPoolsPerToken: 2,
 };

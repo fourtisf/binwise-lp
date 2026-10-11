@@ -471,7 +471,7 @@ describe('telegram bot', () => {
     await press('sc|100');
     expect((await db.strategy.findFirstOrThrow()).minMcap).toBe(100);
     expect(last().text).toMatch(/Minimum token market cap: <b>\$100M<\/b>/);
-    await press('sc|7'); // not an offered value
+    await press('sc|7000'); // outside the allowed range
     expect((await db.strategy.findFirstOrThrow()).minMcap).toBe(100);
     await press('sa|40');
     expect((await db.strategy.findFirstOrThrow()).maxAllocPct).toBe(40);

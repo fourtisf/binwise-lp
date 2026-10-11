@@ -65,7 +65,8 @@ describe('assessPool', () => {
     expect(assessPool({ ...jupSol, emaBearish: true }, s, w).call).toBe('out');
   });
   it('watches pools below the market-cap floor', () => {
-    expect(assessPool({ ...jupSol, mcapM: 100 }, s, w).callLabel).toBe('Below cap floor');
+    expect(assessPool({ ...jupSol, mcapM: 0.5 }, s, w).callLabel).toBe('Below cap floor');
+    expect(assessPool({ ...jupSol, mcapM: 300 }, { ...s, minMcapM: 500 }, w).callLabel).toBe('Below cap floor');
   });
   it('skips tokens that fail the holder check when the toggle is on', () => {
     expect(assessPool({ ...jupSol, holderQuality: 0.2 }, s, w).call).toBe('out');
@@ -73,7 +74,8 @@ describe('assessPool', () => {
     expect(assessPool({ ...jupSol, holderQuality: 0.2 }, off, w).call).toBe('in');
   });
   it('never deploys below the TVL floor', () => {
-    expect(assessPool({ ...jupSol, tvl: 200_000, volume24h: 400_000 }, s, w).eligible).toBe(false);
+    expect(assessPool({ ...jupSol, tvl: 40_000, volume24h: 80_000 }, s, w).eligible).toBe(false);
+    expect(assessPool({ ...jupSol, tvl: 40_000, volume24h: 80_000 }, s, w).reason).toMatch(/\$50k floor/);
   });
 });
 

@@ -371,7 +371,7 @@ export function makeBot(d: BotDeps) {
   const CAP_OPTIONS = [25, 50, 100, 250, 500, 1000, 5000];
   const POOL_PCTS = [10, 25, 40, 60].filter((p) => p >= STRATEGY_LIMITS.maxAllocPct[0] && p <= STRATEGY_LIMITS.maxAllocPct[1]);
   /** Minimum token market cap choices, $M */
-  const MCAPS = [50, 100, 250, 500, 1000, 2000].filter((m) => m >= STRATEGY_LIMITS.minMcapM[0] && m <= STRATEGY_LIMITS.minMcapM[1]);
+  const MCAPS = [1, 10, 50, 100, 500, 1000].filter((m) => m >= STRATEGY_LIMITS.minMcapM[0] && m <= STRATEGY_LIMITS.minMcapM[1]);
   const mcapText = (m: number) => (m >= 1000 ? `$${m / 1000}B` : `$${m}M`);
 
   function settings(c: Ctx): Screen {

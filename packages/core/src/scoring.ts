@@ -153,7 +153,7 @@ export interface AgentThresholds {
 }
 
 export const DEFAULT_THRESHOLDS: AgentThresholds = {
-  minTvl: 500_000,
+  minTvl: 50_000,
   deployScore: 62,
   exitScore: 45,
   exitScoreStreak: 3,
@@ -223,7 +223,7 @@ export function assessPool(
   if (!p.bothAllowed) return out('watch', 'Not on allowlist', 'One of the tokens is not on the allowlist yet.');
   if (s.toggles.holderSafety && p.holderQuality != null && p.holderQuality < t.minHolderQuality)
     return out('out', 'Avoid, holders', 'Holder check failed: supply is too concentrated in a few wallets.');
-  if (p.tvl < t.minTvl) return out('watch', 'Below TVL floor', `TVL is under the ${mcapLabel(t.minTvl / 1e6)} floor.`);
+  if (p.tvl < t.minTvl) return out('watch', 'Below TVL floor', `TVL is under the ${t.minTvl >= 1e6 ? mcapLabel(t.minTvl / 1e6) : '$' + Math.round(t.minTvl / 1000) + 'k'} floor.`);
   if (p.mcapM == null) return out('watch', 'Watch', 'Market cap is unknown, so the agent keeps watching.');
   if (p.mcapM < s.minMcapM) return out('watch', 'Below cap floor', `Market cap is below your ${mcapLabel(s.minMcapM)} floor.`);
   if (r.score >= t.deployScore)

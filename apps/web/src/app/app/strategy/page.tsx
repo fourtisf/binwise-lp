@@ -25,7 +25,7 @@ type NumKey = keyof typeof STRATEGY_LIMITS;
 
 const SLIDERS: { key: NumKey; id: string; label: string; text: string; step?: number; out: (v: number) => string }[] = [
   { key: 'maxAllocPct', id: 'rAlloc', label: 'Max per pool', text: 'Share of the vault one pool can hold.', out: (v) => v + '%' },
-  { key: 'minMcapM', id: 'rMcap', label: 'Minimum market cap', text: 'Smaller tokens are never farmed.', step: 50, out: fmtM },
+  { key: 'minMcapM', id: 'rMcap', label: 'Minimum market cap', text: 'Smaller tokens are never farmed.', step: 1, out: fmtM },
   { key: 'trendExitPct', id: 'rTrend', label: 'Exit when 7-day trend is below', text: 'Stops the agent from collecting a falling token.', out: (v) => '−' + Math.abs(v) + '%' },
   { key: 'dailyStopPct', id: 'rStop', label: 'Daily loss stop', text: 'Pauses the agent after this drop in one day.', out: (v) => v + '%' },
 ];

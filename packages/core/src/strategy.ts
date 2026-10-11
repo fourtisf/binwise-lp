@@ -3,7 +3,7 @@ import type { RiskProfile, StrategySettings } from './types';
 /** Slider limits on the Strategy page; the API rejects values outside them. */
 export const STRATEGY_LIMITS = {
   maxAllocPct: [10, 60],
-  minMcapM: [50, 5000],
+  minMcapM: [1, 5000],
   trendExitPct: [-30, -3],
   dailyStopPct: [1, 15],
 } as const;
@@ -13,14 +13,14 @@ export const STRATEGY_PRESETS: Record<
   Omit<StrategySettings, 'profile' | 'toggles' | 'maxPositionUsd'> & { rebalancesPerDay: number }
 > = {
   conservative: { maxAllocPct: 20, minMcapM: 2000, trendExitPct: -8, dailyStopPct: 2, rebalancesPerDay: 0.6 },
-  balanced: { maxAllocPct: 25, minMcapM: 500, trendExitPct: -12, dailyStopPct: 4, rebalancesPerDay: 1.4 },
-  aggressive: { maxAllocPct: 40, minMcapM: 100, trendExitPct: -20, dailyStopPct: 8, rebalancesPerDay: 3.1 },
+  balanced: { maxAllocPct: 25, minMcapM: 1, trendExitPct: -12, dailyStopPct: 4, rebalancesPerDay: 1.4 },
+  aggressive: { maxAllocPct: 40, minMcapM: 1, trendExitPct: -20, dailyStopPct: 8, rebalancesPerDay: 3.1 },
 };
 
 export const DEFAULT_STRATEGY: StrategySettings = {
   profile: 'balanced',
   maxAllocPct: 25,
-  minMcapM: 500,
+  minMcapM: 1,
   trendExitPct: -12,
   dailyStopPct: 4,
   maxPositionUsd: 0,
