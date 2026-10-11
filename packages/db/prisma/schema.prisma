@@ -231,6 +231,8 @@ model Position {
   pool             Pool            @relation(fields: [poolId], references: [id])
   /// On-chain position account (null in paper mode)
   address          String?
+  /// Opened by hand into a pool the agent wouldn't pick: the agent manages it but never exits it on its trend rules
+  manual           Boolean         @default(false)
   binStep          Int
   lowerBin         Int
   upperBin         Int

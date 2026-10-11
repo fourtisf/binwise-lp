@@ -41,6 +41,8 @@ export interface ManualRequest {
   poolId?: string;
   /** Deploy size in USD; 0 = let the agent pick */
   usd?: number;
+  /** Deploy into a pool the agent wouldn't pick (the owner confirmed the risk) */
+  override?: boolean;
   /** Withdraw: token, share of the idle balance (1–100) and destination */
   mint?: string;
   pct?: number;
@@ -232,7 +234,8 @@ export function makeBot(d: BotDeps) {
   }
 
   /** Pools the agent rates safe to enter right now for this vault's strategy (best first). */
-  async function eligiblePools(c: Ctx) {
+  /** Every tracked pool with fresh data (not already held), with the agent's call for this vault. */
+  async function assessedPools(c: Ctx) {
     const params = d.params ? await d.params() : await activeParams(db);
     const snaps = await db.poolSnapshot.findMany({
       where: { ts: { gte: new Date(now() - 10 * 60_000) } },
@@ -249,22 +252,110 @@ export function makeBot(d: BotDeps) {
       const ty = tokens.get(s.pool.mintB);
       if (held.has(s.poolId) || tx?.priceUsd == null || ty?.priceUsd == null) continue;
       const a = assessPool(await assessmentInput(s, tx, ty, params), strategySettings(c.vault.strategy!), strategyWeights(c.vault.strategy!), params);
-      if (a.eligible) out.push({ snap: s, score: a.score, pair: `${s.pool.tokenA} / ${s.pool.tokenB}` });
+      out.push({ snap: s, score: a.score, a, pair: `${s.pool.tokenA} / ${s.pool.tokenB}` });
     }
-    return { pools: out.sort((x, y) => y.score - x.score).slice(0, 5), params };
+    return { all: out.sort((x, y) => y.score - x.score), params };
+  }
+
+  async function eligiblePools(c: Ctx) {
+    const { all, params } = await assessedPools(c);
+    return { pools: all.filter((p) => p.a.eligible).slice(0, 5), params };
+  }
+
+  const poolLine = (p: { snap: { volume24h: number; tvl: number; trend7d: number | null }; pair: string; score: number }, i: number) =>
+    `${i + 1}. <b>${esc(p.pair)}</b> · score ${p.score}\n    TVL ${usd(p.snap.tvl)} · Vol/TVL ${(p.snap.volume24h / Math.max(1, p.snap.tvl)).toFixed(1)}x · 7d ${p.snap.trend7d != null ? pct(p.snap.trend7d) : 'n/a'}`;
+  const otherButtons: Keyboard = [
+    [
+      { text: '🧭 Other pools (manual)', callback_data: 'pox' },
+      { text: '🔎 Search a token', callback_data: 'psx' },
+    ],
+  ];
+
+  /** Pools the agent wouldn't enter itself: the owner may still add LP by hand, at their own risk. */
+  async function otherPools(c: Ctx, query?: string): Promise<Screen> {
+    const { all } = await assessedPools(c);
+    const q = query?.trim().replace(/^\$/, '').toLowerCase();
+    const list = (q ? all.filter((p) => p.snap.pool.tokenA.toLowerCase().includes(q) || p.snap.pool.tokenB.toLowerCase().includes(q)) : all.filter((p) => !p.a.eligible)).slice(0, 8);
+    const title = q ? `🔎 <b>Pools with "${esc(query!.trim())}"</b>` : `🧭 <b>Other pools</b>`;
+    if (!list.length)
+      return { text: `${title}\n\nNothing found among the pools the agent tracks.`, keyboard: [...otherButtons, [{ text: '⬅️ Add LP', callback_data: 'add' }]] };
+    return {
+      text:
+        `${title}\n\n` +
+        list.map((p, i) => `${poolLine(p, i)}\n    Agent: ${p.a.eligible ? '✅ would enter' : `⚠️ ${esc(p.a.callLabel)}`}`).join('\n') +
+        (q ? '' : `\n\nThe agent won't enter these by itself. You can add LP by hand at your own risk.`),
+      keyboard: [
+        ...list.map((p) => [{ text: `${p.a.eligible ? '' : '⚠️ '}${p.pair} · ${p.score}`, callback_data: `${p.a.eligible ? 'p' : 'px'}|${p.snap.poolId}` }]),
+        ...otherButtons,
+        [{ text: '⬅️ Add LP', callback_data: 'add' }],
+      ],
+    };
+  }
+
+  /** Sizing for a pool the agent wouldn't pick: the same limits, without the agent's checks. */
+  async function sizingManual(c: Ctx, poolId: string) {
+    const { all, params } = await assessedPools(c);
+    const p = all.find((x) => x.snap.poolId === poolId);
+    if (!p) return null;
+    const m = await money(c.vault.id);
+    const st = strategySettings(c.vault.strategy!);
+    let max = Math.min(m.idle * 0.98, positionSizeUsd(m.value, st.maxAllocPct, p.snap.tvl, params), positionCapUsd(st));
+    if (c.vault.mode === 'live') {
+      const live = liveLimits();
+      max = m.open.length >= live.maxPositions ? 0 : Math.min(max, live.maxUsd - m.open.reduce((s, x) => s + x.valueUsd, 0));
+    }
+    return { p, idle: m.idle, max: Math.max(0, max) };
+  }
+
+  async function amountManual(c: Ctx, poolId: string): Promise<Screen> {
+    const z = await sizingManual(c, poolId);
+    if (!z) return { text: 'No fresh data for this pool right now. Try again in a minute.', keyboard: [[{ text: '⬅️ Other pools', callback_data: 'pox' }]] };
+    if (z.p.a.eligible) return amount(c, poolId);
+    const head = `⚠️ <b>${esc(z.p.pair)}</b> · score ${z.p.score}\nAgent's call: <b>${esc(z.p.a.callLabel)}</b>\n${esc(z.p.a.reason)}\n\n`;
+    if (z.max < MIN_POSITION_USD)
+      return { text: `${head}Not enough idle funds within your limits (you can add up to ${usd(z.max)} now). Deposit first: tap 💳 Wallet.`, keyboard: back };
+    const options = AMOUNTS.filter((a) => a <= z.max);
+    return {
+      text: `${head}How much, by hand? Idle: ${usd(z.idle)} · max for this pool now: ${usd(z.max)}`,
+      keyboard: [
+        ...(options.length ? [options.map((a) => ({ text: usd(a), callback_data: `ax|${poolId}|${a}` }))] : []),
+        [{ text: `Max (${usd(z.max)})`, callback_data: `ax|${poolId}|0` }],
+        [{ text: '⬅️ Other pools', callback_data: 'pox' }],
+      ],
+    };
+  }
+
+  async function confirmManual(c: Ctx, poolId: string, amt: number): Promise<Screen> {
+    const z = await sizingManual(c, poolId);
+    if (!z) return { text: 'No fresh data for this pool right now.', keyboard: [[{ text: '⬅️ Other pools', callback_data: 'pox' }]] };
+    const size = amt > 0 ? Math.min(amt, z.max) : z.max;
+    return {
+      text:
+        `⚠️ Add <b>${usd(size)}</b> to <b>${esc(z.p.pair)}</b> by hand?\n\n` +
+        `The agent would <b>not</b> enter this pool: ${esc(z.p.a.callLabel)}.\n` +
+        `• It rebalances and claims fees for you, but <b>won't close it</b> on its trend rules. Close it yourself in 💼 Positions.\n` +
+        `• The daily loss stop and safety exits (pool draining, no market data) still apply.\n` +
+        `• ${modeLabel(c.vault)}` +
+        (c.vault.mode === 'live' ? '\n\n⚠️ Real funds, at your own risk. No strategy is guaranteed to profit.' : ''),
+      keyboard: [
+        [
+          { text: '✅ Yes, at my own risk', callback_data: `gx|${poolId}|${amt}` },
+          { text: '✖️ Cancel', callback_data: 'pox' },
+        ],
+      ],
+    };
   }
 
   async function pools(c: Ctx): Promise<Screen> {
     const { pools } = await eligiblePools(c);
     if (!pools.length)
-      return { text: '➕ <b>Add LP</b>\n\nNo pool passes the agent\'s safety checks right now. It keeps watching and will deploy by itself when one does.', keyboard: back };
-    const lines = pools.map(
-      (p, i) =>
-        `${i + 1}. <b>${esc(p.pair)}</b> · score ${p.score}\n    Vol/TVL ${(p.snap.volume24h / Math.max(1, p.snap.tvl)).toFixed(1)}x · 7d ${p.snap.trend7d != null ? pct(p.snap.trend7d) : 'n/a'}`,
-    );
+      return {
+        text: "➕ <b>Add LP</b>\n\nNo pool passes the agent's safety checks right now. It keeps watching and will deploy by itself when one does.\n\nYou can still pick any tracked pool by hand: 🧭 Other pools, or 🔎 search a token.",
+        keyboard: [...otherButtons, ...back],
+      };
     return {
-      text: `➕ <b>Add LP</b>\n\nPools the agent rates safe to enter now (higher score = better):\n\n${lines.join('\n')}\n\nPick one:`,
-      keyboard: [...pools.map((p) => [{ text: `${p.pair} · ${p.score}`, callback_data: `p|${p.snap.poolId}` }]), ...back],
+      text: `➕ <b>Add LP</b>\n\nPools the agent rates safe to enter now (higher score = better):\n\n${pools.map(poolLine).join('\n')}\n\nPick one, or 🧭 see other pools you can add by hand:`,
+      keyboard: [...pools.map((p) => [{ text: `${p.pair} · ${p.score}`, callback_data: `p|${p.snap.poolId}` }]), ...otherButtons, ...back],
     };
   }
 
@@ -327,7 +418,7 @@ export function makeBot(d: BotDeps) {
     if (!m.open.length) return { text: '💼 <b>Positions</b>\n\nNo open positions yet. Tap ➕ Add LP, or let the agent deploy by itself.', keyboard: menu(c.vault) };
     const lines = m.open.map(
       (p, i) =>
-        `${i + 1}. <b>${esc(p.pool.tokenA)} / ${esc(p.pool.tokenB)}</b> ${p.inRange ? '🟢 in range' : '🟠 out of range'}\n` +
+        `${i + 1}. <b>${esc(p.pool.tokenA)} / ${esc(p.pool.tokenB)}</b> ${p.inRange ? '🟢 in range' : '🟠 out of range'}${p.manual ? ' · ✋ manual (you close it)' : ''}\n` +
         `    Value ${usd(p.valueUsd)} · fees ${usd(p.feesUnclaimedUsd + p.feesClaimedUsd)} · vs hold ${pct(p.netVsHold)}`,
     );
     return {
@@ -688,6 +779,12 @@ export function makeBot(d: BotDeps) {
     if (!c) {
       return tg.send(chatId, notLinked.text, { html: true, keyboard: notLinked.keyboard });
     }
+    // Add LP → Search a token: the next message is the token name.
+    if (!text.startsWith('/') && (await state.get(chatId)) === 'psearch') {
+      await state.del(chatId);
+      const s2 = await otherPools(c, text.slice(0, 30));
+      return tg.send(chatId, s2.text, { html: true, keyboard: s2.keyboard });
+    }
     // Settings → Type an amount: the next number is the max per position.
     if (!text.startsWith('/') && (await state.get(chatId)) === 'maxusd') {
       const n = Number(text.replace(/[$,\s]/g, ''));
@@ -770,6 +867,23 @@ export function makeBot(d: BotDeps) {
         const amt = Number(b) || 0;
         await d.enqueue(c.vault.id, { id: requestId, action: 'deploy', poolId: a, usd: amt > 0 ? Math.min(amt, z.max) : 0, chatId });
         return show({ text: `⏳ Adding LP to <b>${esc(z.p.pair)}</b>…\n\nYou'll get a message here when it's done (usually under a minute).` }, 'Sent to the agent');
+      }
+      case 'pox':
+        await state.del(chatId);
+        return show(await otherPools(c));
+      case 'psx':
+        await state.set(chatId, 'psearch', 600);
+        return show({ text: '🔎 Send a token name, e.g. <code>BONK</code> or <code>WIF</code>.', keyboard: [[{ text: '✖️ Cancel', callback_data: 'add' }]] });
+      case 'px':
+        return show(await amountManual(c, a));
+      case 'ax':
+        return show(await confirmManual(c, a, Number(b) || 0));
+      case 'gx': {
+        const z = await sizingManual(c, a);
+        if (!z || z.max < MIN_POSITION_USD) return show(await amountManual(c, a), "Can't add here right now");
+        const amt = Number(b) || 0;
+        await d.enqueue(c.vault.id, { id: requestId, action: 'deploy', poolId: a, usd: amt > 0 ? Math.min(amt, z.max) : z.max, chatId, override: true });
+        return show({ text: `⏳ Adding LP to <b>${esc(z.p.pair)}</b> by hand…\n\nYou'll get a message here when it's done.` }, 'Sent to the agent');
       }
       case 'pos':
         return show(await positions(c));

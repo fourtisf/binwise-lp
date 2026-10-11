@@ -62,6 +62,8 @@ interface AppData {
   depositLive: (signature: string) => Promise<boolean>;
   claim: (p: PositionView) => void;
   close: (p: PositionView) => void;
+  /** Add LP by hand (override: a pool the agent wouldn't enter; the owner accepted the risk) */
+  deploy: (poolId: string, usd: number, override: boolean) => void;
   /** Re-reads who is signed in and which vault to show */
   reload: () => void;
   /** Runs `fn` only for a signed-in owner; otherwise asks to connect a wallet. */
@@ -325,6 +327,8 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
           run(client?.claim(p.id), (r) => toast(r.queued ? `Claiming fees from ${p.pair}…` : `Claimed ${usd(r.amount ?? 0, 2)} from ${p.pair}`)),
         ),
       close: (p) => guard(() => run(client?.close(p.id), (r) => toast(r.queued ? `Closing ${p.pair}…` : `Closed ${p.pair}`))),
+      deploy: (poolId, amount, override) =>
+        guard(() => run(client?.deploy(poolId, amount, override), (r) => toast(`Adding ${amount > 0 ? usd(amount) + ' ' : ''}LP to ${r.pair}… The result shows in Activity.`))),
       series: (id) => seriesRef.current.get(id),
       onTick: (id, fn) => {
         const set = tickFns.current.get(id) ?? new Set<TickFn>();

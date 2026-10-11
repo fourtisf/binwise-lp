@@ -256,6 +256,14 @@ describe('vaults', () => {
     expect(res.statusCode).toBe(202);
     const queued = JSON.parse((await redis.lindex(REDIS_KEYS.actions(id), 0))!);
     expect(queued).toMatchObject({ positionId: p.id, action: 'close' });
+
+    // Add LP by hand from the pool drawer: queued with the owner's risk choice.
+    const d = await app.inject({ method: 'POST', url: `/vaults/${id}/deploy`, headers, payload: { poolId: 'P1', usd: 120, override: true } });
+    expect(d.statusCode).toBe(202);
+    expect(d.json().pair).toBe('SOL / USDC');
+    expect(JSON.parse((await redis.lindex(REDIS_KEYS.actions(id), 0))!)).toMatchObject({ action: 'deploy', poolId: 'P1', usd: 120, override: true });
+    expect((await app.inject({ method: 'POST', url: `/vaults/${id}/deploy`, headers, payload: { poolId: 'nope', usd: 1 } })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'POST', url: `/vaults/${id}/deploy`, payload: { poolId: 'P1', usd: 1 } })).statusCode).toBe(401);
   });
 });
 

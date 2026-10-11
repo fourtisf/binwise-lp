@@ -78,6 +78,7 @@ export function createHttpClient(api: string, ws: string): BinwiseClient {
     depositLive: (signature) => post(`${v()}/deposit`, { signature }),
     claim: (id) => post(`/positions/${encodeURIComponent(id)}/claim`),
     close: (id) => post(`/positions/${encodeURIComponent(id)}/close`),
+    deploy: (poolId, usd, override) => post(`/vaults/${vault}/deploy`, { poolId, usd, override }),
     telegramLink: () => post('/me/telegram/link'),
     proposals: () => req(`${v()}/proposals`),
     approve: (id) => post(`/proposals/${encodeURIComponent(id)}/approve`),

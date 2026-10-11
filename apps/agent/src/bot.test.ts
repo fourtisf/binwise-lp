@@ -4,7 +4,7 @@ import { PaperExecutor, SOL_MINT, createAgentKey, exportAgentSecret, sealImporte
 import { Keypair } from '@solana/web3.js';
 import { randomBytes } from 'node:crypto';
 import { collectOnce, DEFAULT_COLLECTOR } from './collector';
-import { runManualAction, runManualDeploy, type AgentDeps, type VaultWithStrategy } from './agent';
+import { runManualAction, runManualDeploy, runVaultCycle, type AgentDeps, type VaultWithStrategy } from './agent';
 import { makeBot, memoryChatState, proposalMessage, resultMessage, type ManualRequest } from './bot';
 import { runWithdraw, type WithdrawChain } from './wallet';
 import type { Keyboard, TelegramApi, TgUpdate } from './telegram';
@@ -181,6 +181,35 @@ describe('telegram bot', () => {
     await press('add');
     expect(last().text).toMatch(/No pool passes the agent's safety checks/);
     await expect(runManualDeploy(agentDeps(), await vault(), POOL, 100, 'x')).rejects.toThrow(/won't enter this pool/);
+
+    // By hand, at the owner's own risk: listed under Other pools, with a warning, then opened as a manual position.
+    expect(callbackOf('🧭 Other pools (manual)')).toBe('pox');
+    await press('pox');
+    expect(last().text).toMatch(/JUP \/ USDC/);
+    expect(callbackOf(buttons().find((x) => x.text.includes('JUP / USDC'))!.text)).toBe(`px|${POOL}`);
+    await press(`px|${POOL}`);
+    expect(last().text).toMatch(/Agent's call: <b>Avoid/);
+    await press(`ax|${POOL}|100`);
+    expect(last().text).toMatch(/won't close it/);
+    await press(`gx|${POOL}|100`, 91);
+    expect(queue.at(-1)).toMatchObject({ action: 'deploy', poolId: POOL, usd: 100, override: true });
+    const r = await runManualDeploy(agentDeps(), await vault(), POOL, 100, 'manual-1', 'Requested from Telegram', { override: true });
+    expect(resultMessage(r)).toMatch(/at your own risk/);
+    const pos = await db.position.findFirstOrThrow();
+    expect(pos.manual).toBe(true);
+
+    // The agent keeps it through the downtrend: no trend exit for a manual position.
+    for (let i = 0; i < 3; i++) {
+      now += 60_000;
+      await collectOnce({ db, meteora: asMeteora(meteora), now: () => now }, DEFAULT_COLLECTOR);
+      await runVaultCycle(agentDeps(), await vault());
+    }
+    expect((await db.position.findUniqueOrThrow({ where: { id: pos.id } })).status).toBe('open');
+
+    // Search by token name.
+    await press('psx');
+    await say('jup');
+    expect(last().text).toMatch(/Pools with "jup"/);
   });
 
   it('shows positions with Close, asks before closing, and only touches this chat\'s vault', async () => {

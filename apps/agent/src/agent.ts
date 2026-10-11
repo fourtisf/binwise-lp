@@ -110,7 +110,7 @@ type Plan =
   | { kind: 'claim'; pos: Position; view: PoolView; reason: string }
   | { kind: 'rebalance'; pos: Position; view: PoolView; reason: string; binsEachSide: number; side: LiquiditySide }
   | { kind: 'compound'; pos: Position; view: PoolView; reason: string }
-  | { kind: 'deploy'; view: PoolView; sizeUsd: number; shape: LiquidityShape; binsEachSide: number; side: LiquiditySide; reason: string };
+  | { kind: 'deploy'; view: PoolView; sizeUsd: number; shape: LiquidityShape; binsEachSide: number; side: LiquiditySide; reason: string; manual?: boolean };
 
 const usd = (n: number, d = 0) => '$' + n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 const pairOf = (v: PoolView) => `${v.snap.pool.tokenA} / ${v.snap.pool.tokenB}`;
@@ -397,7 +397,11 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
       }
       const marks24 = await db.positionMark.findMany({ where: { positionId: pos.id, ts: { gte: new Date(now - 24 * 3600_000) } }, select: { netVsHold: true } });
       const oldEnough = now - pos.openedAt.getTime() >= 24 * 3600_000;
-      const why = exitReason(
+      // A position opened by hand against the agent's call stays until its owner closes it: only the
+      // safety exits above (stale data, pool risk) and the daily loss stop apply.
+      const why = pos.manual
+        ? null
+        : exitReason(
         {
           trend7d: view.snap.trend7d,
           trendExitPct: s.trendExitPct,
@@ -672,6 +676,7 @@ async function execute(
           price: v.ctx.price,
           valueUsd: r.amountX * v.ctx.usdX + r.amountY * v.ctx.usdY,
           costsUsd: r.costUsd,
+          manual: plan.manual ?? false,
         },
       });
       return { r, pos };
@@ -1089,6 +1094,8 @@ export async function runManualDeploy(
   requestedUsd: number,
   requestId: string,
   source = 'Requested from Telegram',
+  /** override: the owner chose a pool the agent wouldn't enter (after a risk warning) */
+  opts: { override?: boolean } = {},
 ): Promise<ManualResult | null> {
   const { db } = deps;
   const now = (deps.now ?? Date.now)();
@@ -1104,13 +1111,17 @@ export async function runManualDeploy(
   const view = await poolView(snap, tokens, s, strategyWeights(vault.strategy!), params);
   if (!view) throw new Error('Token prices are missing for this pool.');
   if (vault.status !== 'running') throw new Error(`The agent is paused${vault.pausedReason ? ` (${vault.pausedReason})` : ''}. Resume it first.`);
-  if (!view.a.eligible) throw new Error(`The agent won't enter this pool right now. ${view.a.reason}`);
-  if (strategySettings(vault.strategy!).toggles.pauseOnVolSpikes && view.snap.volSpike) throw new Error('Volatility is spiking in this pool. The agent waits it out.');
-  const recentExit = await db.decision.findFirst({
-    where: { vaultId: vault.id, poolId, type: 'exit', ts: { gte: new Date(now - params.reentryCooldownHours * 3600_000) } },
-  });
-  if (recentExit) throw new Error(`The agent left this pool less than ${params.reentryCooldownHours}h ago and waits before going back in.`);
-  const side = sideForRegime(view.regime, params, view.riskyIsY);
+  const override = !!opts.override && !view.a.eligible;
+  if (!override) {
+    if (!view.a.eligible) throw new Error(`The agent won't enter this pool right now. ${view.a.reason}`);
+    if (strategySettings(vault.strategy!).toggles.pauseOnVolSpikes && view.snap.volSpike) throw new Error('Volatility is spiking in this pool. The agent waits it out.');
+    const recentExit = await db.decision.findFirst({
+      where: { vaultId: vault.id, poolId, type: 'exit', ts: { gte: new Date(now - params.reentryCooldownHours * 3600_000) } },
+    });
+    if (recentExit) throw new Error(`The agent left this pool less than ${params.reentryCooldownHours}h ago and waits before going back in.`);
+  }
+  // By hand against the agent's call: a balanced position, whatever the regime.
+  const side = sideForRegime(view.regime, params, view.riskyIsY) ?? (override ? 'both' : null);
   if (!side) throw new Error('This pool is in a downtrend. The agent waits for the trend to turn.');
   const open = await db.position.findMany({ where: { vaultId: vault.id, status: 'open' } });
   if (open.some((p) => p.poolId === poolId)) throw new Error('You already have a position in this pool.');
@@ -1135,11 +1146,17 @@ export async function runManualDeploy(
     shape: shapeFor(s.profile, view.stablePair, view.snap.volatility),
     binsEachSide,
     side,
-    reason: view.a.reason,
+    reason: override ? `Opened by hand although the agent's call is "${view.a.callLabel}": ${view.a.reason}` : view.a.reason,
+    manual: override,
   };
   const r = await execute(deps, vault, executor, plan, key, s, tokens, now, params);
   const reduced = requestedUsd > 0 && size < requestedUsd - 1 ? ` Sized down from ${usd(requestedUsd)} to stay within your limits.` : '';
-  const result = { title: r.title, text: `${r.text}${reduced} ${source}; the agent manages it from here.` };
+  const result = {
+    title: r.title,
+    text: override
+      ? `${r.text}${reduced} ${source} at your own risk. The agent rebalances and claims fees, but won't close it on its trend rules: close it yourself when you want out.`
+      : `${r.text}${reduced} ${source}; the agent manages it from here.`,
+  };
   await recordManual(deps, vault, executor, poolId, 'deploy', { ...r, text: result.text }, key, { requestedUsd, sizeUsd: size });
   return result;
 }

@@ -45,6 +45,7 @@ export function createMockClient(): BinwiseClient {
     depositLive: unsupported,
     claim: (id) => call(() => engine.claim(id)),
     close: (id) => call(() => engine.close(id)),
+    deploy: unsupported,
     telegramLink: unsupported,
     // The built-in simulation trades automatically; approvals need the real API.
     proposals: () => Promise.resolve([]),

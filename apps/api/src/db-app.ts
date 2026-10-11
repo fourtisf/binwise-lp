@@ -578,6 +578,19 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     });
   });
 
+  // Add LP by hand: queued for the agent, which re-checks everything (limits, data, kill switch) before opening.
+  app.post<VP & { Body: { poolId?: string; usd?: number; override?: boolean } }>('/vaults/:id/deploy', moneyLimit, async (req, reply) => {
+    const v = await writable(req, req.params.id);
+    const poolId = String(req.body?.poolId ?? '');
+    const usd = Number(req.body?.usd ?? 0);
+    if (!Number.isFinite(usd) || usd < 0) throw new ApiError(400, 'invalid_amount', 'Enter an amount.');
+    const pool = await db.pool.findUnique({ where: { id: poolId } });
+    if (!pool) throw new ApiError(404, 'not_found', 'No pool with that id.');
+    if (v.status !== 'running') throw new ApiError(409, 'paused', 'The agent is paused. Resume it first.');
+    await redis.lpush(REDIS_KEYS.actions(v.id), JSON.stringify({ id: randomUUID(), action: 'deploy', poolId, usd, override: req.body?.override === true }));
+    return reply.status(202).send({ queued: true, pair: `${pool.tokenA} / ${pool.tokenB}` });
+  });
+
   // Manual Claim / Close: queued for the agent so execution stays in one place.
   const queueAction = (action: 'claim' | 'close') => async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
     const uid = requireUser(req);

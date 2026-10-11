@@ -11,8 +11,14 @@ import { PairIcon } from '../Tokens';
 /** Slide-out with how the agent scored a pool. */
 export function PoolDrawer() {
   const { layer, drawerPoolId, closeLayers } = useUi();
-  const { client, pools } = useAppData();
+  const { client, pools, overview, deploy } = useAppData();
   const [x, setX] = useState<PoolDetail | null>(null);
+  const [amt, setAmt] = useState('');
+  const [risk, setRisk] = useState(false);
+  useEffect(() => {
+    setAmt('');
+    setRisk(false);
+  }, [drawerPoolId]);
 
   // Re-fetch when the pool changes or the pool list refreshes (e.g. after saving a strategy).
   useEffect(() => {
@@ -106,6 +112,40 @@ export function PoolDrawer() {
               <b className="num">{fmtM(x.mcapM)}</b>
             </div>
           </div>
+          {client?.kind === 'http' && overview && !overview.readOnly && (
+            <>
+              <div className="dsec">Add LP by hand</div>
+              {x.call !== 'in' && (
+                <p className="muted" style={{ fontSize: 13, lineHeight: 1.5, marginBottom: 10 }}>
+                  The agent won&apos;t enter this pool by itself ({x.callLabel}). If you add LP here, it rebalances and claims fees, but won&apos;t
+                  close it on its trend rules: you close it yourself in Positions. The daily loss stop still applies.
+                </p>
+              )}
+              <input
+                className="capin"
+                inputMode="decimal"
+                placeholder="Amount in USD (empty: the agent sizes it)"
+                aria-label="Amount in USD"
+                value={amt}
+                onChange={(e) => setAmt(e.target.value.replace(/[^0-9.]/g, ''))}
+              />
+              {x.call !== 'in' && (
+                <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', marginTop: 12, fontSize: 12.5, lineHeight: 1.45, color: 'var(--muted)', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={risk} onChange={(e) => setRisk(e.target.checked)} style={{ marginTop: 2, accentColor: '#4BE3CF' }} />
+                  <span>I add this against the agent&apos;s call, at my own risk. No strategy is guaranteed to profit.</span>
+                </label>
+              )}
+              <button
+                className="btn btn-white"
+                style={{ width: '100%', marginTop: 12 }}
+                disabled={x.call !== 'in' && !risk}
+                onClick={() => deploy(x.id, Number(amt) || 0, x.call !== 'in')}
+              >
+                <Icon id="i-plus" />
+                Add LP to {x.pair}
+              </button>
+            </>
+          )}
         </>
       )}
     </aside>

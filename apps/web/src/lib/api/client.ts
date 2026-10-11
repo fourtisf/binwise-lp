@@ -62,6 +62,8 @@ export interface BinwiseClient {
   /** Returns the claimed amount (mock) or that the request was queued (API). */
   claim(positionId: string): Promise<{ amount?: number; queued?: boolean }>;
   close(positionId: string): Promise<{ ok?: true; queued?: boolean }>;
+  /** Add LP by hand. override: into a pool the agent wouldn't enter (the owner accepted the risk). */
+  deploy(poolId: string, usd: number, override: boolean): Promise<{ queued: boolean; pair: string }>;
   telegramLink(): Promise<{ url: string | null; code: string }>;
   /** Manual mode: trades waiting for the owner's approval */
   proposals(): Promise<Proposal[]>;
