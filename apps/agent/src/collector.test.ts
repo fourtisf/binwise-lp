@@ -35,4 +35,10 @@ describe('big-cap pools', () => {
     const picked = bigCapPools(pools, { bigCapMinUsd: 250e6, bigCapPoolsPerToken: 2 }).map((p) => p.address).sort();
     expect(picked).toEqual(['JUP-SOL-3000000', 'JUP-USDC-8000000', 'SOL-USDC-9000000'].sort());
   });
+  it('uses a known market cap when Meteora reports none', () => {
+    const BONK = tok('BONK', null);
+    const pools = [pool(BONK, SOL, 2e6)];
+    expect(bigCapPools(pools, { bigCapMinUsd: 100e6, bigCapPoolsPerToken: 2 })).toHaveLength(0);
+    expect(bigCapPools(pools, { bigCapMinUsd: 100e6, bigCapPoolsPerToken: 2 }, () => 1.2e9).map((p) => p.address)).toEqual(['BONK-SOL-2000000']);
+  });
 });

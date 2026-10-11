@@ -45,7 +45,7 @@ export interface CollectorOptions {
   trackMinTvl: number;
   /** Max pools with candles, picked by 24h volume */
   trackLimit: number;
-  /** Also always track big caps: verified non-stable tokens at or above this market cap (USD)… */
+  /** Also always track big caps (incl. established memecoins like BONK, WIF): verified non-stable tokens at or above this market cap (USD)… */
   bigCapMinUsd: number;
   /** …through their largest pools against SOL or a stablecoin (or another big cap), this many per token */
   bigCapPoolsPerToken: number;
@@ -56,7 +56,7 @@ export const DEFAULT_COLLECTOR: CollectorOptions = {
   storeMinTvl: 100_000,
   trackMinTvl: DEFAULT_THRESHOLDS.minTvl,
   trackLimit: 60,
-  bigCapMinUsd: 250_000_000,
+  bigCapMinUsd: 100_000_000,
   bigCapPoolsPerToken: 2,
 };
 
@@ -67,8 +67,13 @@ const stableToken = (t: MeteoraToken) => isStableSymbol({ symbol: t.symbol, isVe
  * The big Solana tokens (SOL, JUP, BONK, WIF, JTO, PYTH, RAY, …) are always tracked, whatever their
  * volume rank: each one's largest pools against SOL, a stablecoin or another big cap.
  */
-export function bigCapPools(pools: MeteoraPool[], o: Pick<CollectorOptions, 'bigCapMinUsd' | 'bigCapPoolsPerToken'>): MeteoraPool[] {
-  const big = (t: MeteoraToken) => t.is_verified && !stableToken(t) && (t.market_cap ?? 0) >= o.bigCapMinUsd;
+export function bigCapPools(
+  pools: MeteoraPool[],
+  o: Pick<CollectorOptions, 'bigCapMinUsd' | 'bigCapPoolsPerToken'>,
+  /** Known market caps (USD) for tokens Meteora reports none for */
+  knownMcap: (mint: string) => number | null | undefined = () => null,
+): MeteoraPool[] {
+  const big = (t: MeteoraToken) => t.is_verified && !stableToken(t) && (t.market_cap ?? knownMcap(t.address) ?? 0) >= o.bigCapMinUsd;
   const quote = (t: MeteoraToken) => t.address === SOL_MINT || stableToken(t) || big(t);
   const byToken = new Map<string, MeteoraPool[]>();
   for (const p of pools)
@@ -95,7 +100,8 @@ async function upsertToken(db: PrismaClient, t: MeteoraToken) {
       holders: t.holders ?? null,
       freezeAuthorityDisabled: t.freeze_authority_disabled ?? null,
       priceUsd: t.price ?? null,
-      mcapUsd: t.market_cap ?? null,
+      // Meteora sometimes has no market cap: keep the last known one (e.g. from Jupiter).
+      ...(t.market_cap != null ? { mcapUsd: t.market_cap } : {}),
     },
     create: {
       mint: t.address,
@@ -190,6 +196,8 @@ async function enrichTokens(deps: CollectorDeps, mints: string[]) {
           ...(t.audit?.topHoldersPercentage != null ? { topHoldersPct: t.audit.topHoldersPercentage, holderCheckedAt: null } : {}),
         },
       });
+      // Market cap from Jupiter only where Meteora gave none.
+      if (t.mcap != null) await deps.db.token.updateMany({ where: { mint: t.id, mcapUsd: null }, data: { mcapUsd: t.mcap } });
     }
   } catch (e) {
     (deps.log ?? (() => {}))(`[collector] token metadata: ${(e as Error).message}`);
@@ -236,7 +244,9 @@ export async function collectOnce(deps: CollectorDeps, o: CollectorOptions = DEF
     .filter((p) => p.tvl >= o.trackMinTvl)
     .sort((a, b) => (b.volume['24h'] ?? 0) - (a.volume['24h'] ?? 0))
     .slice(0, o.trackLimit);
-  const tracked = [...new Set([...top, ...bigCapPools(stored, o), ...stored.filter((p) => held.has(p.address))])];
+  const mintsStored = [...new Set(stored.flatMap((p) => [p.token_x.address, p.token_y.address]))];
+  const mcaps = new Map((await db.token.findMany({ where: { mint: { in: mintsStored } }, select: { mint: true, mcapUsd: true } })).map((t) => [t.mint, t.mcapUsd]));
+  const tracked = [...new Set([...top, ...bigCapPools(stored, o, (m) => mcaps.get(m)), ...stored.filter((p) => held.has(p.address))])];
 
   let eligible = 0;
   for (const p of tracked) {
