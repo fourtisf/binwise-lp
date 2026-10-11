@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dailyStopHit, exitReason, positionSizeUsd, rangeHalfWidth, shapeFor, shouldCompound, shouldRebalance } from './rules';
+import { dailyStopHit, exitReason, manualDeployLimit, positionSizeUsd, rangeHalfWidth, shapeFor, shouldCompound, shouldRebalance } from './rules';
 
 const costs = { txFeesUsd: 0.05, slippageUsd: 0.2, priorityUsd: 0.05 }; // $0.30 total
 
@@ -61,5 +61,27 @@ describe('compound and daily stop', () => {
   it('trips the daily loss stop', () => {
     expect(dailyStopHit(9500, 10_000, 4)).toBe(true);
     expect(dailyStopHit(9700, 10_000, 4)).toBe(false);
+  });
+});
+
+describe('manual Add LP limit', () => {
+  const base = { idleUsd: 1000, positionsUsd: 0, openPositions: 0, poolTvlUsd: 1e7, maxAllocPct: 50, capUsd: Infinity };
+  it('is the smallest of idle funds, strategy share and the per-position cap', () => {
+    expect(manualDeployLimit(base)).toEqual({ maxUsd: 500, limit: 'strategy' });
+    expect(manualDeployLimit({ ...base, maxAllocPct: 100 })).toEqual({ maxUsd: 980, limit: 'balance' });
+    expect(manualDeployLimit({ ...base, capUsd: 120 })).toEqual({ maxUsd: 120, limit: 'cap' });
+    // At most 2% of the pool's liquidity.
+    expect(manualDeployLimit({ ...base, poolTvlUsd: 10_000 })).toEqual({ maxUsd: 200, limit: 'strategy' });
+  });
+  it('counts open positions in the vault value but only spends idle funds', () => {
+    expect(manualDeployLimit({ ...base, idleUsd: 100, positionsUsd: 900 })).toEqual({ maxUsd: 98, limit: 'balance' });
+  });
+  it('applies the live limits', () => {
+    const live = { maxUsd: 200, maxPositions: 2, roomTotalUsd: 1000 };
+    expect(manualDeployLimit({ ...base, live })).toEqual({ maxUsd: 200, limit: 'live' });
+    expect(manualDeployLimit({ ...base, positionsUsd: 150, openPositions: 1, live })).toEqual({ maxUsd: 50, limit: 'live' });
+    expect(manualDeployLimit({ ...base, live: { ...live, roomTotalUsd: 30 } })).toEqual({ maxUsd: 30, limit: 'live' });
+    expect(manualDeployLimit({ ...base, openPositions: 2, live })).toEqual({ maxUsd: 0, limit: 'positions' });
+    expect(manualDeployLimit({ ...base, positionsUsd: 300, openPositions: 1, live }).maxUsd).toBe(0);
   });
 });

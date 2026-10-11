@@ -10,17 +10,24 @@ import {
   REDIS_KEYS,
   bestPerPair,
   isBridgedSymbol,
+  manualDeployLimit,
   pairKey,
+  positionCapUsd,
   validateStrategy,
   type DecisionType,
   type DemoEvent,
   type DepositAsset,
   type StrategySettings,
   type StreamEvent,
+  type VaultBalance,
 } from '@binwise/core';
 import {
   LiveExecutor,
+  SOL_RESERVE,
   isLiveWallet,
+  liveLimits,
+  minPositionUsd,
+  walletBalances,
   parseDeposit,
   createAgentKey,
   loadAgentKey,
@@ -28,12 +35,14 @@ import {
 } from '@binwise/chain';
 import {
   ProposalError,
+  activeParams,
   approveProposal,
   createVault,
   ensureUser,
   pendingProposals,
   proposalView,
   rejectProposal,
+  liveTotalUsd,
   shrinkDeposits as shrinkDepositsOf,
   strategySettings as strategySettingsOf,
   strategyData,
@@ -375,6 +384,61 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     const { vault, readOnly } = await readable(req, req.params.id);
     const user = vault.mode === 'live' ? await db.user.findUnique({ where: { id: vault.userId } }) : null;
     return overview(db, vault.id, { readOnly, walletAssets: user && !readOnly ? await walletAssets(user.wallet).catch(() => []) : undefined });
+  });
+
+  /**
+   * What Add LP can draw on: the vault's idle funds. Live: read from the vault wallet on Solana now (a
+   * deposit shows at once), or as of the agent's last cycle when Solana can't be reached; the SOL kept
+   * for fees and rent doesn't count. With ?pool: the most Add LP puts in that pool now, sized exactly
+   * as the agent will (manualDeployLimit).
+   */
+  app.get<VP & { Querystring: { pool?: string } }>('/vaults/:id/balance', async (req): Promise<VaultBalance> => {
+    const { vault } = await readable(req, req.params.id);
+    const live = vault.mode === 'live';
+    let held = vault.cash as Record<string, number>;
+    let source: VaultBalance['source'] = 'agent';
+    if (live && vault.agentPubkey && (o.rpc || process.env.RPC_URL)) {
+      const onChain = await Promise.resolve()
+        .then(() => walletBalances(rpc(), vault.agentPubkey!))
+        .catch(() => null);
+      if (onChain) {
+        held = onChain;
+        source = 'chain';
+      }
+    }
+    const reserveSol = live ? Math.min(held[SOL_MINT] ?? 0, SOL_RESERVE) : 0;
+    const idle: Record<string, number> = { ...held, ...(live ? { [SOL_MINT]: Math.max(0, (held[SOL_MINT] ?? 0) - SOL_RESERVE) } : {}) };
+    const tokens = await tokenMap(db, Object.keys(idle));
+    const priced = Object.entries(idle).map(([mint, amount]) => {
+      const t = tokens.get(mint);
+      return { symbol: mint === SOL_MINT ? 'SOL' : (t?.symbol ?? `${mint.slice(0, 4)}…`), mint, amount, usd: amount * (t?.priceUsd ?? 0) };
+    });
+    const availableUsd = priced.reduce((s, a) => s + a.usd, 0);
+    const assets = priced
+      .filter((a) => a.amount > 1e-9 && (a.mint === SOL_MINT || a.usd >= 0.01))
+      .sort((a, b) => (a.mint === SOL_MINT ? -1 : b.mint === SOL_MINT ? 1 : b.usd - a.usd));
+    const out: VaultBalance = { availableUsd, assets, reserveSol, source };
+    const poolId = req.query.pool;
+    const snap = poolId && vault.strategy ? await db.poolSnapshot.findFirst({ where: { poolId }, orderBy: { ts: 'desc' } }) : null;
+    if (snap && vault.strategy) {
+      const open = await db.position.findMany({ where: { vaultId: vault.id, status: 'open' }, select: { poolId: true, valueUsd: true } });
+      const s = strategySettingsOf(vault.strategy);
+      const limits = live ? liveLimits() : null;
+      const lim = open.some((p) => p.poolId === poolId)
+        ? { maxUsd: 0, limit: 'held' as const }
+        : manualDeployLimit({
+            idleUsd: availableUsd,
+            positionsUsd: open.reduce((sum, p) => sum + p.valueUsd, 0),
+            openPositions: open.length,
+            poolTvlUsd: snap.tvl,
+            maxAllocPct: s.maxAllocPct,
+            capUsd: positionCapUsd(s),
+            params: await activeParams(db),
+            live: limits ? { maxUsd: limits.maxUsd, maxPositions: limits.maxPositions, roomTotalUsd: limits.maxTotalUsd - (await liveTotalUsd(db)) } : undefined,
+          });
+      out.pool = { ...lim, minUsd: minPositionUsd() };
+    }
+    return out;
   });
 
   app.get<VP & { Querystring: { range?: string } }>('/vaults/:id/performance', async (req) => {

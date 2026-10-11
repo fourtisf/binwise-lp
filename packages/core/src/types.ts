@@ -99,6 +99,20 @@ export interface VaultOverview {
   pausedReason?: string | null;
 }
 
+/** What Add LP can draw on: the vault's idle funds (GET /vaults/:id/balance). */
+export interface VaultBalance {
+  /** USD the agent can put into new positions now (live: after the SOL kept for fees and rent). */
+  availableUsd: number;
+  /** Idle tokens, largest first (SOL first). Live: SOL without the reserve. */
+  assets: { symbol: string; mint: string; amount: number; usd: number }[];
+  /** Live: SOL the vault wallet keeps for network fees and rent, not available for LP. */
+  reserveSol: number;
+  /** 'chain': read from Solana just now. 'agent': as of the agent's last cycle (Solana unreachable, or paper). */
+  source: 'chain' | 'agent';
+  /** Asked for one pool (?pool=): the most Add LP puts in it now, the limit that decides it, and the minimum. */
+  pool?: { maxUsd: number; minUsd: number; limit: 'balance' | 'strategy' | 'cap' | 'live' | 'positions' | 'held' };
+}
+
 export interface Me {
   wallet: string;
   vaults: { id: string; name: string; mode: VaultMode }[];

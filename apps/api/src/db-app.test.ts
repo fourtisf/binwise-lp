@@ -316,6 +316,76 @@ describe('vaults', () => {
   });
 });
 
+describe('vault balance (Add LP)', () => {
+  const snapshot = (poolId: string, tvl: number) =>
+    db.poolSnapshot.create({ data: { poolId, tvl, volume24h: tvl, price: 150, volatility: 3, score: 70, scoreBreakdown: [], call: 'in', callLabel: 'Enter', reason: 'ok' } });
+
+  it('shows the idle funds and the most Add LP puts into a pool, sized like the agent', async () => {
+    const { headers } = await signIn();
+    const id = (await app.inject({ url: '/me', headers })).json().vaults[0].id;
+    await app.inject({ method: 'POST', url: `/vaults/${id}/deposit`, headers, payload: { token: 'SOL', amount: 10 } });
+    await db.pool.create({ data: { id: 'PB1', name: 'SOL-USDC', tokenA: 'SOL', tokenB: 'USDC', mintA: SOL, mintB: USDC, binStep: 10, baseFee: 0.1 } });
+    await snapshot('PB1', 1e6);
+
+    const b = (await app.inject({ url: `/vaults/${id}/balance?pool=PB1`, headers })).json();
+    expect(b.availableUsd).toBeCloseTo(1500);
+    expect(b.assets).toEqual([{ symbol: 'SOL', mint: SOL, amount: 10, usd: 1500 }]);
+    expect(b).toMatchObject({ reserveSol: 0, source: 'agent' });
+    // Balanced strategy: at most 25% of the vault in one pool.
+    expect(b.pool).toEqual({ maxUsd: 375, limit: 'strategy', minUsd: 50 });
+    // Without a pool: just the balance.
+    expect((await app.inject({ url: `/vaults/${id}/balance`, headers })).json().pool).toBeUndefined();
+
+    await db.position.create({
+      data: { vaultId: id, poolId: 'PB1', binStep: 10, lowerBin: 0, upperBin: 10, shape: 'spot', entryAmountA: 1, entryAmountB: 150, entryPriceA: 150, entryPriceB: 1, entryValueUsd: 300, price: 150, valueUsd: 300 },
+    });
+    expect((await app.inject({ url: `/vaults/${id}/balance?pool=PB1`, headers })).json().pool).toMatchObject({ maxUsd: 0, limit: 'held' });
+    // Someone else's vault stays private.
+    expect((await app.inject({ url: `/vaults/${id}/balance` })).statusCode).toBe(404);
+  });
+
+  it('live: reads the vault wallet on Solana and leaves out the SOL kept for fees', async () => {
+    const agent = wallet().address;
+    const conn = {
+      getBalance: async () => 2.25e9,
+      getParsedTokenAccountsByOwner: async (_o: unknown, f: { programId: { toBase58(): string } }) => ({
+        value: f.programId.toBase58().startsWith('Tokenz')
+          ? []
+          : [{ account: { data: { parsed: { info: { mint: USDC, tokenAmount: { uiAmount: 40 } } } } } }],
+      }),
+    };
+    const sub2 = new Redis(process.env.REDIS_URL!);
+    const liveApp = await buildDbApp({ db, redis, sub: sub2, domain: 'test.binwise', rpc: () => conn as never });
+    try {
+      const owner = wallet();
+      const user = await ensureUser(db, owner.address);
+      const v = await createVault(db, user.id, { live: { agentPubkey: agent, encSecret: new Uint8Array(8) } });
+      await db.vault.update({ where: { id: v.id }, data: { cash: { [SOL]: 9 } } });
+      const nonce = (await liveApp.inject({ url: `/auth/nonce?wallet=${owner.address}`, remoteAddress: '10.9.9.8' })).json();
+      const login = await liveApp.inject({ method: 'POST', url: '/auth/verify', remoteAddress: '10.9.9.8', payload: { wallet: owner.address, message: nonce.message, signature: owner.signMsg(nonce.message) } });
+      const headers = { cookie: `bw_session=${login.cookies.find((c) => c.name === 'bw_session')!.value}` };
+
+      const b = (await liveApp.inject({ url: `/vaults/${v.id}/balance`, headers })).json();
+      expect(b.source).toBe('chain');
+      expect(b.reserveSol).toBe(0.25);
+      expect(b.assets).toEqual([
+        { symbol: 'SOL', mint: SOL, amount: 2, usd: 300 },
+        { symbol: 'USDC', mint: USDC, amount: 40, usd: 40 },
+      ]);
+      expect(b.availableUsd).toBeCloseTo(340);
+
+      // Solana unreachable: the agent's last reading (which includes the reserve) minus the reserve.
+      conn.getBalance = async () => {
+        throw new Error('down');
+      };
+      const cached = (await liveApp.inject({ url: `/vaults/${v.id}/balance`, headers })).json();
+      expect(cached).toMatchObject({ source: 'agent', reserveSol: 0.25, availableUsd: 1312.5 });
+    } finally {
+      await liveApp.close(); // also closes sub2
+    }
+  });
+});
+
 describe('realtime', () => {
   it('forwards agent events to the vault stream', async () => {
     const addr = app.server.address() as { port: number };

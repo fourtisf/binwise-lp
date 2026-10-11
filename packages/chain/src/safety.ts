@@ -51,6 +51,12 @@ export function assertLiveOwner(
   throw new LiveTradingBlocked('Live mode is limited to approved wallets while it is being tested.');
 }
 
+/** Below this, a deploy isn't worth its fees. MIN_POSITION_USD in .env (default $50, never below $1). */
+export function minPositionUsd(env: Record<string, string | undefined> = process.env): number {
+  const v = Number(env.MIN_POSITION_USD);
+  return env.MIN_POSITION_USD && Number.isFinite(v) && v >= 0 ? Math.max(1, v) : 50;
+}
+
 /**
  * Hard limits for live vaults: the agent never has more than LIVE_MAX_USD in positions per vault,
  * nor more than LIVE_MAX_POSITIONS positions (defaults $200, 1), and never more than

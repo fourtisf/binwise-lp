@@ -14,6 +14,7 @@ import type {
   Proposal,
   StrategySettings,
   StreamEvent,
+  VaultBalance,
   VaultMode,
   VaultOverview,
 } from '@binwise/core';
@@ -49,6 +50,8 @@ export interface BinwiseClient {
   signIn(wallet: string, message: string, signatureB58: string): Promise<void>;
   signOut(): Promise<void>;
   overview(): Promise<VaultOverview>;
+  /** The vault's idle funds; with a pool, the most Add LP puts into it now. */
+  balance(poolId?: string): Promise<VaultBalance>;
   performance(range: PerformanceRange): Promise<PerformanceSeries>;
   pools(): Promise<PoolRow[]>;
   pool(id: string): Promise<PoolDetail>;

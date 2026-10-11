@@ -115,6 +115,12 @@ export async function activeParams(db: PrismaClient) {
   return { ...DEFAULT_PARAMS, ...((row?.params as object) ?? {}) } as typeof DEFAULT_PARAMS;
 }
 
+/** USD in open positions across every live vault (checked against LIVE_MAX_TOTAL_USD). */
+export async function liveTotalUsd(db: PrismaClient) {
+  const r = await db.position.aggregate({ _sum: { valueUsd: true }, where: { status: 'open', vault: { mode: 'live' } } });
+  return r._sum.valueUsd ?? 0;
+}
+
 export const startOfUtcDay = (now: number) => new Date(Math.floor(now / 86_400_000) * 86_400_000);
 
 /**

@@ -14,6 +14,38 @@ export function positionSizeUsd(vaultValueUsd: number, maxAllocPct: number, pool
   return Math.max(0, Math.min(vaultValueUsd * (maxAllocPct / 100), poolTvlUsd * t.maxPoolShare));
 }
 
+/** Which limit decides how much a manual Add LP can put into a pool. */
+export type DeployLimit = 'balance' | 'strategy' | 'cap' | 'live' | 'positions';
+
+/**
+ * The most a manual Add LP puts into one pool right now, and the limit that decides it: the idle
+ * funds (2% kept for fees), the strategy (max % of the vault per pool, at most a share of the pool's
+ * TVL), the user's per-position cap, and for live vaults the live limits. The agent, the API and
+ * the website all size Add LP with this, so the amount shown is the amount used.
+ */
+export function manualDeployLimit(i: {
+  idleUsd: number;
+  positionsUsd: number;
+  openPositions: number;
+  poolTvlUsd: number;
+  maxAllocPct: number;
+  /** positionCapUsd(strategy): Infinity when the user set none */
+  capUsd: number;
+  params?: AgentThresholds;
+  /** Live vaults: LIVE_MAX_USD and LIVE_MAX_POSITIONS per vault, and what LIVE_MAX_TOTAL_USD still allows */
+  live?: { maxUsd: number; maxPositions: number; roomTotalUsd: number };
+}): { maxUsd: number; limit: DeployLimit } {
+  if (i.live && i.openPositions >= i.live.maxPositions) return { maxUsd: 0, limit: 'positions' };
+  const caps: [number, DeployLimit][] = [
+    [i.idleUsd * 0.98, 'balance'],
+    [positionSizeUsd(i.idleUsd + i.positionsUsd, i.maxAllocPct, i.poolTvlUsd, i.params), 'strategy'],
+    [i.capUsd, 'cap'],
+  ];
+  if (i.live) caps.push([Math.min(i.live.maxUsd - i.positionsUsd, i.live.roomTotalUsd), 'live']);
+  const [maxUsd, limit] = caps.reduce((a, b) => (b[0] < a[0] ? b : a));
+  return { maxUsd: Math.max(0, maxUsd), limit };
+}
+
 /** Spot for balanced, Curve for stable pairs, Bid-Ask for volatile ones. */
 export function shapeFor(profile: RiskProfile, stablePair: boolean, volatilityPct: number): LiquidityShape {
   if (stablePair) return 'curve';

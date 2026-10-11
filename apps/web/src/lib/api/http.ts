@@ -58,6 +58,7 @@ export function createHttpClient(api: string, ws: string): BinwiseClient {
       await post('/auth/logout');
     },
     overview: () => req(`${v()}/overview`),
+    balance: (poolId) => req(`${v()}/balance${poolId ? `?pool=${encodeURIComponent(poolId)}` : ''}`),
     performance: (range) => req(`${v()}/performance?range=${range}`),
     pools: () => req(`/pools?vault=${vault}`),
     pool: (id) => req(`/pools/${encodeURIComponent(id)}?vault=${vault}`),

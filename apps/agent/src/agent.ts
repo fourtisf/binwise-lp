@@ -6,6 +6,7 @@ import {
   dailyStopHit,
   exitReason,
   feesEarnedUsd,
+  manualDeployLimit,
   openPosition,
   positionCapUsd,
   positionSizeUsd,
@@ -30,12 +31,13 @@ import {
   singleSidedAfterExit,
   useSingleRebalance,
 } from '@binwise/core';
-import { SetupTooCostly, TX_COUNT, liveLimits, type Executor, type Holdings, type KillSwitch, type PoolCtx, type PositionRef } from '@binwise/chain';
+import { SetupTooCostly, TX_COUNT, liveLimits, minPositionUsd, type Executor, type Holdings, type KillSwitch, type PoolCtx, type PositionRef } from '@binwise/chain';
 import {
   activeParams,
   assessmentInput,
   isStable,
   latestSnapshots,
+  liveTotalUsd,
   startOfUtcDay,
   vaultValue,
   strategySettings,
@@ -58,10 +60,7 @@ import {
 
 export const CYCLE_MS = 60_000;
 /** Below this, a deploy isn't worth its fees. MIN_POSITION_USD in .env (default $50, never below $1). */
-export const MIN_POSITION_USD = (() => {
-  const v = Number(process.env.MIN_POSITION_USD);
-  return process.env.MIN_POSITION_USD && Number.isFinite(v) && v >= 0 ? Math.max(1, v) : 50;
-})();
+export const MIN_POSITION_USD = minPositionUsd();
 
 const STEPS: CycleStep[] = [
   { title: 'Scan', running: 'Reading DLMM pools', done: '' },
@@ -973,12 +972,6 @@ async function reconcileLive(deps: AgentDeps, vault: VaultWithStrategy, executor
   }
 }
 
-/** USD in open positions across every live vault (checked against LIVE_MAX_TOTAL_USD). */
-async function liveTotalUsd(db: PrismaClient) {
-  const r = await db.position.aggregate({ _sum: { valueUsd: true }, where: { status: 'open', vault: { mode: 'live' } } });
-  return r._sum.valueUsd ?? 0;
-}
-
 export type ManualAction = 'claim' | 'close';
 
 /** Outcome of a manual request, for the person who made it (app or Telegram). */
@@ -1130,13 +1123,20 @@ export async function runManualDeploy(
   const executor = await deps.executorFor(vault);
   const idleUsd = holdingsUsd(await executor.holdings(), tokens);
   const positionsUsd = open.reduce((sum, p) => sum + p.valueUsd, 0);
-  let size = Math.min(positionSizeUsd(idleUsd + positionsUsd, s.maxAllocPct, view.ctx.tvlUsd, params), positionCapUsd(s), idleUsd * 0.98);
+  const live = executor.mode === 'live' ? liveLimits() : null;
+  const limit = manualDeployLimit({
+    idleUsd,
+    positionsUsd,
+    openPositions: open.length,
+    poolTvlUsd: view.ctx.tvlUsd,
+    maxAllocPct: s.maxAllocPct,
+    capUsd: positionCapUsd(s),
+    params,
+    live: live ? { maxUsd: live.maxUsd, maxPositions: live.maxPositions, roomTotalUsd: live.maxTotalUsd - (await liveTotalUsd(db)) } : undefined,
+  });
+  if (limit.limit === 'positions') throw new Error(`Live vaults can hold ${live!.maxPositions} position(s) for now (LIVE_MAX_POSITIONS).`);
+  let size = limit.maxUsd;
   if (requestedUsd > 0) size = Math.min(size, requestedUsd);
-  if (executor.mode === 'live') {
-    const live = liveLimits();
-    if (open.length >= live.maxPositions) throw new Error(`Live vaults can hold ${live.maxPositions} position(s) for now (LIVE_MAX_POSITIONS).`);
-    size = Math.min(size, live.maxUsd - positionsUsd, live.maxTotalUsd - (await liveTotalUsd(db)));
-  }
   if (size < MIN_POSITION_USD) throw new Error(`Not enough idle funds within your limits: at least ${usd(MIN_POSITION_USD)} is needed.`);
   const binsEachSide = Math.min(MAX_BINS_EACH_SIDE, binsForHalfWidth(rangeHalfWidth(s.profile, view.snap.volatility, view.stablePair, params), view.ctx.binStep));
   const plan: Plan = {
