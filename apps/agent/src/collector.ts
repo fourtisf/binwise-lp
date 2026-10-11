@@ -13,6 +13,7 @@ import {
   trendState,
   volumeForScoring,
   type AgentParams,
+  isBridgedSymbol,
 } from '@binwise/core';
 import { JupiterClient, MeteoraClient, metadataCheck, runHolderChecks, type HolderCheck, type MeteoraPool, type MeteoraToken } from '@binwise/chain';
 import { assessmentInput, isAllowed, isEstablished, isStable, isStableSymbol, type PrismaClient, type Token } from '@binwise/db';
@@ -219,7 +220,10 @@ export async function collectOnce(deps: CollectorDeps, o: CollectorOptions = DEF
   // Pools holding open positions are always stored and snapshotted, whatever their TVL or rank:
   // a draining pool is exactly the one the agent must keep watching (and exit).
   const held = new Set((await db.position.findMany({ where: { status: 'open' }, select: { poolId: true }, distinct: ['poolId'] })).map((p) => p.poolId));
-  const stored = pools.filter((p) => (p.tvl >= o.storeMinTvl || held.has(p.address)) && p.token_x && p.token_y);
+  // Solana ecosystem only: pools with a token bridged from another chain are skipped (unless held).
+  const stored = pools.filter(
+    (p) => p.token_x && p.token_y && (held.has(p.address) || (p.tvl >= o.storeMinTvl && !isBridgedSymbol(p.token_x.symbol) && !isBridgedSymbol(p.token_y.symbol))),
+  );
 
   for (const p of stored) {
     await upsertToken(db, p.token_x);

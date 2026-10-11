@@ -1,4 +1,4 @@
-import { STRATEGY_LIMITS, STRATEGY_PRESETS, assessPool, positionCapUsd, positionSizeUsd, type AgentParams, type RiskProfile, type StrategySettings } from '@binwise/core';
+import { STRATEGY_LIMITS, STRATEGY_PRESETS, assessPool, bestPerPair, pairKey, positionCapUsd, positionSizeUsd, type AgentParams, type RiskProfile, type StrategySettings } from '@binwise/core';
 import { SOL_MINT, isLiveTelegram, liveLimits, walletAddress } from '@binwise/chain';
 import {
   ProposalError,
@@ -254,7 +254,9 @@ export function makeBot(d: BotDeps) {
       const a = assessPool(await assessmentInput(s, tx, ty, params), strategySettings(c.vault.strategy!), strategyWeights(c.vault.strategy!), params);
       out.push({ snap: s, score: a.score, a, pair: `${s.pool.tokenA} / ${s.pool.tokenB}` });
     }
-    return { all: out.sort((x, y) => y.score - x.score), params };
+    // One pool per pair (a pair can have several): one the agent would enter, else the most liquid.
+    const one = bestPerPair(out, (p) => pairKey(p.snap.pool.mintA, p.snap.pool.mintB), (x, y) => (x.a.eligible !== y.a.eligible ? x.a.eligible : x.snap.tvl > y.snap.tvl));
+    return { all: one.sort((x, y) => y.score - x.score), params };
   }
 
   async function eligiblePools(c: Ctx) {

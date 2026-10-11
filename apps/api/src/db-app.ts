@@ -8,6 +8,9 @@ import { randomUUID } from 'node:crypto';
 import { Connection, PublicKey } from '@solana/web3.js';
 import {
   REDIS_KEYS,
+  bestPerPair,
+  isBridgedSymbol,
+  pairKey,
   validateStrategy,
   type DecisionType,
   type DemoEvent,
@@ -330,7 +333,12 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
 
   app.get<{ Querystring: { vault?: string } }>('/pools', async (req) => {
     const strategy = req.query.vault ? (await readable(req, req.query.vault)).vault.strategy : null;
-    return (await poolRows(db, strategy)).map(({ breakdown: _b, reason: _r, ...row }) => row);
+    const rows = (await poolRows(db, strategy)).filter((r) => !isBridgedSymbol(r.tokenA.symbol) && !isBridgedSymbol(r.tokenB.symbol));
+    // One row per pair: its most liquid pool (a pair can have several pools with different bin steps and fees).
+    const side = (t: { mint?: string; symbol: string }) => t.mint ?? t.symbol;
+    // A pool the agent would enter wins over a deeper one it wouldn't.
+    const better = (a: (typeof rows)[number], b: (typeof rows)[number]) => ((a.call === 'in') !== (b.call === 'in') ? a.call === 'in' : a.tvl > b.tvl);
+    return bestPerPair(rows, (r) => pairKey(side(r.tokenA), side(r.tokenB)), better).map(({ breakdown: _b, reason: _r, ...row }) => row);
   });
 
   app.get<{ Params: { id: string }; Querystring: { vault?: string } }>('/pools/:id', async (req) => {
