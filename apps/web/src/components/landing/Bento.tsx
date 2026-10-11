@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { gauss, rng, walk } from '@binwise/mock';
 import { getDemoSource } from '@/lib/api/demo';
 import { LiveChart } from '@/lib/charts/LiveChart';
-import { dayLabels, lineChart } from '@/lib/charts/lineChart';
+import { dayLabels, lineChart, stepDecimals } from '@/lib/charts/lineChart';
 import { hhmm, pct, prefersReducedMotion } from '@/lib/format';
 import { Icon, type IconId } from '../Sprite';
 
@@ -135,7 +135,7 @@ export function VsChart() {
           { name: 'Unmanaged LP', color: '#8B8DFF', values: toP(un) },
           { name: 'Hold', color: '#5D6072', values: toP(hold), dash: '4 4' },
         ],
-        fmtY: (v) => (v >= 0 ? '+' : '') + v.toFixed(0) + '%',
+        fmtY: (v, step) => (v > 0 ? '+' : '') + v.toFixed(stepDecimals(step)).replace(/^-0(\.0+)?$/, '0') + '%',
         fmtTip: (v) => pct(v, 1),
       });
     };

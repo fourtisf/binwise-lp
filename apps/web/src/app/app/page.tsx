@@ -7,13 +7,19 @@ import { FeedItem } from '@/components/FeedItem';
 import { PositionChart } from '@/components/PositionChart';
 import { Icon } from '@/components/Sprite';
 import { PairIcon } from '@/components/Tokens';
-import { dayLabel, lineChart, sparkPath } from '@/lib/charts/lineChart';
-import { hhmm, pct, usd } from '@/lib/format';
+import { dayLabel, lineChart, sparkPath, stepDecimals } from '@/lib/charts/lineChart';
+import { fmt, hhmm, pct, usd } from '@/lib/format';
 import { useUi } from '@/lib/ui';
 import { BOT_URL, LIVE_DEFAULT, WALLET_LOGIN } from '@/lib/site';
 import { useAppData } from '@/lib/store';
 
 const SHAPE_LABEL = { spot: 'spot', curve: 'curve', bidask: 'bid-ask' } as const;
+
+/** Dollar axis labels that fit the vault's size: $0, $25, $2.5, $1.2K, $12K. */
+const axisUsd = (v: number, step: number) =>
+  Math.abs(v) >= 1000 || step >= 1000 ? `$${fmt(v / 1000, stepDecimals(step / 1000))}K` : `$${fmt(v, stepDecimals(step))}`;
+const chartNote = (text: string) =>
+  `<p class="muted" style="height:100%;display:flex;align-items:center;justify-content:center;text-align:center;padding:0 20px;font-size:14px;line-height:1.5">${text}</p>`;
 const PROPOSAL_ICON = { deploy: 'i-plus', rebalance: 'i-swap', exit: 'i-exit', compound: 'i-comp' } as const;
 
 export default function OverviewPage() {
@@ -41,7 +47,12 @@ export default function OverviewPage() {
   useEffect(() => {
     if (!perf || !eq.current) return;
     if (perf.ts.length < 2) {
-      eq.current.innerHTML = '<p class="muted" style="padding:40px 0;text-align:center;font-size:14px">Not enough history yet. The chart fills in as the agent runs.</p>';
+      eq.current.innerHTML = chartNote('Not enough history yet. The chart fills in as the agent runs.');
+      return;
+    }
+    // Nothing deposited yet: a flat line at $0 says nothing.
+    if (perf.vault.every((v) => v === 0) && perf.hold.every((v) => v === 0)) {
+      eq.current.innerHTML = chartNote('No funds in the vault yet. The chart starts with your first deposit:<br>send SOL or USDC to your vault from the Telegram bot (💳 Wallet).');
       return;
     }
     // Young vaults have hourly points; label those with the time.
@@ -54,8 +65,8 @@ export default function OverviewPage() {
           { name: 'Binwise vault', color: '#4BE3CF', values: perf.vault, area: true, w: 2.2 },
           { name: 'Hold', color: '#5D6072', values: perf.hold, dash: '4 4' },
         ],
-        fmtY: (v) => '$' + (v / 1000).toFixed(1) + 'k',
-        fmtTip: (v) => usd(v),
+        fmtY: axisUsd,
+        fmtTip: (v) => usd(v, 2),
       });
     draw();
     let rt: ReturnType<typeof setTimeout>;

@@ -11,6 +11,34 @@ export interface Series {
   dash?: string;
 }
 
+/**
+ * Clean y-axis ticks (steps of 1, 2, 2.5 or 5 × 10^k) covering [lo, hi] in about `count` steps. A flat
+ * series (an empty vault: all zeros) still gets a real range, and values that are never negative never
+ * get an axis below zero.
+ */
+export function niceTicks(lo: number, hi: number, count = 4): { ticks: number[]; step: number } {
+  const floorAtZero = lo >= 0;
+  if (!(hi > lo)) {
+    const pad = lo === 0 ? 1 : Math.abs(lo) * 0.05;
+    lo -= pad;
+    hi += pad;
+  } else {
+    const sp = hi - lo;
+    lo -= sp * 0.08;
+    hi += sp * 0.08;
+  }
+  if (floorAtZero) lo = Math.max(0, lo);
+  const raw = (hi - lo) / count;
+  const mag = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((x) => x >= raw * 0.999)!;
+  const ticks: number[] = [];
+  for (let v = Math.floor(lo / step) * step; v <= Math.ceil(hi / step) * step + step / 2; v += step) ticks.push(Number(v.toPrecision(12)));
+  return { ticks, step };
+}
+
+/** Decimals a tick step needs: 0 for 5, 1 for 2.5, 2 for 0.25. */
+export const stepDecimals = (step: number) => (String(Number(step.toPrecision(6))).split('.')[1] ?? '').length;
+
 /** Static multi-series line chart with hover tooltip, ported from the prototype. */
 export function lineChart(
   el: HTMLElement,
@@ -19,31 +47,38 @@ export function lineChart(
     labels,
     fmtY,
     fmtTip,
-  }: { series: Series[]; labels: string[]; fmtY: (v: number) => string; fmtTip?: (v: number) => string },
+  }: {
+    series: Series[];
+    labels: string[];
+    /** Axis label; `step` is the tick step, to pick the decimals. */
+    fmtY: (v: number, step: number) => string;
+    fmtTip?: (v: number) => string;
+  },
 ): void {
   const W = el.clientWidth;
   const H = el.clientHeight;
   if (!W || !H) return;
   const pad = { t: 10, r: 8, b: 26, l: 50 };
-  const all = series.flatMap((s) => s.values);
-  let mn = Math.min(...all);
-  let mx = Math.max(...all);
-  const sp = mx - mn;
-  mn -= sp * 0.08;
-  mx += sp * 0.08;
+  const all = series.flatMap((s) => s.values).filter((v) => Number.isFinite(v));
+  const { ticks, step } = niceTicks(Math.min(...all), Math.max(...all));
+  const mn = ticks[0];
+  const mx = ticks[ticks.length - 1];
   const n = labels.length;
   const X = (i: number) => pad.l + ((W - pad.l - pad.r) * i) / (n - 1);
   const Y = (v: number) => pad.t + (H - pad.t - pad.b) * (1 - (v - mn) / (mx - mn));
   const gid = 'lg' + uid++;
   let g = '';
-  for (let i = 0; i <= 4; i++) {
-    const v = mn + ((mx - mn) * i) / 4;
+  for (const v of ticks) {
     const y = Y(v);
-    g += `<line x1="${pad.l}" x2="${W - pad.r}" y1="${y}" y2="${y}" stroke="rgba(255,255,255,.045)"/><text x="${pad.l - 10}" y="${y + 4}" text-anchor="end">${fmtY(v)}</text>`;
+    g += `<line x1="${pad.l}" x2="${W - pad.r}" y1="${y}" y2="${y}" stroke="rgba(255,255,255,.045)"/><text x="${pad.l - 10}" y="${y + 4}" text-anchor="end">${fmtY(v, step)}</text>`;
   }
-  const xt = W < 500 ? 3 : 5;
+  // X labels at distinct points only (a young vault has few), and never the same text twice.
+  const xt = Math.min(W < 500 ? 3 : 5, n);
+  const shown = new Set<string>();
   for (let k = 0; k < xt; k++) {
     const i = Math.round(((n - 1) * k) / (xt - 1));
+    if (shown.has(labels[i])) continue;
+    shown.add(labels[i]);
     g += `<text x="${X(i)}" y="${H - 6}" text-anchor="${k == 0 ? 'start' : k == xt - 1 ? 'end' : 'middle'}">${labels[i]}</text>`;
   }
   let paths = '';
@@ -81,7 +116,7 @@ export function lineChart(
       series
         .map(
           (s) =>
-            `<div class="r"><span><i style="background:${s.color}"></i>${s.name}</span><b class="num">${(fmtTip || fmtY)(s.values[i])}</b></div>`,
+            `<div class="r"><span><i style="background:${s.color}"></i>${s.name}</span><b class="num">${fmtTip ? fmtTip(s.values[i]) : fmtY(s.values[i], step)}</b></div>`,
         )
         .join('');
     tip.classList.add('on');
