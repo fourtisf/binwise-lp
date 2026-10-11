@@ -4,7 +4,7 @@ import { useAppData } from '@/lib/store';
 import { BOT_URL, LIVE_DEFAULT, WALLET_LOGIN } from '@/lib/site';
 import { useUi } from '@/lib/ui';
 import { Icon } from '../Sprite';
-import { shortWallet } from './Wallet';
+import { AccountMenu } from './AccountMenu';
 
 export function Topbar({ title }: { title: string }) {
   const { overview, setMode, client, me } = useAppData();
@@ -51,7 +51,7 @@ export function Topbar({ title }: { title: string }) {
             Connect wallet
           </button>
         ) : (
-          <span className="avatar" title={me ? shortWallet(me.wallet) : 'Demo'}></span>
+          <AccountMenu />
         )}
       </div>
     </header>

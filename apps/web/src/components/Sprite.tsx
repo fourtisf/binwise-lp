@@ -23,6 +23,9 @@ export function Sprite() {
       <symbol id="i-updown" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M5 6l3-3 3 3M5 10l3 3 3-3"/></symbol>
       <symbol id="i-lock" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6"><rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 015 0v2"/></symbol>
       <symbol id="i-bolt" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"><path d="M9 2L3.5 9H8l-1 5 5.5-7H8z"/></symbol>
+      <symbol id="i-copy" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"><rect x="5.5" y="5.5" width="8" height="8" rx="1.8"/><path d="M10.5 5.5V4a1.5 1.5 0 00-1.5-1.5H4A1.5 1.5 0 002.5 4v5A1.5 1.5 0 004 10.5h1.5"/></symbol>
+      <symbol id="i-ext" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M9 3h4v4M13 3L7.5 8.5M11.5 9.5v3a1 1 0 01-1 1h-7a1 1 0 01-1-1v-7a1 1 0 011-1h3"/></symbol>
+      <symbol id="i-send" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"><path d="M14 2.5L2 7.3l4.6 1.8L14 2.5zM14 2.5l-2.4 11L6.6 9.1"/></symbol>
       </svg>
   );
 }
@@ -30,7 +33,7 @@ export function Sprite() {
 export type IconId =
   | 'i-mark' | 'i-home' | 'i-pools' | 'i-pos' | 'i-strat' | 'i-act' | 'i-check' | 'i-spin' | 'i-dot'
   | 'i-plus' | 'i-swap' | 'i-exit' | 'i-comp' | 'i-search' | 'i-x' | 'i-pause' | 'i-play' | 'i-chev'
-  | 'i-updown' | 'i-lock' | 'i-bolt';
+  | 'i-updown' | 'i-lock' | 'i-bolt' | 'i-copy' | 'i-ext' | 'i-send';
 
 export function Icon({ id, className }: { id: IconId; className?: string }) {
   return (
