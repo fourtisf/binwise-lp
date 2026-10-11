@@ -7,6 +7,9 @@
 # It asks for the keys (they are typed here and stored only in the server's .env), checks that each
 # one works, updates the code, rebuilds and restarts. Safe to run again to change keys or who may go live.
 set -Eeuo pipefail
+# The whole script is one block, so bash reads it completely before running: the git checkout below
+# may replace this file while it runs.
+{
 
 APP_USER="binwise"
 APP_DIR="/home/${APP_USER}/binwise"
@@ -75,11 +78,14 @@ while true; do
   warn "Jupiter menjawab HTTP $code. Cek lagi key-nya."
 done
 
-# Owner wallet
+# Owner wallet (only for signing in on the website; bot-only owners skip it)
+current_wallets=$(env_get LIVE_WALLETS); [[ "$current_wallets" == '*' ]] && current_wallets=""
 while true; do
-  read -r -p "    Alamat publik wallet Phantom Anda (BUKAN private key): " wallet
+  read -r -p "    Alamat publik Phantom untuk login website (Enter = ${current_wallets:-lewati, hanya pakai bot}): " wallet
+  wallet="${wallet:-$current_wallets}"
+  [[ -z "$wallet" ]] && { ok "Tanpa wallet website: pakai bot Telegram"; break; }
   [[ "$wallet" =~ ^[1-9A-HJ-NP-Za-km-z]{32,44}$ ]] && { ok "Alamat wallet valid"; break; }
-  warn "Itu bukan alamat Solana. Salin alamat dari Phantom (contoh: 7xKX...)."
+  warn "Itu bukan alamat Solana. Salin alamat dari Phantom (contoh: 7xKX...), atau tekan Enter untuk lewati."
 done
 
 # Who may trade live
@@ -97,6 +103,7 @@ if [[ "$who" == 1 ]]; then
   while true; do
     read -r -p "    ID Telegram Anda (Enter = ${tg_ids:-lewati}): " tgid
     tgid="${tgid:-$tg_ids}"
+    [[ -z "$tgid" && -z "$wallet" ]] && { warn "Isi ID Telegram (dari @userinfobot), karena wallet website dilewati."; continue; }
     [[ -z "$tgid" || "$tgid" =~ ^[0-9]+(,[0-9]+)*$ ]] && break
     warn "ID Telegram hanya angka (contoh: 123456789)."
   done
@@ -171,14 +178,14 @@ cat <<EOF
 $(printf '\033[1;32m')Binwise LIVE di https://${domain}  (Solana mainnet, dana asli)$(printf '\033[0m')
 
 Langkah berikutnya:
-  1. Buka https://${domain}/app → Connect wallet (${wallet:0:4}…${wallet: -4}).
-     Vault lama Anda masih Paper: klik "Live" lalu konfirmasi.
-  2. Deposit kecil dulu: 0,3 SOL (biaya & sewa) + \$50–200.
-  3. Tunggu agent menambah LP (lihat Activity atau Telegram), lalu uji Withdraw.
-$( [[ -n "$tg" ]] && echo "  4. Telegram: Strategy → nyalakan \"Telegram alerts\" → tekan Start di @${tg_user}." )
-$( [[ -n "$tg" ]] && echo "     Atau tanpa website: buka @${tg_user} → /start → 🆕 Create wallet." )
+  1. Bot: buka @${tg_user:-bot Anda} → /start → 🆕 Create wallet.$( [[ -n "$wallet" ]] && echo " Atau website: https://${domain}/app → Connect wallet (${wallet:0:4}…${wallet: -4})." )
+  2. Deposit kecil dulu ke alamat di 💳 Wallet: 0,3 SOL (biaya & sewa) + \$50–200.
+  3. Tunggu agent menambah LP (atau ➕ Add LP sendiri), lalu uji 💸 Withdraw.
+$( [[ -n "$wallet" && -n "$tg" ]] && echo "  Website: vault lama masih Paper → klik \"Live\"; Strategy → \"Telegram alerts\" untuk menghubungkan bot." )
 $( [[ "$who" == 1 ]] && echo "  Setelah uji lancar, buka untuk semua orang: jalankan script ini lagi dan pilih 2." )
 
 Rem darurat (hentikan semua transaksi):
   sudo -u ${APP_USER} -H bash -lc 'cd ~/binwise && pnpm --filter @binwise/agent kill on'
 EOF
+exit 0
+}
