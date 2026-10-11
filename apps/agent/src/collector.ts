@@ -15,7 +15,7 @@ import {
   type AgentParams,
 } from '@binwise/core';
 import { JupiterClient, MeteoraClient, metadataCheck, runHolderChecks, type HolderCheck, type MeteoraPool, type MeteoraToken } from '@binwise/chain';
-import { assessmentInput, isAllowed, isStable, isStableSymbol, type PrismaClient, type Token } from '@binwise/db';
+import { assessmentInput, isAllowed, isEstablished, isStable, isStableSymbol, type PrismaClient, type Token } from '@binwise/db';
 
 /**
  * Data collector (build step 3): every minute, scan Meteora DLMM pools,
@@ -300,7 +300,10 @@ async function snapshotPool(deps: CollectorDeps, p: MeteoraPool, now: number): P
   const risky = [hx, hy].filter((t) => !isStable(t));
   const mcaps = risky.map((t) => (t.mcapUsd != null ? t.mcapUsd / 1e6 : null));
   const mcapM = risky.length === 0 ? 1e6 : mcaps.some((m) => m == null) ? null : Math.min(...(mcaps as number[]));
-  const holderQuality = Math.min(hx.holderQuality ?? 0.5, hy.holderQuality ?? 0.5);
+  // The holder check is there to catch bundled supply on small tokens. Established tokens hold big
+  // treasury, exchange and protocol wallets by nature, so their concentration never blocks a pool.
+  const quality = (t: Token) => (isEstablished(t) ? Math.max(t.holderQuality ?? 0.5, DEFAULT_THRESHOLDS.minHolderQuality) : (t.holderQuality ?? 0.5));
+  const holderQuality = Math.min(quality(hx), quality(hy));
 
   // Risk signals.
   const hourAgo = await db.poolSnapshot.findFirst({
