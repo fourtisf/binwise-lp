@@ -94,7 +94,8 @@ export class MeteoraClient {
   async topPools(limit = 300): Promise<MeteoraPool[]> {
     const out: MeteoraPool[] = [];
     for (let page = 1; out.length < limit; page++) {
-      const r = await this.pools(page, Math.min(1000, limit));
+      // Pages of 250: sizes up to 400 are known to work.
+      const r = await this.pools(page, Math.min(250, limit));
       out.push(...r.data.filter((p) => !p.is_blacklisted));
       if (page >= r.pages || !r.data.length) break;
     }

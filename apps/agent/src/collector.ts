@@ -28,7 +28,7 @@ export interface CollectorDeps {
   /** Token logos and holder audit (Jupiter Tokens API); optional */
   jupiter?: JupiterClient;
   holderChecks?: HolderCheck[];
-  /** Reads real active-bin liquidity (USD) from chain; refreshed every 10 minutes per pool */
+  /** Reads real active-bin liquidity (USD) from chain; refreshed hourly per pool */
   activeBinLiq?: (pool: { address: string; decimalsX: number; decimalsY: number; usdX: number; usdY: number }) => Promise<number>;
   log?: (msg: string) => void;
   now?: () => number;
@@ -43,16 +43,44 @@ export interface CollectorOptions {
   storeMinTvl: number;
   /** Track candles and score pools at or above this TVL (the strategy floor) */
   trackMinTvl: number;
-  /** Max pools with candles */
+  /** Max pools with candles, picked by 24h volume */
   trackLimit: number;
+  /** Also always track big caps: verified non-stable tokens at or above this market cap (USD)… */
+  bigCapMinUsd: number;
+  /** …through their largest pools against SOL or a stablecoin (or another big cap), this many per token */
+  bigCapPoolsPerToken: number;
 }
 
 export const DEFAULT_COLLECTOR: CollectorOptions = {
-  scanLimit: 400,
+  scanLimit: 1000,
   storeMinTvl: 100_000,
   trackMinTvl: DEFAULT_THRESHOLDS.minTvl,
   trackLimit: 60,
+  bigCapMinUsd: 250_000_000,
+  bigCapPoolsPerToken: 2,
 };
+
+const SOL_MINT = 'So11111111111111111111111111111111111111112';
+const stableToken = (t: MeteoraToken) => isStableSymbol({ symbol: t.symbol, isVerified: t.is_verified });
+
+/**
+ * The big Solana tokens (SOL, JUP, BONK, WIF, JTO, PYTH, RAY, …) are always tracked, whatever their
+ * volume rank: each one's largest pools against SOL, a stablecoin or another big cap.
+ */
+export function bigCapPools(pools: MeteoraPool[], o: Pick<CollectorOptions, 'bigCapMinUsd' | 'bigCapPoolsPerToken'>): MeteoraPool[] {
+  const big = (t: MeteoraToken) => t.is_verified && !stableToken(t) && (t.market_cap ?? 0) >= o.bigCapMinUsd;
+  const quote = (t: MeteoraToken) => t.address === SOL_MINT || stableToken(t) || big(t);
+  const byToken = new Map<string, MeteoraPool[]>();
+  for (const p of pools)
+    for (const [t, other] of [
+      [p.token_x, p.token_y],
+      [p.token_y, p.token_x],
+    ] as const)
+      if (big(t) && quote(other)) byToken.set(t.address, [...(byToken.get(t.address) ?? []), p]);
+  const out = new Set<MeteoraPool>();
+  for (const list of byToken.values()) for (const p of list.sort((a, b) => b.tvl - a.tvl).slice(0, o.bigCapPoolsPerToken)) out.add(p);
+  return [...out];
+}
 
 const H = 3600_000;
 
@@ -129,7 +157,8 @@ const activeCache = new Map<string, { usd: number; at: number }>();
 async function activeLiquidity(deps: CollectorDeps, p: MeteoraPool, now: number): Promise<number | null> {
   if (!deps.activeBinLiq) return null;
   const hit = activeCache.get(p.address);
-  if (hit && now - hit.at < 10 * 60_000) return hit.usd;
+  // Hourly: with ~100 tracked pools this keeps RPC use within a free Helius plan.
+  if (hit && now - hit.at < 60 * 60_000) return hit.usd;
   try {
     const usd = await deps.activeBinLiq({
       address: p.address,
@@ -207,7 +236,7 @@ export async function collectOnce(deps: CollectorDeps, o: CollectorOptions = DEF
     .filter((p) => p.tvl >= o.trackMinTvl)
     .sort((a, b) => (b.volume['24h'] ?? 0) - (a.volume['24h'] ?? 0))
     .slice(0, o.trackLimit);
-  const tracked = [...top, ...stored.filter((p) => held.has(p.address) && !top.includes(p))];
+  const tracked = [...new Set([...top, ...bigCapPools(stored, o), ...stored.filter((p) => held.has(p.address))])];
 
   let eligible = 0;
   for (const p of tracked) {
