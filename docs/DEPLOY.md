@@ -144,7 +144,8 @@ LIVE_MAX_TOTAL_USD=2000         # all vaults together
 ```
 
 Rebuild the site after changing `NEXT_PUBLIC_*`. New wallets get a live vault with their own agent wallet; nothing trades
-until they deposit, and every live deposit requires ticking a real-funds risk acknowledgment. Anyone can still switch
+until they deposit (the website has no Deposit button: link Telegram under Strategy → Telegram alerts, then 💳 Wallet in
+the bot shows the vault's deposit address). Anyone can still switch
 their vault to Paper. The landing-page demo stays a simulated paper vault.
 
 ## Going live (build step 6, owner approval required)
@@ -163,6 +164,7 @@ Steps:
 
 1. Put a Helius mainnet URL in `RPC_URL` and `NEXT_PUBLIC_RPC_URL`, a Jupiter key in `JUPITER_API_KEY`, your wallet address in `LIVE_WALLETS`, and set `LIVE_TRADING_ENABLED=true`.
 2. Rebuild the site and restart: `sudo -u binwise -H bash -lc 'cd ~/binwise && pnpm --filter @binwise/web build && pm2 restart all'`.
-3. In the app: Connect wallet → switch **Live** → confirm. Deposit a small amount of SOL (keep at least 0.25 SOL for fees and rent) and/or USDC.
+3. In the app: Connect wallet → switch **Live** → confirm. Deposit a small amount of SOL (keep at least 0.25 SOL for fees and rent) and/or USDC
+   to the vault's address from the Telegram bot's 💳 Wallet (the agent picks up transfers from your signed-in wallet on its own).
 4. Watch Activity. Test **Withdraw** and the kill switch with the small amount before adding more.
 5. To stop at once: `sudo -u binwise -H bash -lc 'cd ~/binwise && pnpm --filter @binwise/agent kill on'`.

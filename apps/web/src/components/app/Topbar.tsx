@@ -7,8 +7,8 @@ import { Icon } from '../Sprite';
 import { shortWallet } from './Wallet';
 
 export function Topbar({ title }: { title: string }) {
-  const { overview, setMode, client, me, guard } = useAppData();
-  const { openPalette, openDeposit, openConnect } = useUi();
+  const { overview, setMode, client, me } = useAppData();
+  const { openPalette, openConnect } = useUi();
   const api = client?.kind === 'http';
   const mode = overview?.mode ?? 'paper';
   return (
@@ -39,17 +39,12 @@ export function Topbar({ title }: { title: string }) {
             </button>
           </div>
         )}
-        {!WALLET_LOGIN ? (
+        {!WALLET_LOGIN && (
           // Vaults live in the Telegram bot: create or import a wallet, deposit and add LP there.
           <a className="btn btn-white btn-sm" href={BOT_URL} target="_blank" rel="noreferrer">
             <Icon id="i-plus" />
             Open Telegram bot
           </a>
-        ) : (
-          <button className="btn btn-white btn-sm" onClick={() => guard(openDeposit)}>
-            <Icon id="i-plus" />
-            Deposit
-          </button>
         )}
         {!WALLET_LOGIN ? null : api && !me ? (
           <button className="btn btn-dark btn-sm" onClick={openConnect}>

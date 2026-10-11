@@ -50,7 +50,7 @@ export function createHttpClient(api: string, ws: string): BinwiseClient {
     useVault: (id) => (vault = id),
     me: () => orNull(req('/me')),
     demoVaultId: async () => (await orNull(req<{ id: string }>('/vaults/demo')))?.id ?? null,
-    signInChallenge: (wallet) => req(`/auth/nonce?wallet=${encodeURIComponent(wallet)}`),
+    signInChallenge: (wallet) => req(`/auth/nonce${wallet ? `?wallet=${encodeURIComponent(wallet)}` : ''}`),
     signIn: async (wallet, message, signature) => {
       await post('/auth/verify', { wallet, message, signature });
     },
@@ -74,8 +74,6 @@ export function createHttpClient(api: string, ws: string): BinwiseClient {
     pause: () => post(`${v()}/pause`),
     resume: () => post(`${v()}/resume`),
     setMode: (mode, confirm) => post(`${v()}/mode`, { mode, confirm }),
-    deposit: (token, amount) => post(`${v()}/deposit`, { token, amount }),
-    depositLive: (signature) => post(`${v()}/deposit`, { signature }),
     claim: (id) => post(`/positions/${encodeURIComponent(id)}/claim`),
     close: (id) => post(`/positions/${encodeURIComponent(id)}/close`),
     deploy: (poolId, usd, override) => post(`/vaults/${vault}/deploy`, { poolId, usd, override }),

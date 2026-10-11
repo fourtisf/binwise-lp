@@ -25,7 +25,7 @@ import type {
   VaultOverview,
 } from '@binwise/core';
 import { ApiError, getClient, type BinwiseClient } from './api/client';
-import { fmt, usd } from './format';
+import { usd } from './format';
 import { LIVE_DEFAULT, WALLET_LOGIN } from './site';
 import { useUi } from './ui';
 
@@ -58,8 +58,6 @@ interface AppData {
   saveStrategy: () => void;
   togglePause: () => void;
   setMode: (m: VaultMode, confirm?: boolean) => void;
-  deposit: (token: string, amount: number) => Promise<boolean>;
-  depositLive: (signature: string) => Promise<boolean>;
   claim: (p: PositionView) => void;
   close: (p: PositionView) => void;
   /** Add LP by hand (override: a pool the agent wouldn't enter; the owner accepted the risk) */
@@ -291,39 +289,6 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
             toast(m === 'live' ? 'Live mode on. Real funds will be used.' : 'Paper mode on. Simulated funds only.');
           });
         }),
-      deposit: async (token, amount) => {
-        if (!canAct || !client) {
-          guard(() => {});
-          return false;
-        }
-        try {
-          setOverview(await client.deposit(token, amount));
-          toast(`Deposited ${fmt(amount, 2)} ${token}`);
-          return true;
-        } catch (e) {
-          toast(errorText(e));
-          return false;
-        }
-      },
-      depositLive: async (signature) => {
-        if (!client) return false;
-        // The API verifies the transfer on-chain; give it a few tries while it confirms.
-        for (let i = 0; i < 10; i++) {
-          try {
-            setOverview(await client.depositLive(signature));
-            toast('Deposit received');
-            return true;
-          } catch (e) {
-            if (!(e instanceof ApiError) || e.code !== 'tx_not_found') {
-              toast(errorText(e));
-              return false;
-            }
-            await new Promise((r) => setTimeout(r, 3000));
-          }
-        }
-        toast('Deposit sent. It will show up once it confirms.');
-        return false;
-      },
       claim: (p) =>
         guard(() =>
           run(client?.claim(p.id), (r) => toast(r.queued ? `Claiming fees from ${p.pair}…` : `Claimed ${usd(r.amount ?? 0, 2)} from ${p.pair}`)),

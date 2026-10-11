@@ -2,14 +2,13 @@
 
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from 'react';
 
-export type Layer = 'drawer' | 'modal' | 'palette' | 'connect' | 'confirmLive' | null;
+export type Layer = 'drawer' | 'palette' | 'connect' | 'confirmLive' | null;
 
 interface UiContext {
   layer: Layer;
   /** Pool shown in the score drawer. Kept after closing so the slide-out animates with content. */
   drawerPoolId: string | null;
   openPool: (id: string) => void;
-  openDeposit: () => void;
   openPalette: () => void;
   /** Wallet picker for sign-in */
   openConnect: () => void;
@@ -25,7 +24,7 @@ interface UiContext {
 
 const Ctx = createContext<UiContext | null>(null);
 
-/** Overlay layers (drawer, deposit modal, ⌘K palette) and the toast, as in the prototype. */
+/** Overlay layers (drawer, wallet modals, ⌘K palette) and the toast, as in the prototype. */
 export function UiProvider({ children }: { children: ReactNode }) {
   const [layer, setLayer] = useState<Layer>(null);
   const [drawerPoolId, setDrawerPoolId] = useState<string | null>(null);
@@ -49,7 +48,6 @@ export function UiProvider({ children }: { children: ReactNode }) {
         setDrawerPoolId(id);
         setLayer('drawer');
       },
-      openDeposit: () => setLayer('modal'),
       openPalette: () => setLayer('palette'),
       openConnect: () => setLayer('connect'),
       openConfirmLive: () => setLayer('confirmLive'),

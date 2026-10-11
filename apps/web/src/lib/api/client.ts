@@ -41,8 +41,11 @@ export interface BinwiseClient {
   useVault(id: string): void;
   me(): Promise<Me | null>;
   demoVaultId(): Promise<string | null>;
-  /** Sign-in challenge: our message for signMessage, and the fields for a standard Sign In With Solana request. */
-  signInChallenge(wallet: string): Promise<{ message: string; nonce: string; domain: string; issuedAt: string; statement: string }>;
+  /**
+   * Sign-in challenge: our message for signMessage, and the fields for a standard Sign In With Solana
+   * request. Without a wallet there is no message: only the one-step Sign In With Solana request works.
+   */
+  signInChallenge(wallet?: string): Promise<{ message: string | null; nonce: string; domain: string; issuedAt: string; statement: string }>;
   signIn(wallet: string, message: string, signatureB58: string): Promise<void>;
   signOut(): Promise<void>;
   overview(): Promise<VaultOverview>;
@@ -57,9 +60,6 @@ export interface BinwiseClient {
   pause(): Promise<VaultOverview>;
   resume(): Promise<VaultOverview>;
   setMode(mode: VaultMode, confirm?: boolean): Promise<VaultOverview>;
-  deposit(token: string, amount: number): Promise<VaultOverview>;
-  /** Live mode: record a deposit the user's wallet already sent */
-  depositLive(signature: string): Promise<VaultOverview>;
   /** Returns the claimed amount (mock) or that the request was queued (API). */
   claim(positionId: string): Promise<{ amount?: number; queued?: boolean }>;
   close(positionId: string): Promise<{ ok?: true; queued?: boolean }>;

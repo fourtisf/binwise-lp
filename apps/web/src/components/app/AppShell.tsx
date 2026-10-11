@@ -6,14 +6,13 @@ import type { ReactNode } from 'react';
 import { AppDataProvider } from '@/lib/store';
 import { UiProvider, useUi } from '@/lib/ui';
 import { Icon } from '../Sprite';
-import { DepositModal } from './DepositModal';
 import { Palette } from './Palette';
 import { PoolDrawer } from './PoolDrawer';
 import { Sidebar } from './Sidebar';
 import { Toast } from './Toast';
 import { Topbar } from './Topbar';
 import { WALLET_LOGIN } from '@/lib/site';
-import { ConfirmLiveModal, ConnectModal, WalletProviders } from './Wallet';
+import { ConfirmLiveModal, ConnectModal } from './Wallet';
 import { PAGES, pageFor } from './pages';
 
 function Shell({ children }: { children: ReactNode }) {
@@ -44,7 +43,6 @@ function Shell({ children }: { children: ReactNode }) {
       </div>
       <div className={`scrim${layer ? ' on' : ''}`} id="scrim" onClick={closeLayers}></div>
       <PoolDrawer />
-      {WALLET_LOGIN && <DepositModal />}
       {WALLET_LOGIN && <ConnectModal />}
       <ConfirmLiveModal />
       <Palette />
@@ -55,12 +53,10 @@ function Shell({ children }: { children: ReactNode }) {
 
 export function AppShell({ children }: { children: ReactNode }) {
   return (
-    <WalletProviders>
-      <UiProvider>
-        <AppDataProvider>
-          <Shell>{children}</Shell>
-        </AppDataProvider>
-      </UiProvider>
-    </WalletProviders>
+    <UiProvider>
+      <AppDataProvider>
+        <Shell>{children}</Shell>
+      </AppDataProvider>
+    </UiProvider>
   );
 }

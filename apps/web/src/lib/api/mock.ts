@@ -41,8 +41,6 @@ export function createMockClient(): BinwiseClient {
     pause: () => call(() => engine.pause()),
     resume: () => call(() => engine.resume()),
     setMode: (m) => call(() => engine.setMode(m)),
-    deposit: (t, a) => call(() => engine.deposit(t, a)),
-    depositLive: unsupported,
     claim: (id) => call(() => engine.claim(id)),
     close: (id) => call(() => engine.close(id)),
     deploy: unsupported,

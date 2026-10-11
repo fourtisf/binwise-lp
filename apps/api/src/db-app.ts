@@ -216,16 +216,19 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
   const authLimit = { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } };
 
   app.get<{ Querystring: { wallet?: string } }>('/auth/nonce', authLimit, async (req) => {
-    const wallet = req.query.wallet ?? '';
-    try {
-      new PublicKey(wallet);
-    } catch {
-      throw new ApiError(400, 'bad_wallet', 'That is not a Solana wallet address.');
-    }
+    // The wallet is optional: a standard Sign In With Solana request connects and signs in one step,
+    // so the address is only known once the wallet answers (the signature then proves it).
+    const wallet = req.query.wallet || null;
+    if (wallet)
+      try {
+        new PublicKey(wallet);
+      } catch {
+        throw new ApiError(400, 'bad_wallet', 'That is not a Solana wallet address.');
+      }
     const nonce = newNonce();
     const issuedAt = new Date().toISOString();
     const domain = o.domain ?? 'Binwise';
-    const message = signInMessage(wallet, nonce, issuedAt, domain);
+    const message = wallet ? signInMessage(wallet, nonce, issuedAt, domain) : null;
     // Keyed by the nonce itself, so requesting a new message can't invalidate someone else's.
     await redis.set(REDIS_KEYS.nonce(nonce), JSON.stringify({ message, wallet }), 'EX', 300);
     // `message` for signMessage; the rest for wallets that sign in with the standard Sign In With Solana flow.
@@ -237,18 +240,19 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     const nonce = /\nNonce: ([0-9a-f]{32})(?:\n|$)/.exec(message)?.[1];
     // GETDEL: a nonce can be used exactly once, even by two requests at the same time.
     const raw = nonce ? await redis.getdel(REDIS_KEYS.nonce(nonce)) : null;
-    let issued: { message: string; wallet: string } | null = null;
+    let issued: { message: string | null; wallet: string | null } | null = null;
     try {
-      issued = raw ? (JSON.parse(raw) as { message: string; wallet: string }) : null;
+      issued = raw ? (JSON.parse(raw) as { message: string | null; wallet: string | null }) : null;
     } catch {
       issued = null;
     }
     // Either our own message exactly, or the standard Sign In With Solana message the wallet built
-    // for this domain, this wallet and this nonce.
+    // for this domain, this wallet and this nonce. A nonce issued for one wallet only works for it.
     const ok =
       !!issued &&
-      issued.wallet === wallet &&
-      (message === issued.message || message.startsWith(`${o.domain ?? 'Binwise'} wants you to sign in with your Solana account:\n${wallet}\n`));
+      (issued.wallet === null || issued.wallet === wallet) &&
+      ((issued.message !== null && message === issued.message) ||
+        message.startsWith(`${o.domain ?? 'Binwise'} wants you to sign in with your Solana account:\n${wallet}\n`));
     if (!ok) throw new ApiError(400, 'bad_nonce', 'Sign-in request expired. Try again.');
     if (!verifyWalletSignature(wallet, message, signature)) throw new ApiError(401, 'bad_signature', 'Signature check failed.');
     const user = await ensureUser(db, wallet);

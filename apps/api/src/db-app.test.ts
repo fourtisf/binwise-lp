@@ -89,6 +89,38 @@ describe('sign-in with Solana', () => {
     expect(bad.statusCode).toBe(400);
   });
 
+  it('signs in in one step: Sign In With Solana on a nonce issued before the wallet is known', async () => {
+    // Own address, so this test doesn't spend the other tests' sign-in rate limit.
+    const ip = { remoteAddress: '10.9.9.9' };
+    const nonce = async () => (await app.inject({ url: '/auth/nonce', ...ip })).json();
+    const verify = (wallet: string, message: string, signature: string) =>
+      app.inject({ method: 'POST', url: '/auth/verify', payload: { wallet, message, signature }, ...ip });
+    const siwsFor = (c: { domain: string; statement: string; nonce: string; issuedAt: string }, address: string, domain = c.domain) =>
+      `${domain} wants you to sign in with your Solana account:\n${address}\n\n${c.statement}\n\nURI: https://${domain}\nVersion: 1\nChain ID: mainnet\nNonce: ${c.nonce}\nIssued At: ${c.issuedAt}`;
+    const w = wallet();
+
+    const c = await nonce();
+    expect(c.message).toBeNull();
+    const siws = siwsFor(c, w.address);
+    // Only with the signer's own signature.
+    expect((await verify(w.address, siws, wallet().signMsg(siws))).statusCode).toBe(401);
+
+    // Only the standard message counts: there was no message of ours to sign for this nonce.
+    const c2 = await nonce();
+    const ours = `${c2.domain} wants you to sign in to Binwise with your Solana wallet.\n\nWallet: ${w.address}\nNonce: ${c2.nonce}\nIssued at: ${c2.issuedAt}`;
+    expect((await verify(w.address, ours, w.signMsg(ours))).statusCode).toBe(400);
+
+    // Only for this site's domain.
+    const c3 = await nonce();
+    const phish = siwsFor(c3, w.address, 'evil.example');
+    expect((await verify(w.address, phish, w.signMsg(phish))).statusCode).toBe(400);
+
+    const c4 = await nonce();
+    const ok = await verify(w.address, siwsFor(c4, w.address), w.signMsg(siwsFor(c4, w.address)));
+    expect(ok.statusCode).toBe(200);
+    expect(ok.cookies.some((k) => k.name === 'bw_session')).toBe(true);
+  });
+
   it('rejects a reused or tampered message', async () => {
     const w = wallet();
     const { message } = (await app.inject(`/auth/nonce?wallet=${w.address}`)).json();
