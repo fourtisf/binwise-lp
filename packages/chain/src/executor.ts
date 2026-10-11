@@ -7,6 +7,7 @@ import {
   openPosition,
   slippageUsd,
   type CostModel,
+  type CustomRange,
   type FeeModel,
   farmRewardsUsd,
   type LiquidityShape,
@@ -62,6 +63,8 @@ export interface OpenRequest {
   shape: LiquidityShape;
   /** both = around price; x = one-sided above price (holds X); y = one-sided below price (holds Y) */
   side?: LiquiditySide;
+  /** A range chosen by hand: bins below / above the active bin when it opens (overrides binsEachSide and side) */
+  range?: CustomRange;
   /** Live: skip the open when new bin-array rent exceeds this share of the position, percent */
   maxBinArrayCostPct?: number;
   /** Idempotency key for this action */
@@ -196,7 +199,7 @@ export class PaperExecutor implements Executor {
     const { pool } = req;
     const prices = { ...this.knownPrices, [pool.mintX]: pool.usdX, [pool.mintY]: pool.usdY };
     const side = req.side ?? 'both';
-    const build = (usd: number) => openPosition(usd / pool.usdY, pool.price, pool.binStep, req.binsEachSide, req.shape, side);
+    const build = (usd: number) => openPosition(usd / pool.usdY, pool.price, pool.binStep, req.binsEachSide, req.shape, side, req.range);
     // Acquire exactly the token mix this range needs (all X above price, all Y below).
     const want = composition(build(req.valueUsd), pool.price);
     let cost = want.x > 0 ? this.acquire(pool.mintX, want.x * pool.usdX, prices, pool.tvlUsd) : 0;

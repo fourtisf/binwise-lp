@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { SignInError, signInWithWallet, watchSolanaWallets, type Wallet } from '@/lib/wallets';
+import { SignInError, rememberWallet, signInWithWallet, watchSolanaWallets, type Wallet } from '@/lib/wallets';
 import { useAppData } from '@/lib/store';
 import { useUi } from '@/lib/ui';
 import { Icon } from '../Sprite';
@@ -37,7 +37,7 @@ const sameWallet = (a: string, b: string) => a.toLowerCase().split(' ')[0] === b
 export const shortWallet = (w: string) => `${w.slice(0, 4)}…${w.slice(-4)}`;
 
 /** Installed Solana wallets, following wallets that load after the page. Empty until mounted (no hydration mismatch). */
-function useSolanaWallets() {
+export function useSolanaWallets() {
   const [wallets, setWallets] = useState<Wallet[]>([]);
   useEffect(() => watchSolanaWallets(setWallets), []);
   return wallets;
@@ -132,6 +132,7 @@ export function ConnectModal() {
         (n) => run.current === id && setTryN(n),
       );
       // Signed in (the session cookie is set) even if the user pressed Cancel meanwhile.
+      rememberWallet(w.name);
       closeLayers();
       toast(`Signed in as ${shortWallet(address)}`);
       reload();

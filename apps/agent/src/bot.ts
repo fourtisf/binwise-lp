@@ -1,4 +1,4 @@
-import { STRATEGY_LIMITS, STRATEGY_PRESETS, assessPool, bestPerPair, pairKey, positionCapUsd, positionSizeUsd, type AgentParams, type RiskProfile, type StrategySettings } from '@binwise/core';
+import { STRATEGY_LIMITS, STRATEGY_PRESETS, assessPool, bestPerPair, pairKey, positionCapUsd, positionSizeUsd, type AgentParams, type CustomRange, type LiquidityShape, type RiskProfile, type StrategySettings } from '@binwise/core';
 import { SOL_MINT, isLiveTelegram, liveLimits, walletAddress } from '@binwise/chain';
 import {
   ProposalError,
@@ -43,6 +43,9 @@ export interface ManualRequest {
   usd?: number;
   /** Deploy into a pool the agent wouldn't pick (the owner confirmed the risk) */
   override?: boolean;
+  /** Deploy with the owner's own strategy shape and price range (bins below / above the price) */
+  shape?: LiquidityShape;
+  range?: CustomRange;
   /** Withdraw: token, share of the idle balance (1–100) and destination */
   mint?: string;
   pct?: number;

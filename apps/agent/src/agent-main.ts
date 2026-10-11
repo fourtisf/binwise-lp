@@ -83,7 +83,7 @@ async function manualActions() {
         try {
           result =
             req.action === 'deploy'
-              ? await runManualDeploy(deps, vault, req.poolId!, req.usd ?? 0, req.id, req.chatId ? 'Requested from Telegram' : 'Requested from the app', { override: req.override })
+              ? await runManualDeploy(deps, vault, req.poolId!, req.usd ?? 0, req.id, req.chatId ? 'Requested from Telegram' : 'Requested from the app', { override: req.override, shape: req.shape, range: req.range })
               : req.action === 'proposal'
                 ? await runApprovedProposal(deps, vault, req.proposalId!, req.id)
                 : req.action === 'withdraw'

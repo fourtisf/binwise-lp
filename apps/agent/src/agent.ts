@@ -5,6 +5,7 @@ import {
   binsForHalfWidth,
   dailyStopHit,
   exitReason,
+  customRangeError,
   feesEarnedUsd,
   manualDeployLimit,
   openPosition,
@@ -14,7 +15,9 @@ import {
   shapeFor,
   shouldCompound,
   shouldRebalance,
+  sideOfRange,
   slippageUsd,
+  type CustomRange,
   type CycleDecision,
   type CycleStep,
   type DecisionType,
@@ -107,9 +110,9 @@ interface PoolView {
 type Plan =
   | { kind: 'exit'; pos: Position; view: PoolView; reason: string; manual?: boolean; urgent?: boolean }
   | { kind: 'claim'; pos: Position; view: PoolView; reason: string }
-  | { kind: 'rebalance'; pos: Position; view: PoolView; reason: string; binsEachSide: number; side: LiquiditySide }
+  | { kind: 'rebalance'; pos: Position; view: PoolView; reason: string; binsEachSide: number; side: LiquiditySide; range?: CustomRange }
   | { kind: 'compound'; pos: Position; view: PoolView; reason: string }
-  | { kind: 'deploy'; view: PoolView; sizeUsd: number; shape: LiquidityShape; binsEachSide: number; side: LiquiditySide; reason: string; manual?: boolean };
+  | { kind: 'deploy'; view: PoolView; sizeUsd: number; shape: LiquidityShape; binsEachSide: number; side: LiquiditySide; reason: string; manual?: boolean; range?: CustomRange };
 
 const usd = (n: number, d = 0) => '$' + n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 const pairOf = (v: PoolView) => `${v.snap.pool.tokenA} / ${v.snap.pool.tokenB}`;
@@ -179,6 +182,10 @@ async function poolView(
     },
   };
 }
+
+/** The range a position's owner chose by hand (bins below / above the price), if any. */
+const customRangeOf = (p: Pick<Position, 'rangeBelow' | 'rangeAbove'>): CustomRange | null =>
+  p.rangeBelow != null && p.rangeAbove != null ? { below: p.rangeBelow, above: p.rangeAbove } : null;
 
 const holdingsUsd = (h: Holdings, tokens: Map<string, Token>) =>
   Object.entries(h).reduce((sum, [mint, amt]) => sum + amt * (tokens.get(mint)?.priceUsd ?? 0), 0);
@@ -428,17 +435,19 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
         }
         const { hi } = rangePrices(pos, view.ctx);
         const priceAbove = view.ctx.price >= hi;
+        // A range chosen by hand moves with the price but keeps its bins, side and shape.
+        const custom = customRangeOf(pos);
         // In a ranging market the cheap mode re-opens one-sided with what we hold (no swap).
-        let side: LiquiditySide = useSingleRebalance(view.regime, params) ? singleSidedAfterExit(priceAbove) : regimeSide;
+        let side: LiquiditySide = custom ? sideOfRange(custom) : useSingleRebalance(view.regime, params) ? singleSidedAfterExit(priceAbove) : regimeSide;
         // A one-sided re-open that buys a token must stay within its exposure cap; otherwise go 50/50.
-        if (side !== 'both') {
+        if (side !== 'both' && !custom) {
           const mint = side === 'x' ? view.ctx.mintX : view.ctx.mintY;
           const added = pos.valueUsd - (side === 'x' ? xUsd : yUsd);
           if (added > 1 && added > headroom(mint)) side = 'both';
         }
         const needsSwap = side === 'both' || (side === 'x') === priceAbove;
         const swapUsd = side === 'both' ? pos.valueUsd / 2 : needsSwap ? pos.valueUsd : 0;
-        const probe = openPosition(pos.valueUsd / view.ctx.usdY, view.ctx.price, view.ctx.binStep, binsEachSide, pos.shape, side);
+        const probe = openPosition(pos.valueUsd / view.ctx.usdY, view.ctx.price, view.ctx.binStep, binsEachSide, pos.shape, side, custom ?? undefined);
         const fees6h = feesEarnedUsd({
           pos: probe,
           price: view.ctx.price,
@@ -466,7 +475,16 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
           addExposure(view.ctx.mintX, newX - xUsd);
           addExposure(view.ctx.mintY, pos.valueUsd - newX - yUsd);
         }
-        if (v.act) plans.push({ kind: 'rebalance', pos, view, reason: v.reason + (side !== 'both' ? ` Re-opened one-sided (${side === 'x' ? 'above' : 'below'} price).` : ''), binsEachSide, side });
+        if (v.act)
+          plans.push({
+            kind: 'rebalance',
+            pos,
+            view,
+            reason: v.reason + (custom ? ' Same width and shape as you chose.' : side !== 'both' ? ` Re-opened one-sided (${side === 'x' ? 'above' : 'below'} price).` : ''),
+            binsEachSide,
+            side,
+            ...(custom ? { range: custom } : {}),
+          });
         else holds.push(`${pairOf(view)}: ${v.reason}`);
         continue;
       }
@@ -654,7 +672,7 @@ async function execute(
         size = Math.min(size, liveLimits().maxTotalUsd - (await liveTotalUsd(db)));
         if (size < MIN_POSITION_USD) throw new Error('Live capacity is full (LIVE_MAX_TOTAL_USD). Nothing was opened.');
       }
-      const r = await ex.open({ pool: v.ctx, valueUsd: size, binsEachSide: plan.binsEachSide, shape: plan.shape, side: plan.side, maxBinArrayCostPct: params.maxBinArrayCostPct, key });
+      const r = await ex.open({ pool: v.ctx, valueUsd: size, binsEachSide: plan.binsEachSide, shape: plan.shape, side: plan.side, range: plan.range, maxBinArrayCostPct: params.maxBinArrayCostPct, key });
       sigs.push(...r.txSigs);
       const pos = await db.position.create({
         data: {
@@ -676,6 +694,7 @@ async function execute(
           valueUsd: r.amountX * v.ctx.usdX + r.amountY * v.ctx.usdY,
           costsUsd: r.costUsd,
           manual: plan.manual ?? false,
+          ...(plan.range ? { rangeBelow: plan.range.below, rangeAbove: plan.range.above } : {}),
         },
       });
       return { r, pos };
@@ -684,7 +703,7 @@ async function execute(
     const value = pos.entryValueUsd;
     return {
       title: `Deployed ${usd(value)} to ${pair}`,
-      text: `${plan.side === 'x' ? 'Trending up, so liquidity sits above price. ' : plan.side === 'y' ? 'Trending up, so liquidity sits below price. ' : ''}Score ${v.a.score}, trend ${v.snap.trend7d != null ? (v.snap.trend7d >= 0 ? '+' : '−') + Math.abs(v.snap.trend7d).toFixed(1) + '%' : 'n/a'}, inside the ${s.maxAllocPct}% pool cap. ${plan.shape === 'bidask' ? 'Bid-ask' : plan.shape === 'curve' ? 'Curve' : 'Spot'} over ${plan.binsEachSide * 2 + 1} bins.`,
+      text: `${plan.side === 'x' ? 'Trending up, so liquidity sits above price. ' : plan.side === 'y' ? 'Trending up, so liquidity sits below price. ' : ''}Score ${v.a.score}, trend ${v.snap.trend7d != null ? (v.snap.trend7d >= 0 ? '+' : '−') + Math.abs(v.snap.trend7d).toFixed(1) + '%' : 'n/a'}, inside the ${s.maxAllocPct}% pool cap. ${plan.shape === 'bidask' ? 'Bid-ask' : plan.shape === 'curve' ? 'Curve' : 'Spot'} over ${plan.range ? plan.range.below + plan.range.above + 1 : plan.binsEachSide * 2 + 1} bins${plan.range ? ', the range you chose' : ''}.`,
       txSigs: sigs,
       sent: sigs.length > 0,
       inputs: { positionId: pos.id, sizeUsd: plan.sizeUsd, costUsd: r.costUsd },
@@ -754,7 +773,7 @@ async function execute(
   const valueUsd = closed.amountX * v.ctx.usdX + closed.amountY * v.ctx.usdY + closed.feesUsd - closed.costUsd;
   let r: Awaited<ReturnType<Executor['open']>>;
   try {
-    r = await ex.open({ pool: v.ctx, valueUsd, binsEachSide: plan.binsEachSide, shape: pos.shape, side: plan.side, maxBinArrayCostPct: params.maxBinArrayCostPct, key: `${key}:reopen` });
+    r = await ex.open({ pool: v.ctx, valueUsd, binsEachSide: plan.binsEachSide, shape: pos.shape, side: plan.side, range: plan.range, maxBinArrayCostPct: params.maxBinArrayCostPct, key: `${key}:reopen` });
   } catch (e) {
     // The old range is closed and recorded; its funds wait in the vault for the next deploy.
     return {
@@ -1044,7 +1063,8 @@ async function runPositionAction(
               view,
               reason: opts.reason ?? 'Manual rebalance.',
               binsEachSide: opts.binsEachSide ?? Math.min(MAX_BINS_EACH_SIDE, binsForHalfWidth(rangeHalfWidth(s.profile, view.snap.volatility, view.stablePair, params), view.ctx.binStep)),
-              side: opts.side ?? 'both',
+              // A range chosen by hand keeps its bins and side.
+              ...(customRangeOf(pos) ? { side: sideOfRange(customRangeOf(pos)!), range: customRangeOf(pos)! } : { side: opts.side ?? 'both' }),
             };
   const r = await execute(deps, vault, executor, plan, key, s, tokens, (deps.now ?? Date.now)(), params);
   await recordManual(deps, vault, executor, pos.poolId, kind === 'claim' ? 'compound' : kind, r, key, {});
@@ -1087,8 +1107,11 @@ export async function runManualDeploy(
   requestedUsd: number,
   requestId: string,
   source = 'Requested from Telegram',
-  /** override: the owner chose a pool the agent wouldn't enter (after a risk warning) */
-  opts: { override?: boolean } = {},
+  /**
+   * override: the owner chose a pool the agent wouldn't enter (after a risk warning).
+   * shape / range: the owner's own strategy shape and price range (bins below / above the price).
+   */
+  opts: { override?: boolean; shape?: LiquidityShape; range?: CustomRange } = {},
 ): Promise<ManualResult | null> {
   const { db } = deps;
   const now = (deps.now ?? Date.now)();
@@ -1113,9 +1136,15 @@ export async function runManualDeploy(
     });
     if (recentExit) throw new Error(`The agent left this pool less than ${params.reentryCooldownHours}h ago and waits before going back in.`);
   }
+  if (opts.range) {
+    const bad = customRangeError(opts.range);
+    if (bad) throw new Error(bad);
+  }
   // By hand against the agent's call: a balanced position, whatever the regime.
-  const side = sideForRegime(view.regime, params, view.riskyIsY) ?? (override ? 'both' : null);
-  if (!side) throw new Error('This pool is in a downtrend. The agent waits for the trend to turn.');
+  const regimeSide = sideForRegime(view.regime, params, view.riskyIsY) ?? (override ? 'both' : null);
+  if (!regimeSide) throw new Error('This pool is in a downtrend. The agent waits for the trend to turn.');
+  // The owner's own range sets the side (all above the price: the first token; all below: the second).
+  const side = opts.range ? sideOfRange(opts.range) : regimeSide;
   const open = await db.position.findMany({ where: { vaultId: vault.id, status: 'open' } });
   if (open.some((p) => p.poolId === poolId)) throw new Error('You already have a position in this pool.');
 
@@ -1143,11 +1172,12 @@ export async function runManualDeploy(
     kind: 'deploy',
     view,
     sizeUsd: size,
-    shape: shapeFor(s.profile, view.stablePair, view.snap.volatility),
+    shape: opts.shape ?? shapeFor(s.profile, view.stablePair, view.snap.volatility),
     binsEachSide,
     side,
     reason: override ? `Opened by hand although the agent's call is "${view.a.callLabel}": ${view.a.reason}` : view.a.reason,
     manual: override,
+    ...(opts.range ? { range: opts.range } : {}),
   };
   const r = await execute(deps, vault, executor, plan, key, s, tokens, now, params);
   const reduced = requestedUsd > 0 && size < requestedUsd - 1 ? ` Sized down from ${usd(requestedUsd)} to stay within your limits.` : '';

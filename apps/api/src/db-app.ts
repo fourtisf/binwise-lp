@@ -5,17 +5,26 @@ import websocket from '@fastify/websocket';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import type { Redis } from 'ioredis';
 import { randomUUID } from 'node:crypto';
-import { Connection, PublicKey } from '@solana/web3.js';
+import { Connection, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
 import {
+  DEFAULT_STRATEGY,
+  MAX_BINS_EACH_SIDE,
+  MAX_POSITION_BINS,
   REDIS_KEYS,
   bestPerPair,
+  binsForHalfWidth,
+  customRangeError,
+  rangeHalfWidth,
+  shapeFor,
   isBridgedSymbol,
   manualDeployLimit,
   pairKey,
   positionCapUsd,
   validateStrategy,
+  type CustomRange,
   type DecisionType,
   type DemoEvent,
+  type LiquidityShape,
   type DepositAsset,
   type StrategySettings,
   type Portfolio,
@@ -47,6 +56,7 @@ import {
   pendingProposals,
   proposalView,
   rejectProposal,
+  isStable,
   liveTotalUsd,
   shrinkDeposits as shrinkDepositsOf,
   strategySettings as strategySettingsOf,
@@ -452,7 +462,25 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     const strategy = req.query.vault ? (await readable(req, req.query.vault)).vault.strategy : null;
     const row = (await poolRows(db, strategy)).find((r) => r.id === req.params.id);
     if (!row) throw new ApiError(404, 'not_found', 'No recent data for that pool.');
-    return row;
+    // For Add LP by hand: the price and bins, and the shape and width the agent itself would use here.
+    const snap = await db.poolSnapshot.findFirst({ where: { poolId: row.id }, orderBy: { ts: 'desc' }, include: { pool: true } });
+    if (!snap) return row;
+    const toks = await tokenMap(db, [snap.pool.mintA, snap.pool.mintB]);
+    const a = toks.get(snap.pool.mintA);
+    const b = toks.get(snap.pool.mintB);
+    const stablePair = !!a && !!b && isStable(a) && isStable(b);
+    const profile = strategy ? strategySettingsOf(strategy).profile : DEFAULT_STRATEGY.profile;
+    const params = await activeParams(db);
+    return {
+      ...row,
+      lp: {
+        price: snap.price,
+        binStep: snap.pool.binStep,
+        shape: shapeFor(profile, stablePair, snap.volatility),
+        binsEachSide: Math.min(MAX_BINS_EACH_SIDE, binsForHalfWidth(rangeHalfWidth(profile, snap.volatility, stablePair, params), snap.pool.binStep)),
+        maxBins: MAX_POSITION_BINS,
+      },
+    };
   });
 
   // ---------- vault reads ----------
@@ -472,7 +500,7 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
    * as the agent will (manualDeployLimit).
    */
   app.get<VP & { Querystring: { pool?: string } }>('/vaults/:id/balance', async (req): Promise<VaultBalance> => {
-    const { vault } = await readable(req, req.params.id);
+    const { vault, readOnly } = await readable(req, req.params.id);
     const live = vault.mode === 'live';
     let held = vault.cash as Record<string, number>;
     let source: VaultBalance['source'] = 'agent';
@@ -489,26 +517,41 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     const idle = await pricedTokens({ ...held, ...(live ? { [SOL_MINT]: Math.max(0, (held[SOL_MINT] ?? 0) - SOL_RESERVE) } : {}) });
     const availableUsd = idle.totalUsd;
     const assets = idle.shown.map(({ symbol, mint, amount, usd }) => ({ symbol, mint, amount, usd }));
-    const out: VaultBalance = { availableUsd, assets, reserveSol, source };
+    const out: VaultBalance = { availableUsd, assets, reserveSol, source, ...(live && source === 'chain' ? { vaultSol: held[SOL_MINT] ?? 0 } : {}) };
+    // The owner's own SOL, which Add LP can move into the vault first (a wallet made in Telegram is the vault itself).
+    if (live && !readOnly && vault.agentPubkey && (o.rpc || process.env.RPC_URL)) {
+      const owner = await db.user.findUnique({ where: { id: vault.userId } });
+      if (owner && owner.wallet !== vault.agentPubkey) {
+        const lamports = await Promise.resolve()
+          .then(() => rpc().getBalance(new PublicKey(owner.wallet)))
+          .catch(() => null);
+        const sol = await db.token.findUnique({ where: { mint: SOL_MINT } });
+        if (lamports != null) out.wallet = { address: owner.wallet, sol: lamports / 1e9, solPriceUsd: sol?.priceUsd ?? 0 };
+      }
+    }
     const poolId = req.query.pool;
     const snap = poolId && vault.strategy ? await db.poolSnapshot.findFirst({ where: { poolId }, orderBy: { ts: 'desc' } }) : null;
     if (snap && vault.strategy) {
       const open = await db.position.findMany({ where: { vaultId: vault.id, status: 'open' }, select: { poolId: true, valueUsd: true } });
       const s = strategySettingsOf(vault.strategy);
       const limits = live ? liveLimits() : null;
+      const params = await activeParams(db);
+      const positionsUsd = open.reduce((sum, p) => sum + p.valueUsd, 0);
+      const room = limits ? Math.min(limits.maxUsd - positionsUsd, limits.maxTotalUsd - (await liveTotalUsd(db))) : Infinity;
+      const ceiling = Math.max(0, Math.min(snap.tvl * params.maxPoolShare, positionCapUsd(s), room));
       const lim = open.some((p) => p.poolId === poolId)
         ? { maxUsd: 0, limit: 'held' as const }
         : manualDeployLimit({
             idleUsd: availableUsd,
-            positionsUsd: open.reduce((sum, p) => sum + p.valueUsd, 0),
+            positionsUsd,
             openPositions: open.length,
             poolTvlUsd: snap.tvl,
             maxAllocPct: s.maxAllocPct,
             capUsd: positionCapUsd(s),
-            params: await activeParams(db),
+            params,
             live: limits ? { maxUsd: limits.maxUsd, maxPositions: limits.maxPositions, roomTotalUsd: limits.maxTotalUsd - (await liveTotalUsd(db)) } : undefined,
           });
-      out.pool = { ...lim, minUsd: minPositionUsd() };
+      out.pool = { ...lim, minUsd: minPositionUsd(), allocPct: s.maxAllocPct, ceilingUsd: Number.isFinite(ceiling) ? ceiling : null };
     }
     return out;
   });
@@ -728,6 +771,29 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     });
   });
 
+  /**
+   * Live: an unsigned SOL transfer from the owner's wallet to the vault wallet, for the owner to approve
+   * in their wallet (it shows the amount and destination). Once sent, POST /vaults/:id/deposit with the
+   * signature records it after checking it on-chain.
+   */
+  app.post<VP & { Body: { sol?: number } }>('/vaults/:id/deposit/tx', moneyLimit, async (req) => {
+    const v = await writable(req, req.params.id);
+    if (v.mode !== 'live' || !v.agentPubkey) throw new ApiError(400, 'not_live', 'Only a live vault has a vault wallet to send to.');
+    if (v.user.wallet === v.agentPubkey) throw new ApiError(400, 'same_wallet', 'This vault wallet is your wallet: nothing to move.');
+    const sol = Number(req.body?.sol);
+    if (!Number.isFinite(sol) || sol <= 0) throw new ApiError(400, 'invalid_amount', 'Enter how much SOL to move.');
+    const lamports = Math.floor(sol * 1e9);
+    const conn = chain();
+    const owner = new PublicKey(v.user.wallet);
+    const [balance, { blockhash, lastValidBlockHeight }] = await Promise.all([conn.getBalance(owner), conn.getLatestBlockhash('confirmed')]).catch(() => {
+      throw new ApiError(502, 'rpc_unavailable', 'Could not reach Solana right now. Nothing was sent; try again in a moment.');
+    });
+    // The wallet pays the network fee on top (a few thousand lamports).
+    if (lamports + 10_000 > balance) throw new ApiError(400, 'insufficient_balance', `Your wallet has ${fmt(balance / 1e9, 4)} SOL; keep a little for the network fee.`);
+    const tx = new Transaction({ feePayer: owner, blockhash, lastValidBlockHeight }).add(SystemProgram.transfer({ fromPubkey: owner, toPubkey: new PublicKey(v.agentPubkey), lamports }));
+    return { tx: tx.serialize({ requireAllSignatures: false, verifySignatures: false }).toString('base64'), lamports, to: v.agentPubkey };
+  });
+
   async function symbolMint(symbol: string, wallet: Record<string, number>) {
     const tokens = await db.token.findMany({ where: { mint: { in: Object.keys(wallet) } } });
     const t = tokens.find((x) => x.symbol === symbol);
@@ -764,8 +830,9 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     const deposits = { ...(v.deposits as Record<string, number>) };
     for (const [m, a] of Object.entries(credited)) deposits[m] = (deposits[m] ?? 0) + a;
     const tokens = await db.token.findMany({ where: { mint: { in: Object.keys(credited) } } });
+    // Small amounts keep their digits (0.784 SOL, not 0.78), like the agent's own deposit records.
     const label = Object.entries(credited)
-      .map(([m, a]) => `${fmt(a)} ${tokens.find((t) => t.mint === m)?.symbol ?? m.slice(0, 4)}`)
+      .map(([m, a]) => `${a.toLocaleString('en-US', { maximumFractionDigits: 4 })} ${tokens.find((t) => t.mint === m)?.symbol ?? m.slice(0, 4)}`)
       .join(' + ');
     const flowUsd = await usdValue(credited);
     // One transaction: the idempotency key (unique) and the credit land together or not at all.
@@ -845,15 +912,24 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
   });
 
   // Add LP by hand: queued for the agent, which re-checks everything (limits, data, kill switch) before opening.
-  app.post<VP & { Body: { poolId?: string; usd?: number; override?: boolean } }>('/vaults/:id/deploy', moneyLimit, async (req, reply) => {
+  app.post<VP & { Body: { poolId?: string; usd?: number; override?: boolean; shape?: string; range?: { below?: unknown; above?: unknown } } }>('/vaults/:id/deploy', moneyLimit, async (req, reply) => {
     const v = await writable(req, req.params.id);
     const poolId = String(req.body?.poolId ?? '');
     const usd = Number(req.body?.usd ?? 0);
     if (!Number.isFinite(usd) || usd < 0) throw new ApiError(400, 'invalid_amount', 'Enter an amount.');
+    // The owner's own strategy shape and price range (bins below / above the price); the agent picks when absent.
+    const shape = req.body?.shape;
+    if (shape != null && !['spot', 'curve', 'bidask'].includes(shape)) throw new ApiError(400, 'invalid_shape', 'Shape must be spot, curve or bidask.');
+    const range = req.body?.range != null ? ({ below: Number(req.body.range.below), above: Number(req.body.range.above) } as CustomRange) : undefined;
+    const bad = range && customRangeError(range);
+    if (bad) throw new ApiError(400, 'invalid_range', bad);
     const pool = await db.pool.findUnique({ where: { id: poolId } });
     if (!pool) throw new ApiError(404, 'not_found', 'No pool with that id.');
     if (v.status !== 'running') throw new ApiError(409, 'paused', 'The agent is paused. Resume it first.');
-    await redis.lpush(REDIS_KEYS.actions(v.id), JSON.stringify({ id: randomUUID(), action: 'deploy', poolId, usd, override: req.body?.override === true }));
+    await redis.lpush(
+      REDIS_KEYS.actions(v.id),
+      JSON.stringify({ id: randomUUID(), action: 'deploy', poolId, usd, override: req.body?.override === true, ...(shape ? { shape: shape as LiquidityShape } : {}), ...(range ? { range } : {}) }),
+    );
     return reply.status(202).send({ queued: true, pair: `${pool.tokenA} / ${pool.tokenB}` });
   });
 

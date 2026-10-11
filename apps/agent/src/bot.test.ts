@@ -212,6 +212,31 @@ describe('telegram bot', () => {
     expect(last().text).toMatch(/Pools with "jup"/);
   });
 
+  it('adds LP with the owner\'s own shape and range, and rebalances keep that width and shape', async () => {
+    // Big enough that a rebalance pays for itself (fees over 6h > 1.5 × its cost).
+    const r = await runManualDeploy(agentDeps(), await vault(), POOL, 2000, 'custom-1', 'Requested from the app', { shape: 'bidask', range: { below: 2, above: 6 } });
+    expect(resultMessage(r)).toMatch(/Bid-ask over 9 bins, the range you chose/);
+    const pos = await db.position.findFirstOrThrow();
+    expect(pos).toMatchObject({ shape: 'bidask', rangeBelow: 2, rangeAbove: 6 });
+    expect(pos.upperBin - pos.lowerBin).toBe(8);
+    // Ranges a position can't hold are refused before anything happens.
+    await expect(runManualDeploy(agentDeps(), await vault(), POOL, 100, 'custom-2', 'Requested from the app', { range: { below: 50, above: 50 } })).rejects.toThrow(/at most 69 bins/);
+
+    // Price runs above the range: the agent moves it, same bins on each side and same shape.
+    meteora.price *= 1.15;
+    for (let i = 0; i < 6; i++) {
+      now += 31 * 60_000;
+      await collectOnce({ db, meteora: asMeteora(meteora), now: () => now }, DEFAULT_COLLECTOR);
+      await runVaultCycle(agentDeps(), await vault());
+      if ((await db.position.findUniqueOrThrow({ where: { id: pos.id } })).rebalances > 0) break;
+    }
+    const moved = await db.position.findUniqueOrThrow({ where: { id: pos.id } });
+    expect(moved.rebalances).toBeGreaterThan(0);
+    expect(moved.lowerBin).toBeGreaterThan(pos.upperBin - 1);
+    expect(moved.upperBin - moved.lowerBin).toBe(8);
+    expect(moved).toMatchObject({ shape: 'bidask', rangeBelow: 2, rangeAbove: 6, inRange: true });
+  });
+
   it('shows positions with Close, asks before closing, and only touches this chat\'s vault', async () => {
     await say('/start code123');
     await runManualDeploy(agentDeps(), await vault(), POOL, 200, 'seed');

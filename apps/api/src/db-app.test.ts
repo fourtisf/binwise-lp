@@ -6,6 +6,7 @@ import WebSocket from 'ws';
 import { Redis } from 'ioredis';
 import type { FastifyInstance } from 'fastify';
 import { REDIS_KEYS, DEFAULT_STRATEGY } from '@binwise/core';
+import { SystemInstruction, Transaction } from '@solana/web3.js';
 import { createVault, ensureUser, getDb } from '@binwise/db';
 import { buildDbApp } from './db-app';
 
@@ -334,7 +335,7 @@ describe('vault balance (Add LP)', () => {
     expect(b.assets).toEqual([{ symbol: 'SOL', mint: SOL, amount: 10, usd: 1500 }]);
     expect(b).toMatchObject({ reserveSol: 0, source: 'agent' });
     // Balanced strategy: at most 25% of the vault in one pool.
-    expect(b.pool).toEqual({ maxUsd: 375, limit: 'strategy', minUsd: 50 });
+    expect(b.pool).toEqual({ maxUsd: 375, limit: 'strategy', minUsd: 50, allocPct: 25, ceilingUsd: 20_000 });
     // Without a pool: just the balance.
     expect((await app.inject({ url: `/vaults/${id}/balance`, headers })).json().pool).toBeUndefined();
 
@@ -524,6 +525,70 @@ describe('portfolio tokens', () => {
       const before = lookups;
       await liveApp.inject({ url: `/vaults/${v.id}/portfolio`, headers });
       expect(lookups).toBe(before);
+    } finally {
+      await liveApp.close(); // also closes sub2
+    }
+  });
+});
+
+describe('add LP by hand: options and funding from the wallet', () => {
+  it('queues the owner\'s own shape and range, refuses ranges a position cannot hold, and tells the drawer the price and bins', async () => {
+    const { headers } = await signIn(wallet(), '10.9.9.4');
+    const id = (await app.inject({ url: '/me', headers })).json().vaults[0].id;
+    await db.pool.create({ data: { id: 'PL1', name: 'SOL-USDC', tokenA: 'SOL', tokenB: 'USDC', mintA: SOL, mintB: USDC, binStep: 25, baseFee: 0.1 } });
+    await db.poolSnapshot.create({ data: { poolId: 'PL1', tvl: 1e6, volume24h: 2e6, price: 150, volatility: 3, score: 70, scoreBreakdown: [], call: 'in', callLabel: 'Enter', reason: 'ok' } });
+
+    const detail = (await app.inject({ url: `/pools/PL1?vault=${id}`, headers })).json();
+    expect(detail.lp).toMatchObject({ price: 150, binStep: 25, maxBins: 69 });
+    expect(['spot', 'curve', 'bidask']).toContain(detail.lp.shape);
+    expect(detail.lp.binsEachSide).toBeGreaterThan(0);
+
+    const ok = await app.inject({ method: 'POST', url: `/vaults/${id}/deploy`, headers, payload: { poolId: 'PL1', usd: 50, shape: 'curve', range: { below: 10, above: 4 } } });
+    expect(ok.statusCode).toBe(202);
+    expect(JSON.parse((await redis.lindex(REDIS_KEYS.actions(id), 0))!)).toMatchObject({ action: 'deploy', poolId: 'PL1', usd: 50, shape: 'curve', range: { below: 10, above: 4 } });
+    const wide = await app.inject({ method: 'POST', url: `/vaults/${id}/deploy`, headers, payload: { poolId: 'PL1', usd: 50, range: { below: 40, above: 40 } } });
+    expect(wide.statusCode).toBe(400);
+    expect(wide.json().message).toMatch(/at most 69 bins/);
+    expect((await app.inject({ method: 'POST', url: `/vaults/${id}/deploy`, headers, payload: { poolId: 'PL1', usd: 50, shape: 'zigzag' } })).statusCode).toBe(400);
+    expect((await app.inject({ method: 'POST', url: `/vaults/${id}/deploy`, headers, payload: { poolId: 'PL1', usd: 50, range: { below: 1.5, above: 2 } } })).statusCode).toBe(400);
+  });
+
+  it('builds a SOL transfer from the owner\'s wallet to the vault wallet for the wallet to approve', async () => {
+    const owner = wallet();
+    const agent = wallet().address;
+    const blockhash = wallet().address;
+    const conn = {
+      getBalance: async (pk: { toBase58(): string }) => (pk.toBase58() === owner.address ? 3 : 0.4) * 1e9,
+      getLatestBlockhash: async () => ({ blockhash, lastValidBlockHeight: 1000 }),
+      getParsedTokenAccountsByOwner: async () => ({ value: [] }),
+    };
+    const sub2 = new Redis(process.env.REDIS_URL!);
+    const liveApp = await buildDbApp({ db, redis, sub: sub2, domain: 'test.binwise', rpc: () => conn as never });
+    try {
+      const user = await ensureUser(db, owner.address);
+      const v = await createVault(db, user.id, { live: { agentPubkey: agent, encSecret: new Uint8Array(8) } });
+      const ip = { remoteAddress: '10.9.9.3' };
+      const nonce = (await liveApp.inject({ url: `/auth/nonce?wallet=${owner.address}`, ...ip })).json();
+      const login = await liveApp.inject({ method: 'POST', url: '/auth/verify', ...ip, payload: { wallet: owner.address, message: nonce.message, signature: owner.signMsg(nonce.message) } });
+      const headers = { cookie: `bw_session=${login.cookies.find((c) => c.name === 'bw_session')!.value}` };
+
+      // The drawer learns what the owner's wallet could move in.
+      const bal = (await liveApp.inject({ url: `/vaults/${v.id}/balance`, headers })).json();
+      expect(bal.wallet).toMatchObject({ address: owner.address, sol: 3, solPriceUsd: 150 });
+      expect(bal.vaultSol).toBe(0.4);
+
+      const r = await liveApp.inject({ method: 'POST', url: `/vaults/${v.id}/deposit/tx`, headers, payload: { sol: 1.5 } });
+      expect(r.statusCode).toBe(200);
+      const tx = Transaction.from(Buffer.from(r.json().tx, 'base64'));
+      expect(tx.feePayer?.toBase58()).toBe(owner.address);
+      expect(tx.recentBlockhash).toBe(blockhash);
+      expect(tx.instructions).toHaveLength(1);
+      const t = SystemInstruction.decodeTransfer(tx.instructions[0]);
+      expect([t.fromPubkey.toBase58(), t.toPubkey.toBase58(), Number(t.lamports)]).toEqual([owner.address, agent, 1_500_000_000]);
+      // Never more than the wallet holds (keeping the network fee), never nothing, never for someone else.
+      expect((await liveApp.inject({ method: 'POST', url: `/vaults/${v.id}/deposit/tx`, headers, payload: { sol: 3 } })).json().error).toBe('insufficient_balance');
+      expect((await liveApp.inject({ method: 'POST', url: `/vaults/${v.id}/deposit/tx`, headers, payload: { sol: 0 } })).statusCode).toBe(400);
+      expect((await liveApp.inject({ method: 'POST', url: `/vaults/${v.id}/deposit/tx`, payload: { sol: 1 } })).statusCode).toBe(401);
     } finally {
       await liveApp.close(); // also closes sub2
     }

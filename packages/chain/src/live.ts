@@ -22,7 +22,7 @@ import {
 } from '@solana/spl-token';
 import BN from 'bn.js';
 import bs58 from 'bs58';
-import { DEFAULT_COSTS, type CostModel, type LiquidityShape } from '@binwise/core';
+import { DEFAULT_COSTS, composition, openPosition, sideOfRange, type CostModel, type LiquidityShape } from '@binwise/core';
 import { TX_COUNT, type ActionResult, type Executor, type Holdings, type MarkResult, type OpenRequest, type OpenResult, type PoolCtx, type PositionRef } from './executor';
 import { JitoClient } from './jito';
 import { parseDeposit } from './deposits';
@@ -287,14 +287,19 @@ export class LiveExecutor implements Executor {
   async open(req: OpenRequest): Promise<OpenResult> {
     const { pool } = req;
     const prices = { ...this.knownPrices, [pool.mintX]: pool.usdX, [pool.mintY]: pool.usdY };
-    const side = req.side ?? 'both';
+    const side = req.range ? sideOfRange(req.range) : (req.side ?? 'both');
     const dlmm = await DLMM.create(this.d.conn, new PublicKey(pool.address));
     // One-sided ranges cover the same 2n+1 bins, starting at the active bin and going up (X) or down (Y).
-    const count = req.binsEachSide * 2 + 1;
+    // A range chosen by hand covers its own bins below and above the active bin.
+    const count = req.range ? req.range.below + req.range.above + 1 : req.binsEachSide * 2 + 1;
     const rangeFor = (activeId: number) => {
-      const minBinId = side === 'both' ? activeId - req.binsEachSide : side === 'x' ? activeId : activeId - count + 1;
+      const minBinId = req.range ? activeId - req.range.below : side === 'both' ? activeId - req.binsEachSide : side === 'x' ? activeId : activeId - count + 1;
       return { minBinId, maxBinId: minBinId + count - 1 };
     };
+    // How much of each token the range needs: half each when centred, but a lopsided range by hand needs more of one.
+    const mix = req.range ? composition(openPosition(req.valueUsd / pool.usdY, pool.price, pool.binStep, 0, req.shape, side, req.range), pool.price) : null;
+    const needX = mix ? mix.x * pool.usdX : req.valueUsd / 2;
+    const needY = mix ? mix.y * pool.usdY : req.valueUsd / 2;
 
     // New bin arrays cost rent that is never refunded; skip ranges where that eats the position.
     // Checked before any funding swap, so a skipped open costs nothing.
@@ -315,8 +320,8 @@ export class LiveExecutor implements Executor {
     const funding =
       side === 'both'
         ? [
-            ...(await this.acquire(pool.mintX, req.valueUsd / 2, prices, `${req.key}:x`, [pool.mintY])),
-            ...(await this.acquire(pool.mintY, req.valueUsd / 2, prices, `${req.key}:y`, [pool.mintX])),
+            ...(await this.acquire(pool.mintX, needX, prices, `${req.key}:x`, [pool.mintY])),
+            ...(await this.acquire(pool.mintY, needY, prices, `${req.key}:y`, [pool.mintX])),
           ]
         : side === 'x'
           ? await this.acquire(pool.mintX, req.valueUsd, prices, `${req.key}:x`, [])
@@ -338,7 +343,7 @@ export class LiveExecutor implements Executor {
       y = raw(Math.min(have[pool.mintY] ?? 0, req.valueUsd / pool.usdY), pool.decimalsY);
     } else {
       // Balance X and Y for the strategy; scale down if Y is short.
-      x = raw(Math.min(have[pool.mintX] ?? 0, req.valueUsd / 2 / pool.usdX), pool.decimalsX);
+      x = raw(Math.min(have[pool.mintX] ?? 0, needX / pool.usdX), pool.decimalsX);
       y = sdk().autoFillYByStrategy(active.binId, pool.binStep, x, active.xAmount, active.yAmount, minBinId, maxBinId, strategy.strategyType);
       const yAvail = raw(have[pool.mintY] ?? 0, pool.decimalsY);
       if (y.gt(yAvail)) {

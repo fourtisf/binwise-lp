@@ -6,6 +6,8 @@ export interface InjectedSolana {
   connect(opts?: { onlyIfTrusted?: boolean }): Promise<{ publicKey: { toBase58(): string } } | void>;
   publicKey?: { toBase58(): string } | null;
   signMessage(message: Uint8Array, display?: 'utf8' | 'hex'): Promise<{ signature: Uint8Array } | Uint8Array>;
+  /** Takes a @solana/web3.js Transaction */
+  signAndSendTransaction?(tx: unknown): Promise<{ signature: string } | string>;
 }
 
 type W = Record<string, unknown> & {

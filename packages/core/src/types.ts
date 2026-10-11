@@ -62,6 +62,11 @@ export interface PoolDetail extends PoolRow {
   breakdown: ScoreComponent[];
   /** Plain-language reason for the agent call. */
   reason: string;
+  /**
+   * For Add LP by hand: the pool's price (second token per first token), bin step, and what the agent
+   * itself would pick for this vault (shape, bins each side of the price).
+   */
+  lp?: { price: number; binStep: number; shape: LiquidityShape; binsEachSide: number; maxBins: number };
 }
 
 export interface DepositAsset {
@@ -111,7 +116,19 @@ export interface VaultBalance {
   /** 'chain': read from Solana just now. 'agent': as of the agent's last cycle (Solana unreachable, or paper). */
   source: 'chain' | 'agent';
   /** Asked for one pool (?pool=): the most Add LP puts in it now, the limit that decides it, and the minimum. */
-  pool?: { maxUsd: number; minUsd: number; limit: 'balance' | 'strategy' | 'cap' | 'live' | 'positions' | 'held' };
+  pool?: {
+    maxUsd: number;
+    minUsd: number;
+    limit: 'balance' | 'strategy' | 'cap' | 'live' | 'positions' | 'held';
+    /** The strategy's max share of the vault in one pool, percent */
+    allocPct: number;
+    /** What more funds in the vault can't raise (2% of the pool, the per-position cap, the live limits); null: none */
+    ceilingUsd: number | null;
+  };
+  /** Live: SOL in the owner's own wallet, which Add LP can move into the vault first (the owner approves in the wallet) */
+  wallet?: { address: string; sol: number; solPriceUsd: number };
+  /** Live: SOL the vault wallet itself holds right now (the reserve for fees and rent comes out of this) */
+  vaultSol?: number;
 }
 
 /** One line of a portfolio: an idle token, or an open position (value includes unclaimed fees). */

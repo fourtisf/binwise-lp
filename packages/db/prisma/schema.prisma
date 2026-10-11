@@ -235,6 +235,9 @@ model Position {
   address          String?
   /// Opened by hand into a pool the agent wouldn't pick: the agent manages it but never exits it on its trend rules
   manual           Boolean         @default(false)
+  /// Range chosen by hand: bins below / above the price. Rebalances keep this width and the shape.
+  rangeBelow       Int?
+  rangeAbove       Int?
   binStep          Int
   lowerBin         Int
   upperBin         Int

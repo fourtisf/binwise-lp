@@ -1,4 +1,11 @@
-import { SolanaSignIn, SolanaSignMessage, type SolanaSignInFeature, type SolanaSignMessageFeature } from '@solana/wallet-standard-features';
+import {
+  SolanaSignAndSendTransaction,
+  SolanaSignIn,
+  SolanaSignMessage,
+  type SolanaSignAndSendTransactionFeature,
+  type SolanaSignInFeature,
+  type SolanaSignMessageFeature,
+} from '@solana/wallet-standard-features';
 import { getWallets } from '@wallet-standard/app';
 import type { Wallet, WalletAccount } from '@wallet-standard/base';
 import { StandardConnect, type StandardConnectFeature } from '@wallet-standard/features';
@@ -35,7 +42,8 @@ export interface SignInApi {
  */
 export class SignInError extends Error {
   constructor(
-    readonly kind: 'rejected' | 'pending' | 'impostor' | 'binwise' | 'wallet',
+    /** account: the wallet is on another account than the one signed in */
+    readonly kind: 'rejected' | 'pending' | 'impostor' | 'binwise' | 'wallet' | 'account',
     message: string,
     readonly tried: string[] = [],
     readonly code?: string,
@@ -174,4 +182,67 @@ export async function signInWithWallet(w: Wallet, api: SignInApi, onTry?: (n: nu
 
   console.error(`[binwise] ${w.name} failed every way:`, tried, '|', phantomDiagnostics());
   throw new SignInError('wallet', tried.length ? tried.join('\n') : `${w.name} can't sign in to websites.`, tried);
+}
+
+const REMEMBERED = 'binwise:wallet';
+/** The wallet the user signed in with, so later approvals (moving SOL to the vault) go to the same one. */
+export const rememberWallet = (name: string) => {
+  try {
+    localStorage.setItem(REMEMBERED, name);
+  } catch {
+    /* private mode: we'll ask the first wallet that has the account */
+  }
+};
+const remembered = () => {
+  try {
+    return localStorage.getItem(REMEMBERED);
+  } catch {
+    return null;
+  }
+};
+
+/** The wallet to ask for `owner`'s approval: the one used to sign in, else one already showing that account. */
+export const walletFor = (wallets: Wallet[], owner: string) =>
+  wallets.find((w) => w.name === remembered()) ?? wallets.find((w) => w.accounts.some((a) => a.address === owner)) ?? wallets[0] ?? null;
+
+/**
+ * Asks the wallet to sign and send `tx` (a serialized transaction) from `owner`, the signed-in address:
+ * Wallet Standard first, then the wallet's classic API. Returns the signature (base58). A "no", an open
+ * request or the wallet being on another account stops right there.
+ */
+export async function sendWithWallet(w: Wallet, owner: string, tx: Uint8Array): Promise<string> {
+  const tried: string[] = [];
+  const wrongAccount = () => new SignInError('account', `Switch ${w.name} to the account you signed in with (${owner.slice(0, 4)}…${owner.slice(-4)}), then try again.`);
+  if (SolanaSignAndSendTransaction in w.features) {
+    try {
+      const accounts = w.accounts.some((a) => a.address === owner) ? w.accounts : (await (w.features as StandardConnectFeature)[StandardConnect].connect()).accounts;
+      const account = accounts.find((a) => a.address === owner);
+      if (!account) throw wrongAccount();
+      const [out] = await (w.features as SolanaSignAndSendTransactionFeature)[SolanaSignAndSendTransaction].signAndSendTransaction({ account, chain: 'solana:mainnet', transaction: tx });
+      if (!out) throw new Error('The wallet returned no signature.');
+      return bs58.encode(out.signature);
+    } catch (e) {
+      if (e instanceof SignInError) throw e;
+      console.error(`[binwise] ${w.name}: send failed`, e);
+      const stop = walletFailure(e);
+      if (stop) throw stop;
+      tried.push(`Send: ${describe(e)}`);
+    }
+  }
+  const p = injectedFor(w.name);
+  if (p?.signAndSendTransaction && !(/phantom/i.test(w.name) && impostorOf(p))) {
+    try {
+      if ((await connectInjected(p)) !== owner) throw wrongAccount();
+      const { Transaction } = await import('@solana/web3.js');
+      const r = await p.signAndSendTransaction(Transaction.from(tx));
+      return typeof r === 'string' ? r : r.signature;
+    } catch (e) {
+      if (e instanceof SignInError) throw e;
+      console.error(`[binwise] ${w.name}: classic send failed`, e);
+      const stop = walletFailure(e);
+      if (stop) throw stop;
+      tried.push(`Classic send: ${describe(e)}`);
+    }
+  }
+  throw new SignInError('wallet', tried.length ? tried.join('\n') : `${w.name} can't send transactions from this page.`, tried);
 }
