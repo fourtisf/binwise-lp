@@ -77,7 +77,10 @@ export interface MeteoraOhlcv {
 export class MeteoraClient {
   constructor(readonly baseUrl = process.env.METEORA_API_URL || 'https://dlmm.datapi.meteora.ag') {}
 
-  private get<T>(path: string) {
+  /** Longest range (seconds) per endpoint and timeframe the API accepts, learned from its "time range too large" replies. */
+  private maxRange = new Map<string, number>();
+
+  protected get<T>(path: string) {
     // Stay well under 30 req/s.
     return fetchJson<T>(this.baseUrl + path, { minIntervalMs: 100 });
   }
@@ -102,19 +105,38 @@ export class MeteoraClient {
     return this.get<MeteoraPool>(`/pools/${address}`);
   }
 
+  /**
+   * A time series over [start, end] (unix seconds). When the API answers "time range too large",
+   * the range is split in halves (and the limit remembered) until every piece is accepted.
+   */
+  private async series<T extends { timestamp: number }>(kind: 'ohlcv' | 'volume/history', address: string, timeframe: MeteoraTimeframe, start: number, end: number): Promise<T[]> {
+    start = Math.floor(start);
+    end = Math.floor(end);
+    const key = `${kind}:${timeframe}`;
+    const span = end - start;
+    if (span > (this.maxRange.get(key) ?? Infinity)) {
+      const mid = start + Math.floor(span / 2);
+      const rows = [...(await this.series<T>(kind, address, timeframe, start, mid)), ...(await this.series<T>(kind, address, timeframe, mid, end))];
+      // The halves share their edge: keep one row per timestamp, oldest first.
+      return [...new Map(rows.map((r) => [r.timestamp, r])).values()].sort((a, b) => a.timestamp - b.timestamp);
+    }
+    try {
+      const r = await this.get<{ data: T[] }>(`/pools/${address}/${kind}?timeframe=${timeframe}&start_time=${start}&end_time=${end}`);
+      return r.data ?? [];
+    } catch (e) {
+      if (!/time range too large/i.test((e as Error).message) || span < 600) throw e;
+      this.maxRange.set(key, Math.floor(span / 2));
+      return this.series<T>(kind, address, timeframe, start, end);
+    }
+  }
+
   /** Volume and LP fees per period (unix seconds). */
-  async volumeHistory(address: string, timeframe: MeteoraTimeframe, startTime: number, endTime: number): Promise<MeteoraVolumePoint[]> {
-    const r = await this.get<{ data: MeteoraVolumePoint[] }>(
-      `/pools/${address}/volume/history?timeframe=${timeframe}&start_time=${Math.floor(startTime)}&end_time=${Math.floor(endTime)}`,
-    );
-    return r.data ?? [];
+  volumeHistory(address: string, timeframe: MeteoraTimeframe, startTime: number, endTime: number): Promise<MeteoraVolumePoint[]> {
+    return this.series<MeteoraVolumePoint>('volume/history', address, timeframe, startTime, endTime);
   }
 
   /** Candles with USD volume. Times are unix seconds. */
-  async ohlcv(address: string, timeframe: MeteoraTimeframe, startTime: number, endTime: number): Promise<MeteoraOhlcv[]> {
-    const r = await this.get<{ data: MeteoraOhlcv[] }>(
-      `/pools/${address}/ohlcv?timeframe=${timeframe}&start_time=${Math.floor(startTime)}&end_time=${Math.floor(endTime)}`,
-    );
-    return r.data ?? [];
+  ohlcv(address: string, timeframe: MeteoraTimeframe, startTime: number, endTime: number): Promise<MeteoraOhlcv[]> {
+    return this.series<MeteoraOhlcv>('ohlcv', address, timeframe, startTime, endTime);
   }
 }

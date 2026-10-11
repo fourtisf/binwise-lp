@@ -223,8 +223,9 @@ export async function collectOnce(deps: CollectorDeps, o: CollectorOptions = DEF
 
 async function snapshotPool(deps: CollectorDeps, p: MeteoraPool, now: number): Promise<boolean> {
   const { db } = deps;
-  await refreshCandles(deps, p.address, '1h');
-  await refreshCandles(deps, p.address, '5m');
+  // Candle refresh is best effort: a failing history request must not cost the pool its snapshot.
+  for (const tf of ['1h', '5m'] as const)
+    await refreshCandles(deps, p.address, tf).catch((e) => (deps.log ?? (() => {}))(`[collector] ${p.name} ${tf} candles: ${(e as Error).message}`));
   const hourlyRows = await db.candle.findMany({
     where: { poolId: p.address, timeframe: '1h', ts: { gte: new Date(now - 8 * 24 * H) } },
     orderBy: { ts: 'asc' },
