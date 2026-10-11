@@ -219,7 +219,11 @@ export function assessPool(
   if (p.trend7d != null && p.trend7d <= s.trendExitPct)
     return out('out', 'Avoid, downtrend', `7-day trend ${pct1(p.trend7d)} is below your ${s.trendExitPct}% exit rule. The agent won't farm a falling token.`);
   if (emaSignal(p.emaBearish, p.regime, t))
-    return out('out', 'Avoid, downtrend', 'EMA20 is below EMA50 on the hourly chart. The agent waits for the trend to turn.');
+    return out(
+      'out',
+      'Avoid, short-term dip',
+      `The hourly chart is falling (EMA20 below EMA50)${p.trend7d != null && p.trend7d > 0 ? `, even though the 7-day trend is ${pct1(p.trend7d)}` : ''}. Entering now usually means an exit on the next cycle, so the agent waits for the hourly trend to turn.`,
+    );
   if (!p.bothAllowed) return out('watch', 'Not on allowlist', 'One of the tokens is not on the allowlist yet.');
   if (s.toggles.holderSafety && p.holderQuality != null && p.holderQuality < t.minHolderQuality)
     return out('out', 'Avoid, holders', 'Holder check failed: supply is too concentrated in a few wallets.');
