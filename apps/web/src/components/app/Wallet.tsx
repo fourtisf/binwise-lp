@@ -13,6 +13,13 @@ const RPC = process.env.NEXT_PUBLIC_RPC_URL || 'https://api.mainnet-beta.solana.
 
 const WALLET_ERROR = 'binwise:wallet-error';
 
+/** The wallet's own error code, e.g. " · code -32603", when it gives one. */
+const codeOf = (e: unknown) => {
+  const x = e as { code?: unknown; error?: { code?: unknown } } | null;
+  const c = x?.code ?? x?.error?.code;
+  return c != null ? ` · code ${String(c)}` : '';
+};
+
 /** Set when the user picks a wallet in this page; until then nothing talks to a wallet. */
 const intent = { picked: false };
 
@@ -28,7 +35,8 @@ export function WalletProviders({ children }: { children: ReactNode }) {
   const wallets = useMemo(() => [], []);
   const autoConnect = useCallback(async () => intent.picked, []);
   const onError = useCallback((e: WalletError) => {
-    window.dispatchEvent(new CustomEvent(WALLET_ERROR, { detail: e?.message || e?.name || 'Wallet error' }));
+    console.error('[binwise] wallet', e);
+    window.dispatchEvent(new CustomEvent(WALLET_ERROR, { detail: `${e?.message || e?.name || 'Wallet error'}${codeOf(e)}` }));
   }, []);
   return (
     <ConnectionProvider endpoint={RPC}>
@@ -99,7 +107,8 @@ export function ConnectModal() {
         toast(`Signed in as ${shortWallet(address)}`);
         reload();
       } catch (e) {
-        toast(`${step}: ${friendly((e as Error)?.message || 'cancelled')}`);
+        console.error('[binwise] classic wallet API', e);
+        toast(`${step} (classic API${codeOf(e)}): ${friendly((e as Error)?.message || 'cancelled')}`);
       }
       return true;
     },
