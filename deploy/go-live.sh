@@ -4,8 +4,9 @@
 #
 #   bash /home/binwise/binwise/deploy/go-live.sh
 #
-# It asks for the keys (they are typed here and stored only in the server's .env), checks that each
-# one works, updates the code, rebuilds and restarts. Safe to run again to change keys or who may go live.
+# It asks only for keys that aren't saved yet (they are typed here and stored only in the server's .env),
+# checks that each one works, updates the code, rebuilds and restarts. Safe to run again; to change keys
+# or choices: bash deploy/go-live.sh --ubah
 set -Eeuo pipefail
 # The whole script is one block, so bash reads it completely before running: the git checkout below
 # may replace this file while it runs.
@@ -50,96 +51,118 @@ as_app "pnpm --filter @binwise/db migrate:deploy" >/dev/null 2>&1 || die "Migras
 ok "Dependencies dan database terbaru"
 
 # ---------------------------------------------------------------- keys
-step "Kunci (diketik di sini, disimpan hanya di .env server ini)"
+# Saved keys that still work are not asked again. `--ubah` asks everything (Enter keeps the saved value).
+ASK_ALL=false
+[[ "${1:-}" == "--ubah" || "${1:-}" == "--change" ]] && ASK_ALL=true
+step "Kunci (disimpan hanya di .env server ini; yang sudah tersimpan tidak ditanya lagi)"
+backup="${ENV_FILE}.bak-$(date +%Y%m%d-%H%M%S)"
+cp -p "$ENV_FILE" "$backup" && chmod 600 "$backup"
+# Each key is saved as soon as it checks out, so stopping halfway never loses what was typed.
+save() { env_set "$1" "$2"; chown "$APP_USER:$APP_USER" "$ENV_FILE"; chmod 600 "$ENV_FILE"; }
+
+rpc_ok() { [[ "$(curl -fsS --max-time 15 -X POST "$1" -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"getHealth"}' 2>/dev/null || true)" == *'"result":"ok"'* ]]; }
+jup_ok() { [[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -H "x-api-key: $1" "https://api.jup.ag/price/v3?ids=So11111111111111111111111111111111111111112" || true)" == 200 ]]; }
+tg_name() { curl -fsS --max-time 15 "https://api.telegram.org/bot$1/getMe" 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(j.ok?j.result.username:"")}catch{}})' || true; }
 
 # Helius
-current_rpc=$(env_get RPC_URL)
-while true; do
-  read -r -s -p "    Helius API key (Enter = pakai yang sudah ada): " helius; echo
-  if [[ -z "$helius" && -n "$current_rpc" ]]; then rpc="$current_rpc"; else
-    [[ "$helius" == https://* ]] && rpc="$helius" || rpc="https://mainnet.helius-rpc.com/?api-key=${helius}"
-  fi
-  [[ -n "${rpc:-}" ]] || { warn "Isi Helius API key (gratis di dashboard.helius.dev)."; continue; }
-  res=$(curl -fsS --max-time 15 -X POST "$rpc" -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"getHealth"}' 2>/dev/null || true)
-  if [[ "$res" == *'"result":"ok"'* ]]; then
-    ok "Helius tersambung ke Solana mainnet"; break
-  fi
-  warn "Helius tidak menjawab. Cek lagi key-nya."; rpc=""
-done
-
-# Jupiter
-current_jup=$(env_get JUPITER_API_KEY)
-while true; do
-  read -r -s -p "    Jupiter API key (Enter = pakai yang sudah ada): " jup; echo
-  jup="${jup:-$current_jup}"
-  [[ -n "$jup" ]] || { warn "Isi Jupiter API key (gratis di portal.jup.ag)."; continue; }
-  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -H "x-api-key: ${jup}" "https://api.jup.ag/price/v3?ids=So11111111111111111111111111111111111111112" || true)
-  [[ "$code" == "200" ]] && { ok "Jupiter API berfungsi"; break; }
-  warn "Jupiter menjawab HTTP $code. Cek lagi key-nya."
-done
-
-# Owner wallet (only for signing in on the website; bot-only owners skip it)
-current_wallets=$(env_get LIVE_WALLETS); [[ "$current_wallets" == '*' ]] && current_wallets=""
-while true; do
-  read -r -p "    Alamat publik Phantom untuk login website (Enter = ${current_wallets:-lewati, hanya pakai bot}): " wallet
-  wallet="${wallet:-$current_wallets}"
-  [[ -z "$wallet" ]] && { ok "Tanpa wallet website: pakai bot Telegram"; break; }
-  [[ "$wallet" =~ ^[1-9A-HJ-NP-Za-km-z]{32,44}$ ]] && { ok "Alamat wallet valid"; break; }
-  warn "Itu bukan alamat Solana. Salin alamat dari Phantom (contoh: 7xKX...), atau tekan Enter untuk lewati."
-done
-
-# Who may trade live
-echo "    Siapa yang boleh memakai mode live (dana asli)?"
-echo "      1) Hanya saya dulu (disarankan untuk uji pertama)"
-echo "      2) Semua orang (wallet baru langsung di mainnet)"
-while true; do
-  read -r -p "    Pilih 1 atau 2: " who
-  [[ "$who" == 1 || "$who" == 2 ]] && break
-done
-tg_ids="$(env_get LIVE_TELEGRAM_IDS)"
-if [[ "$who" == 1 ]]; then
-  echo "    Wallet yang dibuat langsung di bot Telegram: hanya untuk ID Telegram yang diizinkan."
-  echo "    (Lihat ID Anda: kirim /id ke bot. Kosongkan untuk lewati.)"
+rpc=$(env_get RPC_URL)
+if ! $ASK_ALL && [[ -n "$rpc" ]] && rpc_ok "$rpc"; then
+  ok "Helius: tersimpan dan berfungsi"
+else
+  [[ -n "$rpc" ]] && ! rpc_ok "$rpc" && warn "Helius yang tersimpan tidak menjawab."
   while true; do
-    read -r -p "    ID Telegram Anda (Enter = ${tg_ids:-lewati}): " tgid
-    tgid="${tgid:-$tg_ids}"
-    [[ -z "$tgid" && -z "$wallet" ]] && { warn "Isi ID Telegram (dari @userinfobot), karena wallet website dilewati."; continue; }
-    [[ -z "$tgid" || "$tgid" =~ ^[0-9]+(,[0-9]+)*$ ]] && break
-    warn "ID Telegram hanya angka (contoh: 123456789)."
+    read -r -s -p "    Helius API key$( [[ -n "$rpc" ]] && echo ' (Enter = pakai yang tersimpan)'): " helius; echo
+    if [[ -z "$helius" ]]; then cand="$rpc"; elif [[ "$helius" == https://* ]]; then cand="$helius"; else cand="https://mainnet.helius-rpc.com/?api-key=${helius}"; fi
+    [[ -n "$cand" ]] || { warn "Isi Helius API key (gratis di dashboard.helius.dev)."; continue; }
+    rpc_ok "$cand" && { rpc="$cand"; break; }
+    warn "Helius tidak menjawab. Cek lagi key-nya."
   done
-  tg_ids="$tgid"
+  save RPC_URL "$rpc"; save NEXT_PUBLIC_RPC_URL "$rpc"
+  ok "Helius tersambung dan disimpan"
 fi
 
-# Money limits
-echo "    Batas dana yang boleh dipakai agent:"
-echo "      1) Tanpa batas: agent memakai seluruh deposit (sesuai strategi), posisi berapa pun"
-echo "      2) Aman untuk uji: maks \$200 per wallet, 1 posisi, \$2.000 total semua pengguna, posisi min \$50"
-while true; do
-  read -r -p "    Pilih 1 atau 2: " limits
-  [[ "$limits" == 1 || "$limits" == 2 ]] && break
-done
+# Jupiter
+jup=$(env_get JUPITER_API_KEY)
+if ! $ASK_ALL && [[ -n "$jup" ]] && jup_ok "$jup"; then
+  ok "Jupiter: tersimpan dan berfungsi"
+else
+  while true; do
+    read -r -s -p "    Jupiter API key dari portal.jup.ag$( [[ -n "$jup" ]] && echo ' (Enter = pakai yang tersimpan)'): " cand; echo
+    cand="${cand:-$jup}"
+    [[ -n "$cand" ]] || { warn "Isi Jupiter API key (gratis di portal.jup.ag)."; continue; }
+    jup_ok "$cand" && { jup="$cand"; break; }
+    warn "Jupiter menolak key ini. Cek lagi."
+  done
+  save JUPITER_API_KEY "$jup"
+  ok "Jupiter berfungsi dan disimpan"
+fi
 
 # Telegram (optional)
-current_tg=$(env_get TELEGRAM_BOT_TOKEN)
+tg=$(env_get TELEGRAM_BOT_TOKEN)
 tg_user=""
-while true; do
-  read -r -s -p "    Token bot Telegram dari @BotFather (Enter = $( [[ -n "$current_tg" ]] && echo 'pakai yang sudah ada' || echo 'lewati')): " tg; echo
-  tg="${tg:-$current_tg}"
-  [[ -z "$tg" ]] && { warn "Bot Telegram dilewati."; break; }
-  me=$(curl -fsS --max-time 15 "https://api.telegram.org/bot${tg}/getMe" || true)
-  tg_user=$(printf '%s' "$me" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(j.ok?j.result.username:"")}catch{}})')
-  [[ -n "$tg_user" ]] && { ok "Bot Telegram: @${tg_user}"; break; }
-  warn "Token bot tidak valid. Salin lagi dari @BotFather."
-done
+[[ -n "$tg" ]] && tg_user=$(tg_name "$tg")
+if ! $ASK_ALL && [[ -n "$tg_user" ]]; then
+  ok "Bot Telegram: @${tg_user} (tersimpan)"
+else
+  while true; do
+    read -r -s -p "    Token bot Telegram dari @BotFather (Enter = $( [[ -n "$tg" ]] && echo 'pakai yang tersimpan' || echo 'lewati')): " cand; echo
+    cand="${cand:-$tg}"
+    [[ -z "$cand" ]] && { warn "Bot Telegram dilewati."; tg=""; break; }
+    tg_user=$(tg_name "$cand")
+    [[ -n "$tg_user" ]] && { tg="$cand"; save TELEGRAM_BOT_TOKEN "$tg"; save TELEGRAM_BOT_USERNAME "$tg_user"; ok "Bot Telegram: @${tg_user}"; break; }
+    warn "Token bot tidak valid. Salin lagi dari @BotFather."
+  done
+fi
+
+# ---------------------------------------------------------------- choices
+cur_wallets=$(env_get LIVE_WALLETS)
+tg_ids=$(env_get LIVE_TELEGRAM_IDS)
+if ! $ASK_ALL && [[ "$(env_get LIVE_TRADING_ENABLED)" == true ]]; then
+  # Already live: keep the saved choices.
+  if [[ "$cur_wallets" == '*' ]]; then who=2; wallet=""; else who=1; wallet="$cur_wallets"; fi
+  if [[ "$(env_get LIVE_MAX_USD)" == 0 ]]; then limits=1; else limits=2; fi
+  ok "Pilihan tersimpan dipakai (ubah dengan: bash deploy/go-live.sh --ubah)"
+else
+  [[ "$cur_wallets" == '*' ]] && cur_wallets=""
+  while true; do
+    read -r -p "    Alamat publik Phantom untuk login website (Enter = ${cur_wallets:-lewati, hanya pakai bot}): " wallet
+    wallet="${wallet:-$cur_wallets}"
+    [[ -z "$wallet" ]] && { ok "Tanpa wallet website: pakai bot Telegram"; break; }
+    [[ "$wallet" =~ ^[1-9A-HJ-NP-Za-km-z]{32,44}(,[1-9A-HJ-NP-Za-km-z]{32,44})*$ ]] && { ok "Alamat wallet valid"; break; }
+    warn "Itu bukan alamat Solana. Salin alamat dari Phantom (contoh: 7xKX...), atau tekan Enter untuk lewati."
+  done
+
+  echo "    Siapa yang boleh memakai mode live (dana asli)?"
+  echo "      1) Hanya saya dulu (disarankan untuk uji pertama)"
+  echo "      2) Semua orang (wallet baru langsung di mainnet)"
+  while true; do
+    read -r -p "    Pilih 1 atau 2: " who
+    [[ "$who" == 1 || "$who" == 2 ]] && break
+  done
+  if [[ "$who" == 1 ]]; then
+    echo "    Wallet yang dibuat di bot Telegram: hanya untuk ID Telegram yang diizinkan (lihat ID: @userinfobot)."
+    while true; do
+      read -r -p "    ID Telegram Anda (Enter = ${tg_ids:-lewati}): " tgid
+      tgid="${tgid:-$tg_ids}"
+      [[ -z "$tgid" && -z "$wallet" ]] && { warn "Isi ID Telegram, karena wallet website dilewati."; continue; }
+      [[ -z "$tgid" || "$tgid" =~ ^[0-9]+(,[0-9]+)*$ ]] && break
+      warn "ID Telegram hanya angka (contoh: 123456789)."
+    done
+    tg_ids="$tgid"
+  fi
+
+  echo "    Batas dana yang boleh dipakai agent:"
+  echo "      1) Tanpa batas: agent memakai seluruh deposit (sesuai strategi), posisi berapa pun"
+  echo "      2) Aman untuk uji: maks \$200 per wallet, 1 posisi, \$2.000 total semua pengguna, posisi min \$50"
+  while true; do
+    read -r -p "    Pilih 1 atau 2: " limits
+    [[ "$limits" == 1 || "$limits" == 2 ]] && break
+  done
+fi
 
 # ---------------------------------------------------------------- write settings
 step "Simpan pengaturan"
-backup="${ENV_FILE}.bak-$(date +%Y%m%d-%H%M%S)"
-cp -p "$ENV_FILE" "$backup" && chmod 600 "$backup"
 ok "Cadangan pengaturan lama: $backup"
-env_set RPC_URL "$rpc"
-env_set NEXT_PUBLIC_RPC_URL "$rpc"
-env_set JUPITER_API_KEY "$jup"
 env_set LIVE_TRADING_ENABLED true
 # 0 = no limit (see liveLimits); MIN_POSITION_USD never goes below $1.
 if [[ "$limits" == 1 ]]; then
@@ -151,7 +174,6 @@ if [[ "$who" == 1 ]]; then env_set LIVE_WALLETS "$wallet"; else env_set LIVE_WAL
 env_set LIVE_TELEGRAM_IDS "$tg_ids"
 env_set DEFAULT_VAULT_MODE live
 env_set NEXT_PUBLIC_DEFAULT_VAULT_MODE live
-if [[ -n "$tg" ]]; then env_set TELEGRAM_BOT_TOKEN "$tg"; env_set TELEGRAM_BOT_USERNAME "$tg_user"; fi
 chown "$APP_USER:$APP_USER" "$ENV_FILE" && chmod 600 "$ENV_FILE"
 ok "Live: ON · $( [[ "$limits" == 1 ]] && echo 'tanpa batas dana' || echo "batas \$$(env_get LIVE_MAX_USD) per vault, \$$(env_get LIVE_MAX_TOTAL_USD) total") · $( [[ "$who" == 1 ]] && echo 'hanya wallet Anda' || echo 'semua wallet')"
 

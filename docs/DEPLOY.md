@@ -126,7 +126,7 @@ bash /home/binwise/binwise/deploy/go-live.sh
 ```
 
 Asks for the Helius key, Jupiter key, the owner's wallet address, who may trade live (only the owner, or everyone)
-and the Telegram bot token; checks each one works; updates the code, rebuilds the site and restarts everything.
+and the Telegram bot token; checks each one works; updates the code, rebuilds the site and restarts everything. Keys already saved in `.env` that still work are not asked again, and each key is saved as soon as it checks out; `bash deploy/go-live.sh --ubah` asks everything again (Enter keeps the saved value).
 Keys are typed on the server and stored only in `.env` (a backup of the previous `.env` is kept next to it).
 Run it again to change keys or to open live mode to everyone.
 
