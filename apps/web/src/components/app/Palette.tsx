@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { LIVE_DEFAULT } from '@/lib/site';
 import { useAppData } from '@/lib/store';
 import { useUi } from '@/lib/ui';
 import { Icon, type IconId } from '../Sprite';
@@ -33,12 +34,16 @@ export function Palette() {
       ...PAGES.map((p) => ({ group: 'Go to', label: p.title, icon: p.icon, run: () => router.push(p.href) })),
       { group: 'Actions', label: 'Deposit to vault', icon: 'i-plus', run: () => guard(openDeposit) },
       { group: 'Actions', label: paused ? 'Resume agent' : 'Pause agent', icon: paused ? 'i-play' : 'i-pause', run: togglePause },
-      {
-        group: 'Actions',
-        label: paper ? 'Switch to live mode' : 'Switch to paper mode',
-        icon: 'i-bolt',
-        run: () => setMode(paper ? 'live' : 'paper'),
-      },
+      ...(LIVE_DEFAULT
+        ? []
+        : [
+            {
+              group: 'Actions',
+              label: paper ? 'Switch to live mode' : 'Switch to paper mode',
+              icon: 'i-bolt' as IconId,
+              run: () => setMode(paper ? 'live' : 'paper'),
+            },
+          ]),
       { group: 'Actions', label: 'Backtest report', icon: 'i-act', run: () => router.push('/app/report') },
       ...(client?.kind === 'http'
         ? [

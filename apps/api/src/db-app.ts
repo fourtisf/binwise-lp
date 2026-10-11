@@ -261,8 +261,37 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     return { ok: true };
   });
 
+  /**
+   * Mainnet site (DEFAULT_VAULT_MODE=live): an owner's simulated (paper) vault becomes a real mainnet
+   * vault. Its simulated balance, open simulated positions and performance history are dropped, so
+   * every number shown afterwards comes from the chain.
+   */
+  async function moveToMainnet(userId: string, wallet: string) {
+    if (!liveByDefault(wallet)) return;
+    for (const { id } of await db.vault.findMany({ where: { userId, mode: 'paper', isDemo: false }, select: { id: true } })) {
+      await withVaultLock(id, 60_000, async () => {
+        const v = await db.vault.findUnique({ where: { id } });
+        if (!v || v.mode !== 'paper') return;
+        const key = v.agentPubkey && v.encSecret ? null : createAgentKey();
+        await db.$transaction([
+          db.position.updateMany({ where: { vaultId: id, status: 'open' }, data: { status: 'closed', closedAt: new Date() } }),
+          db.vaultSnapshot.deleteMany({ where: { vaultId: id } }),
+          db.proposal.updateMany({ where: { vaultId: id, status: 'pending' }, data: { status: 'expired' } }),
+          db.vault.update({
+            where: { id },
+            data: { mode: 'live', cash: {}, deposits: {}, paperWallet: {}, ...(key ? { agentPubkey: key.pubkey, encSecret: new Uint8Array(key.encSecret) } : {}) },
+          }),
+        ]);
+        await redis.del(REDIS_KEYS.actions(id));
+        await logDecision(id, 'scan', 'Moved to mainnet', 'This vault now uses real funds on Solana mainnet. The simulated balance was removed; deposit to the vault wallet to start.');
+      }).catch(() => {}); // busy right now: tried again on the next page load
+    }
+  }
+
   app.get('/me', async (req) => {
     const uid = requireUser(req);
+    const owner = await db.user.findUniqueOrThrow({ where: { id: uid } });
+    await moveToMainnet(uid, owner.wallet);
     const user = await db.user.findUniqueOrThrow({ where: { id: uid }, include: { vaults: { orderBy: { createdAt: 'asc' } } } });
     return {
       wallet: user.wallet,

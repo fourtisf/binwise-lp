@@ -26,6 +26,7 @@ import type {
 } from '@binwise/core';
 import { ApiError, getClient, type BinwiseClient } from './api/client';
 import { fmt, usd } from './format';
+import { LIVE_DEFAULT } from './site';
 import { useUi } from './ui';
 
 type TickFn = (t: PositionTick) => void;
@@ -162,8 +163,14 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
         const who = await c.me();
         if (cancelled) return;
         setMe(who);
-        vaultId = who?.vaults[0]?.id ?? (await c.demoVaultId()) ?? '';
+        // Mainnet site: signed-out visitors see no simulated demo vault, only "Connect wallet" (and real pool data).
+        vaultId = who?.vaults[0]?.id ?? (LIVE_DEFAULT ? '' : ((await c.demoVaultId()) ?? ''));
         if (!vaultId) {
+          setOverview(null);
+          setPositions([]);
+          setDecisions([]);
+          setPools(await c.pools().catch(() => [] as PoolRow[]));
+          if (cancelled) return;
           setClient(c);
           setEmpty(true);
           setReady(true);

@@ -212,6 +212,18 @@ describe('vaults', () => {
       expect(row.agentPubkey).toMatch(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
       expect(row.encSecret).not.toBeNull();
       expect(JSON.stringify(row.paperWallet)).toBe('{}');
+
+      // A vault that was still simulated moves to mainnet on the next visit: no simulated money or history left.
+      const old = (await db.vault.findFirstOrThrow({ where: { user: { wallet: paper.w.address } } })).id;
+      await db.vault.update({ where: { id: old }, data: { cash: { X: 10_000 }, deposits: { X: 10_000 } } });
+      await db.vaultSnapshot.create({ data: { vaultId: old, value: 10_000, holdValue: 10_000, feesTotal: 0, netVsHold: 0 } });
+      expect((await app.inject({ url: '/me', headers: paper.headers })).json().vaults[0].mode).toBe('live');
+      const moved = await db.vault.findUniqueOrThrow({ where: { id: old } });
+      expect(moved.cash).toEqual({});
+      expect(moved.deposits).toEqual({});
+      expect(moved.agentPubkey).toMatch(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
+      expect(await db.vaultSnapshot.count({ where: { vaultId: old } })).toBe(0);
+      expect((await db.decision.findFirstOrThrow({ where: { vaultId: old }, orderBy: { ts: 'desc' } })).title).toBe('Moved to mainnet');
     } finally {
       for (const k of keys) if (prev[k] === undefined) delete process.env[k];
       else process.env[k] = prev[k];
