@@ -6,7 +6,7 @@ import { Chips } from '@/components/Chips';
 import { Icon } from '@/components/Sprite';
 import { PairIcon } from '@/components/Tokens';
 import { sparkPath } from '@/lib/charts/lineChart';
-import { fmt, pct, usd } from '@/lib/format';
+import { compactUsd, fmt, pct } from '@/lib/format';
 import { useAppData } from '@/lib/store';
 import { useUi } from '@/lib/ui';
 
@@ -79,8 +79,8 @@ export default function PoolsPage() {
                           {x.pair}
                         </span>
                       </td>
-                      <td className="r num">{usd(x.tvl / 1e6, 1)}M</td>
-                      <td className="r num">{usd(x.volume24h / 1e6, 1)}M</td>
+                      <td className="r num">{compactUsd(x.tvl)}</td>
+                      <td className="r num">{compactUsd(x.volume24h)}</td>
                       <td className="r num">{fmt(x.volTvl, 2)}x</td>
                       <td className="r num">{fmt(x.feeApr)}%</td>
                       <td>

@@ -55,7 +55,7 @@ export const DEFAULT_COLLECTOR: CollectorOptions = {
   scanLimit: 1000,
   storeMinTvl: 50_000,
   trackMinTvl: DEFAULT_THRESHOLDS.minTvl,
-  trackLimit: 150,
+  trackLimit: 300,
   bigCapMinUsd: 100_000_000,
   bigCapPoolsPerToken: 2,
 };
@@ -249,9 +249,10 @@ export async function collectOnce(deps: CollectorDeps, o: CollectorOptions = DEF
   const tracked = [...new Set([...top, ...bigCapPools(stored, o, (m) => mcaps.get(m)), ...stored.filter((p) => held.has(p.address))])];
 
   let eligible = 0;
-  for (const p of tracked) {
+  for (const [i, p] of tracked.entries()) {
     try {
-      eligible += (await snapshotPool(deps, p, now)) ? 1 : 0;
+      // On-chain reads (active-bin liquidity) only for the busiest 100 pools and held ones: keeps a free Helius plan enough.
+      eligible += (await snapshotPool(deps, p, now, i < 100 || held.has(p.address))) ? 1 : 0;
     } catch (e) {
       log(`[collector] ${p.name}: ${(e as Error).message}`);
     }
@@ -260,7 +261,7 @@ export async function collectOnce(deps: CollectorDeps, o: CollectorOptions = DEF
   return { scanned: pools.length, stored: stored.length, tracked: tracked.length, eligible };
 }
 
-async function snapshotPool(deps: CollectorDeps, p: MeteoraPool, now: number): Promise<boolean> {
+async function snapshotPool(deps: CollectorDeps, p: MeteoraPool, now: number, readChain = true): Promise<boolean> {
   const { db } = deps;
   // Candle refresh is best effort: a failing history request must not cost the pool its snapshot.
   for (const tf of ['1h', '5m'] as const)
@@ -349,7 +350,7 @@ async function snapshotPool(deps: CollectorDeps, p: MeteoraPool, now: number): P
       tvl: p.tvl,
       volume24h,
       fees24h,
-      activeBinLiqUsd: await activeLiquidity(deps, p, now),
+      activeBinLiqUsd: readChain ? await activeLiquidity(deps, p, now) : null,
       price: p.current_price,
       volatility,
       trend7d: trend.trend7d,
