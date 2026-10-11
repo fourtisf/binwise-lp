@@ -13,12 +13,30 @@ import { shortWallet } from '@/components/app/Wallet';
 
 const SOLSCAN = 'https://solscan.io';
 /** Token amounts: more decimals for small ones (0.0421 SOL, 12.50 USDC, 1,250 BONK). */
-const amount = (n: number) => fmt(n, n >= 1000 ? 0 : n >= 1 ? 2 : 4);
+const amount = (n: number) =>
+  n.toLocaleString('en-US', { minimumFractionDigits: n >= 1000 ? 0 : 2, maximumFractionDigits: n >= 1000 ? 0 : n >= 1 ? 2 : 4 });
 const day = (ts: number) =>
   new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(new Date(ts).getFullYear() !== new Date().getFullYear() ? { year: 'numeric' } : {}) });
 /** How long a position was open: 45m, 6h, 3d. */
 const held = (ms: number) => (ms < 3_600_000 ? `${Math.max(1, Math.round(ms / 60_000))}m` : ms < 86_400_000 ? `${Math.round(ms / 3_600_000)}h` : `${Math.round(ms / 86_400_000)}d`);
 const signed = (n: number) => (n >= 0 ? '+' : '−') + usd(Math.abs(n), 2);
+
+/** A Solana address: short form, Copy and a Solscan link. */
+function Address({ address, onCopy }: { address: string; onCopy: () => void }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+      <b className="num" title={address}>
+        {shortWallet(address)}
+      </b>
+      <button className="muted" style={{ fontSize: 12.5, fontWeight: 500 }} onClick={onCopy}>
+        Copy address
+      </button>
+      <a className="muted" style={{ fontSize: 12.5, fontWeight: 500 }} href={`${SOLSCAN}/account/${address}`} target="_blank" rel="noreferrer">
+        Solscan
+      </a>
+    </span>
+  );
+}
 
 /** The owner's portfolio: holdings, net vs hold since the start, fees, closed positions, money in and out. */
 export default function PortfolioPage() {
@@ -112,18 +130,17 @@ export default function PortfolioPage() {
               <p>
                 {p ? `${p.name} · ${p.mode === 'live' ? 'Mainnet, real funds' : 'Paper, simulated funds'} · since ${day(p.since)}` : 'Loading…'}
               </p>
+              {p?.vaultWallet && (
+                <p id="pfVaultWallet">
+                  Vault wallet <Address address={p.vaultWallet} onCopy={() => copy(p.vaultWallet!, 'Vault wallet address')} />
+                </p>
+              )}
             </div>
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {me && (
               <a className="btn btn-dark btn-sm" href={`${SOLSCAN}/account/${me.wallet}`} target="_blank" rel="noreferrer">
                 Wallet on Solscan
-                <Icon id="i-ext" />
-              </a>
-            )}
-            {p?.vaultWallet && (
-              <a className="btn btn-dark btn-sm" href={`${SOLSCAN}/account/${p.vaultWallet}`} target="_blank" rel="noreferrer" title={p.vaultWallet}>
-                Vault wallet on Solscan
                 <Icon id="i-ext" />
               </a>
             )}
@@ -143,6 +160,46 @@ export default function PortfolioPage() {
         </div>
       </div>
 
+      {p && p.ownWallet.length > 0 && me && (
+        <div className="panel card" id="pfOwn" style={{ marginTop: 12 }}>
+          <div className="ph">
+            <div>
+              <h3>In your wallet, not in the vault</h3>
+              <p>The agent only uses what is in your vault wallet.</p>
+            </div>
+            <Address address={me.wallet} onCopy={() => copy(me.wallet, 'Wallet address')} />
+          </div>
+          <div className="rows">
+            {p.ownWallet.map((w) => (
+              <div key={w.token.mint ?? w.token.symbol}>
+                <span className="pairname" style={{ color: 'var(--text)' }}>
+                  <Tok t={w.token} />
+                  {w.token.symbol}
+                </span>
+                <b className="num">
+                  {amount(w.amount)} {w.token.symbol}
+                  <span className="muted" style={{ fontWeight: 400, marginLeft: 8 }}>
+                    {usd(w.value, 2)}
+                  </span>
+                </b>
+              </div>
+            ))}
+          </div>
+          {p.vaultWallet && (
+            <p className="muted" style={{ fontSize: 13, lineHeight: 1.6, marginTop: 14 }}>
+              To let the agent use it, send SOL or USDC from this wallet to your vault wallet{' '}
+              <Address address={p.vaultWallet} onCopy={() => copy(p.vaultWallet!, 'Vault wallet address')} />.
+              <br />
+              Keep about 0.25 SOL in the vault for network fees. The agent picks up the transfer within a few minutes, or use 💳 Wallet in the{' '}
+              <a href={BOT_URL} target="_blank" rel="noreferrer" style={{ textDecoration: 'underline' }}>
+                Telegram bot
+              </a>
+              .
+            </p>
+          )}
+        </div>
+      )}
+
       {failed && !p && (
         <p className="muted" style={{ padding: '14px 2px 0', fontSize: 13.5 }}>
           Couldn&apos;t load your portfolio right now. Trying again in a moment.
@@ -156,15 +213,29 @@ export default function PortfolioPage() {
             {p ? usd(p.value, 2) : '—'}
           </div>
           <div className="s">
-            {p ? `${p.holdings.filter((h) => h.kind === 'token').length} token${p.holdings.filter((h) => h.kind === 'token').length === 1 ? '' : 's'} idle · ${openCount} position${openCount === 1 ? '' : 's'}` : ' '}
+            {p
+              ? p.pendingUsd >= 0.5
+                ? `${usd(p.pendingUsd, 2)} just arrived; the agent records it as a deposit within minutes`
+                : `${p.holdings.filter((h) => h.kind === 'token').length} token${p.holdings.filter((h) => h.kind === 'token').length === 1 ? '' : 's'} idle · ${openCount} position${openCount === 1 ? '' : 's'}`
+              : ' '}
           </div>
         </div>
         <div className="kpi card">
           <small>Net vs hold, since start</small>
-          <div className={`v num ${!p || p.netVsHold >= 0 ? 'up' : 'down'}`} id="pfNet">
-            {p ? pct(p.netVsHold, 1) : '—'}
+          <div className={`v num ${p?.netVsHold == null ? '' : p.netVsHold >= 0 ? 'up' : 'down'}`} id="pfNet">
+            {p?.netVsHold != null ? pct(p.netVsHold, 1) : '—'}
           </div>
-          <div className="s">{p ? <><b className={`num ${vsHoldUsd >= 0 ? 'up' : 'down'}`}>{signed(vsHoldUsd)}</b> vs holding</> : ' '}</div>
+          <div className="s">
+            {p?.netVsHold != null ? (
+              <>
+                <b className={`num ${vsHoldUsd >= 0 ? 'up' : 'down'}`}>{signed(vsHoldUsd)}</b> vs holding
+              </>
+            ) : p ? (
+              'Starts with your first recorded deposit'
+            ) : (
+              ' '
+            )}
+          </div>
         </div>
         <div className="kpi card">
           <small>Fees earned, all time</small>
@@ -247,7 +318,11 @@ export default function PortfolioPage() {
                 ) : (
                   <tr style={{ cursor: 'default' }}>
                     <td colSpan={4} className="muted" style={{ whiteSpace: 'normal', padding: '24px 16px' }}>
-                      {p ? 'Nothing in the vault yet. Deposit SOL or USDC in the Telegram bot (💳 Wallet).' : 'Loading…'}
+                      {p
+                        ? p.vaultWallet
+                          ? 'Nothing in the vault wallet yet. Send SOL or USDC to it (address above, or 💳 Wallet in the Telegram bot).'
+                          : 'Nothing in the vault yet. Deposit SOL or USDC in the Telegram bot (💳 Wallet).'
+                        : 'Loading…'}
                     </td>
                   </tr>
                 )}

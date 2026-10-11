@@ -23,7 +23,8 @@ export function AgentCard() {
         <span className="orb"></span>
         <div>
           <b id="agState">{paused ? 'Agent paused' : 'Agent running'}</b>
-          <small id="agCycle">Cycle {fmt(overview?.cycle ?? cycle?.cycle ?? 0)}</small>
+          {/* The live cycle number from the stream; the vault's stored one only until the first update. */}
+          <small id="agCycle">Cycle {fmt(cycle?.cycle ?? overview?.cycle ?? 0)}</small>
         </div>
       </div>
       <div className="cycle">

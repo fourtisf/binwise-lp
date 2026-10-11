@@ -71,6 +71,7 @@ export interface DepositAsset {
   symbol: string;
   letter: string;
   color: string;
+  logo?: string;
   priceUsd: number;
   /** Wallet balance available to deposit. */
   balance: number;
@@ -145,12 +146,18 @@ export interface Portfolio {
   /** Unix ms the vault was created */
   since: number;
   telegramLinked: boolean;
-  /** Idle tokens + open positions with unclaimed fees, as of the agent's last cycle (same as Overview) */
+  /** Idle tokens + open positions with unclaimed fees. Live: the vault wallet read on Solana just now. */
   value: number;
+  /** 'chain': the vault wallet was read on Solana just now. 'agent': as of the agent's last cycle. */
+  source: 'chain' | 'agent';
   /** Everything deposited, held instead, at today's prices */
   holdValue: number;
-  /** value / holdValue − 1, percent, since the start (0 before any deposit). The headline. */
-  netVsHold: number;
+  /** value / holdValue − 1, percent, since the start. The headline. Null until a deposit is recorded. */
+  netVsHold: number | null;
+  /** Funds in the vault wallet the agent hasn't recorded as a deposit yet (it does within a few minutes) */
+  pendingUsd: number;
+  /** What the owner's own wallet holds (SOL, USDC): not in the vault, so the agent doesn't use it */
+  ownWallet: { token: TokenRef; amount: number; value: number }[];
   /** Fees earned by every position, all time */
   fees: number;
   /** Network fees, tips and slippage paid, all time */

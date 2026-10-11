@@ -422,6 +422,49 @@ describe('portfolio', () => {
   });
 });
 
+describe('portfolio (live)', () => {
+  it('reads the vault wallet on Solana, flags funds not yet recorded, and shows the owner wallet apart', async () => {
+    const owner = wallet();
+    const agent = wallet().address;
+    // 3 SOL in the owner's own wallet; 3.25 SOL just arrived in the vault wallet (the agent hasn't seen it yet).
+    const sol: Record<string, number> = { [owner.address]: 3, [agent]: 3.25 };
+    const conn = {
+      getBalance: async (pk: { toBase58(): string }) => (sol[pk.toBase58()] ?? 0) * 1e9,
+      getParsedTokenAccountsByOwner: async () => ({ value: [] }),
+    };
+    const sub2 = new Redis(process.env.REDIS_URL!);
+    const liveApp = await buildDbApp({ db, redis, sub: sub2, domain: 'test.binwise', rpc: () => conn as never });
+    try {
+      const user = await ensureUser(db, owner.address);
+      const v = await createVault(db, user.id, { live: { agentPubkey: agent, encSecret: new Uint8Array(8) } });
+      const ip = { remoteAddress: '10.9.9.6' };
+      const nonce = (await liveApp.inject({ url: `/auth/nonce?wallet=${owner.address}`, ...ip })).json();
+      const login = await liveApp.inject({ method: 'POST', url: '/auth/verify', ...ip, payload: { wallet: owner.address, message: nonce.message, signature: owner.signMsg(nonce.message) } });
+      const headers = { cookie: `bw_session=${login.cookies.find((c) => c.name === 'bw_session')!.value}` };
+
+      const p = (await liveApp.inject({ url: `/vaults/${v.id}/portfolio`, headers })).json();
+      expect(p.source).toBe('chain');
+      expect(p.value).toBeCloseTo(487.5);
+      expect(p.holdings[0]).toMatchObject({ kind: 'token', amount: 3.25, reserve: 0.25 });
+      expect(p.pendingUsd).toBeCloseTo(487.5);
+      // No deposit recorded yet: no net vs hold to show (not a misleading +0%).
+      expect(p.netVsHold).toBeNull();
+      expect(p.ownWallet).toHaveLength(1);
+      expect(p.ownWallet[0]).toMatchObject({ amount: 3, value: 450 });
+      expect(p.ownWallet[0].token.symbol).toBe('SOL');
+
+      // Solana unreachable: the agent's last reading, nothing pending.
+      conn.getBalance = async () => {
+        throw new Error('down');
+      };
+      const cached = (await liveApp.inject({ url: `/vaults/${v.id}/portfolio`, headers })).json();
+      expect(cached).toMatchObject({ source: 'agent', value: 0, pendingUsd: 0, ownWallet: [] });
+    } finally {
+      await liveApp.close(); // also closes sub2
+    }
+  });
+});
+
 describe('realtime', () => {
   it('forwards agent events to the vault stream', async () => {
     const addr = app.server.address() as { port: number };

@@ -148,19 +148,24 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
   }
 
   async function walletAssets(wallet: string): Promise<DepositAsset[]> {
-    if (!process.env.RPC_URL) return [];
+    if (!o.rpc && !process.env.RPC_URL) return [];
     const conn = rpc();
     const owner = new PublicKey(wallet);
     const tokens = await db.token.findMany({ where: { OR: [{ mint: SOL_MINT }, { symbol: 'USDC', isVerified: true }] }, orderBy: { mcapUsd: 'desc' } });
     const out: DepositAsset[] = [];
     for (const t of tokens.filter((t, i, a) => a.findIndex((x) => x.symbol === t.symbol) === i)) {
-      let balance = 0;
-      if (t.mint === SOL_MINT) balance = (await conn.getBalance(owner)) / 1e9;
-      else {
-        const accs = await conn.getParsedTokenAccountsByOwner(owner, { mint: new PublicKey(t.mint) });
-        balance = accs.value.reduce((s, a) => s + Number(a.account.data.parsed.info.tokenAmount.uiAmount ?? 0), 0);
+      // One token that can't be read doesn't hide the others.
+      try {
+        let balance = 0;
+        if (t.mint === SOL_MINT) balance = (await conn.getBalance(owner)) / 1e9;
+        else {
+          const accs = await conn.getParsedTokenAccountsByOwner(owner, { mint: new PublicKey(t.mint) });
+          balance = accs.value.reduce((s, a) => s + Number(a.account.data.parsed.info.tokenAmount.uiAmount ?? 0), 0);
+        }
+        out.push({ ...tokenRef(t.symbol, t), mint: t.mint, decimals: t.decimals, priceUsd: t.priceUsd ?? 0, balance });
+      } catch {
+        continue;
       }
-      out.push({ ...tokenRef(t.symbol, t), mint: t.mint, decimals: t.decimals, priceUsd: t.priceUsd ?? 0, balance });
     }
     return out;
   }
@@ -456,16 +461,29 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
 
   /**
    * The owner's portfolio: what the vault holds (idle tokens and positions), how it did against holding
-   * since the start, fees and costs all time, closed positions and money in and out. Valued from the
-   * agent's last cycle like Overview, so the value and the hold baseline always match (a deposit counts
-   * in both at once).
+   * since the start, fees and costs all time, closed positions and money in and out, and what the
+   * owner's own wallet holds (not in the vault). Live vaults read the vault wallet on Solana, so funds
+   * show as soon as they arrive, even before the agent records them as a deposit (`pendingUsd`).
    */
   app.get<VP>('/vaults/:id/portfolio', async (req): Promise<Portfolio> => {
-    const { vault } = await readable(req, req.params.id);
+    const { vault, readOnly } = await readable(req, req.params.id);
     const owner = await db.user.findUniqueOrThrow({ where: { id: vault.userId } });
     const live = vault.mode === 'live';
+    const canRead = !!(o.rpc || process.env.RPC_URL);
     const v = await vaultValue(db, vault.id);
-    const cash = await pricedTokens(vault.cash as Record<string, number>);
+    const mirror = await pricedTokens(vault.cash as Record<string, number>);
+    const onChain =
+      live && vault.agentPubkey && canRead
+        ? await Promise.resolve()
+            .then(() => walletBalances(rpc(), vault.agentPubkey!))
+            .catch(() => null)
+        : null;
+    const cash = onChain ? await pricedTokens(onChain) : mirror;
+    // The owner's own wallet (a wallet made in Telegram is the vault wallet itself: nothing separate).
+    const own =
+      !readOnly && live && owner.wallet !== vault.agentPubkey
+        ? (await walletAssets(owner.wallet).catch(() => [] as DepositAsset[])).filter((a) => a.balance > 1e-9)
+        : [];
     const [open, closed, closedCount, beatHold, totals, flowRows] = await Promise.all([
       db.position.findMany({ where: { vaultId: vault.id, status: 'open' }, include: { pool: true } }),
       db.position.findMany({ where: { vaultId: vault.id, status: 'closed' }, include: { pool: true }, orderBy: { closedAt: 'desc' }, take: 50 }),
@@ -497,6 +515,8 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
         manual: p.manual,
       })),
     ].sort((a, b) => b.value - a.value);
+    const positionsUsd = open.reduce((sum, p) => sum + p.valueUsd + p.feesUnclaimedUsd, 0);
+    const value = onChain ? cash.totalUsd + positionsUsd : v.value;
     const flows = flowRows
       .flatMap((d) => {
         const usd = (d.inputs as { flowUsd?: unknown } | null)?.flowUsd;
@@ -510,9 +530,12 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
       mode: vault.mode,
       since: vault.createdAt.getTime(),
       telegramLinked: !!owner.telegramChatId,
-      value: v.value,
+      value,
+      source: onChain ? 'chain' : 'agent',
       holdValue: v.hold,
-      netVsHold: v.hold > 0 ? (v.value / v.hold - 1) * 100 : 0,
+      netVsHold: v.hold > 0 ? (value / v.hold - 1) * 100 : null,
+      pendingUsd: onChain ? Math.max(0, cash.totalUsd - mirror.totalUsd) : 0,
+      ownWallet: own.map((a) => ({ token: { symbol: a.symbol, letter: a.letter, color: a.color, ...(a.logo ? { logo: a.logo } : {}), mint: a.mint }, amount: a.balance, value: a.balance * a.priceUsd })),
       fees: (totals._sum.feesClaimedUsd ?? 0) + (totals._sum.feesUnclaimedUsd ?? 0),
       costs: totals._sum.costsUsd ?? 0,
       holdings,

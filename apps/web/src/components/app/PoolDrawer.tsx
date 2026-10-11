@@ -20,7 +20,8 @@ const LIMIT_TEXT: Record<NonNullable<VaultBalance['pool']>['limit'], string> = {
 };
 
 /** Token amounts: more decimals for small ones (0.0421 SOL, 12.50 USDC, 1,250 BONK). */
-const amount = (n: number) => fmt(n, n >= 1000 ? 0 : n >= 1 ? 2 : 4);
+const amount = (n: number) =>
+  n.toLocaleString('en-US', { minimumFractionDigits: n >= 1000 ? 0 : 2, maximumFractionDigits: n >= 1000 ? 0 : n >= 1 ? 2 : 4 });
 
 /** Slide-out with how the agent scored a pool. */
 export function PoolDrawer() {
