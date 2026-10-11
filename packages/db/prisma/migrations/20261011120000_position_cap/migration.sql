@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "Strategy" ADD COLUMN     "maxPositionUsd" DOUBLE PRECISION NOT NULL DEFAULT 0;

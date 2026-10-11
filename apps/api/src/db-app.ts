@@ -32,6 +32,7 @@ import {
   proposalView,
   rejectProposal,
   shrinkDeposits as shrinkDepositsOf,
+  strategySettings as strategySettingsOf,
   strategyData,
   type PrismaClient,
   type Vault,
@@ -359,10 +360,11 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     const v = await writable(req, req.params.id);
     const errors = validateStrategy(req.body);
     if (errors.length) throw new ApiError(400, 'invalid_strategy', errors.join(' '));
-    const s = req.body;
+    // Clients that don't send the per-position cap (older pages) keep the one already set (e.g. from Telegram).
+    const s = { ...req.body, maxPositionUsd: req.body.maxPositionUsd ?? (v.strategy ? strategySettingsOf(v.strategy).maxPositionUsd : 0) };
     const data = strategyData(s);
     await db.strategy.update({ where: { vaultId: v.id }, data: { ...data, weights: data.weights as object, toggles: data.toggles as object } });
-    await logDecision(v.id, 'scan', 'Strategy updated', `Pool cap ${s.maxAllocPct}%, min cap $${s.minMcapM}M, trend exit −${Math.abs(s.trendExitPct)}%, loss stop ${s.dailyStopPct}%.`);
+    await logDecision(v.id, 'scan', 'Strategy updated', `Pool cap ${s.maxAllocPct}%${s.maxPositionUsd > 0 ? ` (max $${s.maxPositionUsd.toLocaleString('en-US')} per position)` : ''}, min cap $${s.minMcapM}M, trend exit −${Math.abs(s.trendExitPct)}%, loss stop ${s.dailyStopPct}%.`);
     return s;
   });
 

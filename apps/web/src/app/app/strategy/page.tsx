@@ -39,6 +39,7 @@ export default function StrategyPage() {
   const set = (patch: Partial<StrategySettings>) => setDraft({ ...S, ...patch });
   const ok = (x: { mcapM: number; trend7d: number }) => x.mcapM >= S.minMcapM && x.trend7d > S.trendExitPct;
   const v = overview?.value ?? 0;
+  const cap = S.maxPositionUsd ?? 0;
 
   return (
     <div className="page on" id="p-strategy">
@@ -93,6 +94,24 @@ export default function StrategyPage() {
               </div>
             );
           })}
+          <div className="field">
+            <div className="ft">
+              <label htmlFor="rCap">Max per position</label>
+              <output>{cap > 0 ? usd(cap) : 'No cap'}</output>
+            </div>
+            <p>Most the agent puts into one pool, in dollars. Empty or 0: sized by the pool share above.</p>
+            <input
+              className="capin"
+              id="rCap"
+              inputMode="decimal"
+              placeholder="No cap"
+              value={cap > 0 ? String(cap) : ''}
+              onChange={(e) => {
+                const n = Number(e.target.value.replace(/[$,\s]/g, ''));
+                if (Number.isFinite(n) && n >= 0 && n <= 1e9) set({ maxPositionUsd: n });
+              }}
+            />
+          </div>
         </div>
         <div className="panel card">
           <div className="ph">
@@ -142,7 +161,7 @@ export default function StrategyPage() {
             </div>
             <div>
               <span>Max in one pool</span>
-              <b className="num">{usd((v * S.maxAllocPct) / 100)}</b>
+              <b className="num">{usd(Math.min((v * S.maxAllocPct) / 100, cap > 0 ? cap : Infinity))}</b>
             </div>
             <div>
               <span>Auto-pause below</span>

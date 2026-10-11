@@ -107,6 +107,8 @@ model Strategy {
   minMcap      Float       @default(500)
   trendExitPct Float       @default(-12)
   dailyStopPct Float       @default(4)
+  /// The user's cap per position in USD; 0 = no cap (sized by maxAllocPct)
+  maxPositionUsd Float     @default(0)
   /// Score weights (ScoreWeights in packages/core)
   weights      Json
   /// autoCompound, rebalanceOnlyProfitable, holderSafety, pauseOnVolSpikes, telegramAlerts, askBeforeTrading

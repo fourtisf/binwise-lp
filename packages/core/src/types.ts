@@ -201,6 +201,8 @@ export interface StrategySettings {
   /** Exit when the 7-day trend is below this percent (negative). */
   trendExitPct: number;
   dailyStopPct: number;
+  /** Most USD the agent puts into one position (the user's own cap). 0 = no cap: sized by maxAllocPct. */
+  maxPositionUsd: number;
   toggles: StrategyToggles;
 }
 

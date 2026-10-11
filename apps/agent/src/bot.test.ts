@@ -117,7 +117,7 @@ describe('telegram bot', () => {
     expect(last().text).toMatch(/isn't connected to a vault yet/);
     await say('/start code123');
     expect(last().text).toMatch(/^✅ Connected/);
-    expect(buttons().map((b) => b.text)).toEqual(['📊 Status', '➕ Add LP', '💼 Positions', '💳 Wallet', '🗳 Approvals', '🤖 Mode: Auto', '⏸ Pause agent', '🌐 Open app']);
+    expect(buttons().map((b) => b.text)).toEqual(['📊 Status', '➕ Add LP', '💼 Positions', '💳 Wallet', '🗳 Approvals', '🤖 Mode: Auto', '⚙️ Settings', '⏸ Pause agent', '🌐 Open app']);
     expect(callbackOf('🤖 Mode: Auto')).toBe('mode|manual');
     // The code works once.
     await say('/start code123');
@@ -440,5 +440,38 @@ describe('telegram bot', () => {
     expect(last().text).toMatch(/isn't open yet/);
     await say(kp.b58);
     expect(await db.user.count({ where: { telegramChatId: String(CHAT) } })).toBe(0);
+  });
+
+  it('sets risk, max per position and pool share from the bot; Add LP and the agent respect the cap', async () => {
+    await say('/start code123');
+    await press('set');
+    expect(last().text).toMatch(/Max per position: <b>no cap/);
+    await press('sm|100');
+    expect(answers.at(-1)).toBe('Saved');
+    expect(last().text).toMatch(/Max per position: <b>\$100<\/b>/);
+    expect(callbackOf('✅ $100')).toBe('sm|100');
+    // Add LP offers at most the cap.
+    await press(`p|${POOL}`);
+    expect(last().text).toMatch(/max for this pool now: \$100/);
+    // The agent's own sizing respects it too.
+    await runManualDeploy(agentDeps(), await vault(), POOL, 0, 'cap');
+    expect((await db.position.findFirstOrThrow()).entryValueUsd).toBeLessThanOrEqual(100.01);
+
+    // Typed amount.
+    await press('smx');
+    await say('abc');
+    expect(last().text).toMatch(/Send a dollar amount/);
+    await say('$1,250');
+    expect(last().text).toMatch(/Max per position: <b>\$1,250<\/b>/);
+    // Risk profile applies its preset limits but keeps the cap.
+    await press('sr|conservative');
+    const st = await db.strategy.findFirstOrThrow();
+    expect(st.profile).toBe('conservative');
+    expect(st.maxPositionUsd).toBe(1250);
+    await press('sa|40');
+    expect((await db.strategy.findFirstOrThrow()).maxAllocPct).toBe(40);
+    await press('sm|0');
+    expect((await db.strategy.findFirstOrThrow()).maxPositionUsd).toBe(0);
+    expect(await db.decision.count({ where: { title: 'Strategy updated' } })).toBe(5);
   });
 });

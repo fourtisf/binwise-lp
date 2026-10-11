@@ -7,6 +7,7 @@ import {
   exitReason,
   feesEarnedUsd,
   openPosition,
+  positionCapUsd,
   positionSizeUsd,
   rangeHalfWidth,
   shapeFor,
@@ -497,7 +498,7 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
       if (s.toggles.pauseOnVolSpikes && v.snap.volSpike) continue;
       const side = sideForRegime(v.regime, params, v.riskyIsY);
       if (!side) continue;
-      let size = Math.min(positionSizeUsd(vaultValue, s.maxAllocPct, v.ctx.tvlUsd, params), idleUsd * 0.98, liveRoomUsd);
+      let size = Math.min(positionSizeUsd(vaultValue, s.maxAllocPct, v.ctx.tvlUsd, params), positionCapUsd(s), idleUsd * 0.98, liveRoomUsd);
       // Respect the exposure cap for each non-stable token this position would add.
       const shareX = side === 'both' ? 0.5 : side === 'x' ? 1 : 0;
       for (const [mint, share] of [[v.ctx.mintX, shareX], [v.ctx.mintY, 1 - shareX]] as const) {
@@ -1118,7 +1119,7 @@ export async function runManualDeploy(
   const executor = await deps.executorFor(vault);
   const idleUsd = holdingsUsd(await executor.holdings(), tokens);
   const positionsUsd = open.reduce((sum, p) => sum + p.valueUsd, 0);
-  let size = Math.min(positionSizeUsd(idleUsd + positionsUsd, s.maxAllocPct, view.ctx.tvlUsd, params), idleUsd * 0.98);
+  let size = Math.min(positionSizeUsd(idleUsd + positionsUsd, s.maxAllocPct, view.ctx.tvlUsd, params), positionCapUsd(s), idleUsd * 0.98);
   if (requestedUsd > 0) size = Math.min(size, requestedUsd);
   if (executor.mode === 'live') {
     const live = liveLimits();

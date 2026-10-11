@@ -31,6 +31,7 @@ export function strategySettings(s: Strategy): StrategySettings {
     minMcapM: s.minMcap,
     trendExitPct: s.trendExitPct,
     dailyStopPct: s.dailyStopPct,
+    maxPositionUsd: s.maxPositionUsd,
     toggles: { ...DEFAULT_STRATEGY.toggles, ...(s.toggles as Partial<StrategyToggles>) },
   };
 }
@@ -47,6 +48,7 @@ export function strategyData(s: StrategySettings): Omit<Prisma.StrategyUnchecked
     minMcap: s.minMcapM,
     trendExitPct: s.trendExitPct,
     dailyStopPct: s.dailyStopPct,
+    maxPositionUsd: s.maxPositionUsd ?? 0,
     weights: { ...DEFAULT_WEIGHTS[s.profile] },
     toggles: { ...s.toggles },
   };

@@ -1,4 +1,4 @@
-import { assessPool, positionSizeUsd, type AgentParams } from '@binwise/core';
+import { STRATEGY_LIMITS, STRATEGY_PRESETS, assessPool, positionCapUsd, positionSizeUsd, type AgentParams, type RiskProfile, type StrategySettings } from '@binwise/core';
 import { SOL_MINT, isLiveTelegram, liveLimits, walletAddress } from '@binwise/chain';
 import {
   ProposalError,
@@ -8,6 +8,7 @@ import {
   createVault,
   pendingProposals,
   rejectProposal,
+  strategyData as strategyDataOf,
   strategySettings as settingsOf,
   strategySettings,
   strategyWeights,
@@ -109,6 +110,7 @@ export const BOT_COMMANDS = [
   { command: 'add', description: 'Add liquidity to a pool' },
   { command: 'positions', description: 'Your open positions' },
   { command: 'wallet', description: 'Deposit, withdraw, private key' },
+  { command: 'settings', description: 'Risk, max per position, limits' },
   { command: 'approvals', description: 'Trades waiting for your approval (manual mode)' },
   { command: 'unlink', description: 'Disconnect this chat from your vault' },
 ];
@@ -164,9 +166,10 @@ export function makeBot(d: BotDeps) {
       manual(v) ? { text: '✋ Mode: Manual', callback_data: 'mode|auto' } : { text: '🤖 Mode: Auto', callback_data: 'mode|manual' },
     ],
     [
+      { text: '⚙️ Settings', callback_data: 'set' },
       v.status === 'running' ? { text: '⏸ Pause agent', callback_data: 'pause' } : { text: '▶️ Resume agent', callback_data: 'resume' },
-      { text: '🌐 Open app', url: `${d.appUrl}/app` },
     ],
+    [{ text: '🌐 Open app', url: `${d.appUrl}/app` }],
   ];
   const back: Keyboard = [[{ text: '⬅️ Menu', callback_data: 'menu' }]];
 
@@ -271,7 +274,8 @@ export function makeBot(d: BotDeps) {
     const p = pools.find((x) => x.snap.poolId === poolId);
     if (!p) return null;
     const m = await money(c.vault.id);
-    let max = Math.min(m.idle * 0.98, positionSizeUsd(m.value, strategySettings(c.vault.strategy!).maxAllocPct, p.snap.tvl, params));
+    const st = strategySettings(c.vault.strategy!);
+    let max = Math.min(m.idle * 0.98, positionSizeUsd(m.value, st.maxAllocPct, p.snap.tvl, params), positionCapUsd(st));
     if (c.vault.mode === 'live') {
       const live = liveLimits();
       max = m.open.length >= live.maxPositions ? 0 : Math.min(max, live.maxUsd - m.open.reduce((s, x) => s + x.valueUsd, 0));
@@ -359,6 +363,49 @@ export function makeBot(d: BotDeps) {
         ...back,
       ],
     };
+  }
+
+  // ---------------------------------------------------------------- settings (same rules as the website's Strategy page)
+
+  const PROFILE_LABEL: Record<RiskProfile, string> = { conservative: '🛡 Conservative', balanced: '⚖️ Balanced', aggressive: '🔥 Aggressive' };
+  const CAP_OPTIONS = [25, 50, 100, 250, 500, 1000, 5000];
+  const POOL_PCTS = [10, 25, 40, 60].filter((p) => p >= STRATEGY_LIMITS.maxAllocPct[0] && p <= STRATEGY_LIMITS.maxAllocPct[1]);
+
+  function settings(c: Ctx): Screen {
+    if (!c.vault.strategy) return welcome(c);
+    const st = settingsOf(c.vault.strategy);
+    const tick = (on: boolean, label: string) => (on ? `✅ ${label}` : label);
+    return {
+      text:
+        `⚙️ <b>Settings</b>\n\n` +
+        `Risk: <b>${PROFILE_LABEL[st.profile]}</b>\n` +
+        `Max per position: <b>${st.maxPositionUsd > 0 ? usd(st.maxPositionUsd) : 'no cap (by pool share)'}</b>\n` +
+        `Max share of the vault in one pool: <b>${st.maxAllocPct}%</b>\n` +
+        `Exit when the 7-day trend is below: <b>−${Math.abs(st.trendExitPct)}%</b>\n` +
+        `Daily loss stop: <b>${st.dailyStopPct}%</b>\n\n` +
+        `The agent never puts more than the max per position into one pool, and never more than the pool share. ` +
+        `Risk sets the pools it picks and how tight it trades.`,
+      keyboard: [
+        (Object.keys(PROFILE_LABEL) as RiskProfile[]).map((p) => ({ text: tick(st.profile === p, PROFILE_LABEL[p]), callback_data: `sr|${p}` })),
+        CAP_OPTIONS.slice(0, 4).map((a) => ({ text: tick(st.maxPositionUsd === a, usd(a)), callback_data: `sm|${a}` })),
+        [
+          ...CAP_OPTIONS.slice(4).map((a) => ({ text: tick(st.maxPositionUsd === a, usd(a)), callback_data: `sm|${a}` })),
+          { text: tick(st.maxPositionUsd === 0, 'No cap'), callback_data: 'sm|0' },
+        ],
+        [{ text: '✏️ Type an amount', callback_data: 'smx' }],
+        POOL_PCTS.map((p) => ({ text: tick(st.maxAllocPct === p, `${p}% per pool`), callback_data: `sa|${p}` })),
+        [{ text: '⬅️ Menu', callback_data: 'menu' }],
+      ],
+    };
+  }
+
+  /** Saves a settings change from Telegram and logs it like the website does. */
+  async function saveSettings(c: Ctx, patch: Partial<StrategySettings>, what: string): Promise<Ctx> {
+    const next = { ...settingsOf(c.vault.strategy!), ...patch };
+    const data = strategyDataOf(next);
+    const strategy = await db.strategy.update({ where: { id: c.vault.strategy!.id }, data: { ...data, weights: data.weights as object, toggles: data.toggles as object } });
+    await db.decision.create({ data: { vaultId: c.vault.id, ts: new Date(now()), type: 'scan', title: 'Strategy updated', reason: `${what} (set from Telegram).`, inputs: { manual: true } } });
+    return { ...c, vault: { ...c.vault, strategy } };
   }
 
   // ---------------------------------------------------------------- wallet
@@ -634,6 +681,16 @@ export function makeBot(d: BotDeps) {
     if (!c) {
       return tg.send(chatId, notLinked.text, { html: true, keyboard: notLinked.keyboard });
     }
+    // Settings → Type an amount: the next number is the max per position.
+    if (!text.startsWith('/') && (await state.get(chatId)) === 'maxusd') {
+      const n = Number(text.replace(/[$,\s]/g, ''));
+      if (!Number.isFinite(n) || n < 0 || n > 1e9)
+        return tg.send(chatId, 'Send a dollar amount, like 150 (or 0 for no cap).', { keyboard: [[{ text: '✖️ Cancel', callback_data: 'set' }]] });
+      await state.del(chatId);
+      const amt = Math.round(n * 100) / 100;
+      const s2 = settings(await saveSettings(c, { maxPositionUsd: amt }, amt > 0 ? `Max per position ${usd(amt)}` : 'No cap per position'));
+      return tg.send(chatId, `✅ Saved.\n\n${s2.text}`, { html: true, keyboard: s2.keyboard });
+    }
     // A withdrawal waiting for its address: a pasted address answers it.
     const pending = await readPending(chatId);
     if (pending && !pending.to && !text.startsWith('/')) {
@@ -650,6 +707,8 @@ export function makeBot(d: BotDeps) {
     const screen =
       cmd === '/wallet'
         ? await wallet(c)
+        : cmd === '/settings'
+          ? settings(c)
         : cmd === '/status'
         ? await status(c)
         : cmd === '/add'
@@ -731,6 +790,29 @@ export function makeBot(d: BotDeps) {
       }
       case 'apv':
         return show(await approvals(c));
+      case 'set':
+        await state.del(chatId);
+        return show(settings(c));
+      case 'sr': {
+        if (!(a in PROFILE_LABEL) || !c.vault.strategy) return show(settings(c));
+        // Same as picking a profile card on the website: its preset limits, keeping the user's cap and switches.
+        const { rebalancesPerDay: _r, ...preset } = STRATEGY_PRESETS[a as RiskProfile];
+        return show(settings(await saveSettings(c, { profile: a as RiskProfile, ...preset }, `Risk profile ${a}`)), 'Saved');
+      }
+      case 'sm': {
+        const amt = Number(a);
+        if (!Number.isFinite(amt) || amt < 0 || !c.vault.strategy) return show(settings(c));
+        return show(settings(await saveSettings(c, { maxPositionUsd: amt }, amt > 0 ? `Max per position ${usd(amt)}` : 'No cap per position')), 'Saved');
+      }
+      case 'smx':
+        await state.set(chatId, 'maxusd', 600);
+        return show({ text: '✏️ Send the most the agent may put into <b>one position</b>, in dollars (e.g. <code>150</code>). Send 0 for no cap.', keyboard: [[{ text: '✖️ Cancel', callback_data: 'set' }]] });
+      case 'sa': {
+        const pct = Number(a);
+        const [lo, hi] = STRATEGY_LIMITS.maxAllocPct;
+        if (!(pct >= lo && pct <= hi) || !c.vault.strategy) return show(settings(c));
+        return show(settings(await saveSettings(c, { maxAllocPct: pct }, `Pool cap ${pct}%`)), 'Saved');
+      }
       case 'cw':
       case 'cwx':
       case 'iw':
