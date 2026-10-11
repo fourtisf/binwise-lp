@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createVault, ensureUser, getDb } from '@binwise/db';
-import { PaperExecutor, SOL_MINT, createAgentKey, type Holdings } from '@binwise/chain';
+import { PaperExecutor, SOL_MINT, createAgentKey, exportAgentSecret, sealImportedKey, type Holdings } from '@binwise/chain';
 import { Keypair } from '@solana/web3.js';
 import { randomBytes } from 'node:crypto';
 import { collectOnce, DEFAULT_COLLECTOR } from './collector';
@@ -21,6 +21,11 @@ let updateId = 0;
 const usedKeys = new Set<string>();
 
 const KEY_SECRET = randomBytes(32).toString('base64');
+/** A fresh wallet's address and its private key as wallets export it (base58). */
+const freshKey = () => {
+  const k = createAgentKey(KEY_SECRET);
+  return { pubkey: k.pubkey, b58: exportAgentSecret(k.encSecret, k.pubkey, KEY_SECRET) };
+};
 let deleted: number[];
 let chatState = memoryChatState();
 let liveOk = true;
@@ -44,6 +49,10 @@ const bot = () =>
     newWallet: () => {
       const k = createAgentKey(KEY_SECRET);
       return { pubkey: k.pubkey, encSecret: new Uint8Array(k.encSecret) };
+    },
+    importWallet: (input) => {
+      const k = sealImportedKey(input, KEY_SECRET);
+      return k && { pubkey: k.pubkey, encSecret: new Uint8Array(k.encSecret) };
     },
     exportKey: async () => 'SECRET-KEY-BASE58',
     deleteMessage: async (_c, id) => void deleted.push(id),
@@ -389,5 +398,47 @@ describe('telegram bot', () => {
     });
     await runWithdraw({ db, killSwitch: { isKilled: async () => false }, chainFor }, await vault(), { id: 'w1', mint: SOL_MINT, pct: 100, to: Keypair.generate().publicKey.toBase58() });
     expect(tos).toEqual(['Wallet1111111111111111111111111111111111111']);
+  });
+
+  it('imports a wallet from a pasted private key, deletes the message, and counts its balance as the starting deposit', async () => {
+    await say('/start');
+    expect(callbackOf('📥 Import wallet')).toBe('iw');
+    await press('iw');
+    expect(last().text).toMatch(/Use a wallet just for Binwise/);
+    await say('not a key');
+    expect(deleted).toEqual([updateId]);
+    expect(last().text).toMatch(/isn't a valid Solana private key/);
+    const kp = freshKey();
+    walletBalances = { [SOL_MINT]: 1.5, [USDC]: 40 };
+    await say(kp.b58);
+    expect(deleted.at(-1)).toBe(updateId);
+    expect(last().text).toMatch(/Wallet imported/);
+    expect(sent.some((m) => m.text.includes(kp.b58))).toBe(false);
+    const user = await db.user.findFirstOrThrow({ where: { telegramChatId: String(CHAT) } });
+    expect(user.wallet).toBe(kp.pubkey);
+    const v = await db.vault.findFirstOrThrow({ where: { userId: user.id } });
+    expect(v.mode).toBe('live');
+    expect(v.agentPubkey).toBe(kp.pubkey);
+    expect(v.deposits).toEqual({ [SOL_MINT]: 1.5, [USDC]: 40 });
+
+    // The same wallet can't be imported into a second chat.
+    const other = (text: string) =>
+      bot()({ update_id: ++updateId, message: { message_id: updateId, chat: { id: 999, type: 'private' }, text } } as TgUpdate);
+    await bot()({ update_id: ++updateId, callback_query: { id: 'x', data: 'iw', message: { message_id: 5, chat: { id: 999, type: 'private' } } } });
+    await other(kp.b58);
+    expect(last().text).toMatch(/already used on Binwise/);
+    expect(await db.vault.count({ where: { agentPubkey: kp.pubkey } })).toBe(1);
+  });
+
+  it('deletes a private key pasted without Import, and imports nothing while wallets are closed', async () => {
+    const kp = freshKey();
+    await say(kp.b58);
+    expect(deleted).toEqual([updateId]);
+    expect(last().text).toMatch(/looked like a private key/);
+    liveOk = false;
+    await press('iw');
+    expect(last().text).toMatch(/isn't open yet/);
+    await say(kp.b58);
+    expect(await db.user.count({ where: { telegramChatId: String(CHAT) } })).toBe(0);
   });
 });

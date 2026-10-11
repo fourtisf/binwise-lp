@@ -76,3 +76,31 @@ export function walletAddress(input: string): string | null {
     return null;
   }
 }
+
+/**
+ * A private key the user pasted (base58 as wallets export it, or a [1,2,…] byte array), sealed for
+ * storage. Null when it isn't a valid Solana key. The plaintext bytes are wiped before returning.
+ */
+export function sealImportedKey(input: string, secret?: string): { pubkey: string; encSecret: Buffer } | null {
+  let bytes: Uint8Array | null = null;
+  const t = input.trim();
+  try {
+    if (t.startsWith('[')) {
+      const arr = JSON.parse(t) as unknown;
+      if (Array.isArray(arr) && arr.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) bytes = Uint8Array.from(arr as number[]);
+    } else bytes = bs58.decode(t);
+    if (!bytes || bytes.length !== 64) return null;
+    // fromSecretKey checks that the public half belongs to the secret half.
+    const kp = Keypair.fromSecretKey(bytes);
+    const sk = kp.secretKey;
+    try {
+      return { pubkey: kp.publicKey.toBase58(), encSecret: sealSecret(sk, secret) };
+    } finally {
+      sk.fill(0);
+    }
+  } catch {
+    return null;
+  } finally {
+    bytes?.fill(0);
+  }
+}

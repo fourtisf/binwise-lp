@@ -1,4 +1,4 @@
-import { JupiterClient, createAgentKey, exportAgentSecret, makeConnection, walletBalances } from '@binwise/chain';
+import { JupiterClient, createAgentKey, exportAgentSecret, makeConnection, sealImportedKey, walletBalances } from '@binwise/chain';
 import { getDb } from '@binwise/db';
 import { CYCLE_MS, runApprovedProposal, runManualAction, runManualDeploy, runVaultCycle, type ManualResult } from './agent';
 import { BOT_COMMANDS, makeBot, resultMessage, type ManualRequest } from './bot';
@@ -112,6 +112,10 @@ if (telegram) {
     newWallet: () => {
       const k = createAgentKey();
       return { pubkey: k.pubkey, encSecret: new Uint8Array(k.encSecret) };
+    },
+    importWallet: (input) => {
+      const k = sealImportedKey(input);
+      return k && { pubkey: k.pubkey, encSecret: new Uint8Array(k.encSecret) };
     },
     exportKey: async (v) => {
       if (!v.encSecret) throw new Error('This vault has no agent wallet.');

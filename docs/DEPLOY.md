@@ -81,6 +81,10 @@ In an unlinked chat, **🆕 Create wallet** makes a new live vault with its own 
 (website vaults: only to their registered wallet), and **🔑 Private key** shows the key (base58, imports into Phantom)
 after a warning, in a message that deletes itself after 60 seconds. Showing the key is logged in Activity (never the key).
 
+**📥 Import wallet** takes a pasted private key (base58 or byte array) instead: the message is deleted at once, the key
+is sealed like any agent key, and what the wallet already holds becomes its starting deposit. A wallet already used on
+Binwise (website or another chat) can't be imported. A private key pasted anywhere else in the bot is deleted too.
+
 - Deposits to a bot wallet count from any address (exchange or wallet).
 - Who may create one: everyone when `LIVE_WALLETS=*`; otherwise only Telegram ids in `LIVE_TELEGRAM_IDS`
   (comma-separated; `/id` in the bot shows it; `deploy/go-live.sh` asks for it with option 1).

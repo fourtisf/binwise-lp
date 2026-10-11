@@ -82,6 +82,8 @@ export interface BotDeps {
   balances?: (address: string) => Promise<Record<string, number>>;
   /** A new agent wallet: address + sealed secret (Create wallet). */
   newWallet?: () => { pubkey: string; encSecret: Uint8Array<ArrayBuffer> };
+  /** A pasted private key, checked and sealed; null when it isn't a valid key (Import wallet). */
+  importWallet?: (input: string) => { pubkey: string; encSecret: Uint8Array<ArrayBuffer> } | null;
   /** The vault's private key in wallet-import format (only shown to its owner on request). */
   exportKey?: (vault: Vault) => Promise<string>;
   /** Delete a message (the private key message deletes itself). */
@@ -179,9 +181,16 @@ export function makeBot(d: BotDeps) {
     text:
       `👋 <b>Welcome to Binwise</b>\n\nAn AI agent that provides liquidity on Meteora (Solana) for you, and shows whether it beats simply holding.\n\n` +
       `This chat isn't connected to a vault yet.\n\n` +
-      `🆕 <b>New here?</b> Tap <b>Create wallet</b>: you get your own Solana wallet in this chat, deposit SOL, and the agent does the rest.\n\n` +
+      `🆕 <b>New here?</b> Tap <b>Create wallet</b>: you get your own Solana wallet in this chat, deposit SOL, and the agent does the rest. ` +
+      `Or <b>Import wallet</b> to use one you already have.\n\n` +
       `🌐 <b>Already use the website?</b>\n1. Open ${esc(d.appUrl)}/app and connect your wallet\n2. Go to <b>Strategy</b> → turn on <b>Telegram alerts</b>\n3. Press <b>Start</b> in the chat that opens`,
-    keyboard: [[{ text: '🆕 Create wallet', callback_data: 'cw' }], [{ text: '🌐 Open website', url: `${d.appUrl}/app` }]],
+    keyboard: [
+      [
+        { text: '🆕 Create wallet', callback_data: 'cw' },
+        { text: '📥 Import wallet', callback_data: 'iw' },
+      ],
+      [{ text: '🌐 Open website', url: `${d.appUrl}/app` }],
+    ],
   };
 
   // ---------------------------------------------------------------- screens
@@ -471,6 +480,26 @@ export function makeBot(d: BotDeps) {
 
   // ---------------------------------------------------------------- new wallet (no website needed)
 
+  const notOpen = (chatId: string): Screen => ({
+    text:
+      `🆕 <b>Wallets in Telegram</b>\n\nCreating or importing wallets in Telegram isn't open yet while live trading is being tested.\n\n` +
+      `Your Telegram ID: <code>${esc(chatId)}</code>\n(Owner: add it with deploy/go-live.sh to allow this chat.)`,
+    keyboard: [[{ text: '⬅️ Back', callback_data: 'start' }]],
+  });
+
+  function importIntro(chatId: string): Screen {
+    if (!liveAllowed(chatId) || !d.importWallet) return notOpen(chatId);
+    return {
+      text:
+        `📥 <b>Import wallet</b>\n\nPaste the wallet's <b>private key</b> as your next message (from Phantom: Settings → Manage accounts → Show private key). ` +
+        `Your message is deleted right away and the key is stored encrypted.\n\n` +
+        `⚠️ <b>Use a wallet just for Binwise.</b> The agent may trade everything in it on mainnet with <b>real funds</b> ` +
+        `(up to ${usd(liveLimits().maxUsd)} in positions while live trading is new). What's in it now counts as your starting deposit.\n` +
+        `No strategy is guaranteed to profit. Only use what you can afford to lose.`,
+      keyboard: [[{ text: '✖️ Cancel', callback_data: 'start' }]],
+    };
+  }
+
   function createWalletIntro(chatId: string): Screen {
     if (!liveAllowed(chatId) || !d.newWallet)
       return {
@@ -496,22 +525,56 @@ export function makeBot(d: BotDeps) {
     };
   }
 
-  async function createWallet(chatId: string): Promise<Screen> {
-    if (!liveAllowed(chatId) || !d.newWallet) return createWalletIntro(chatId);
-    const key = d.newWallet();
+  /** A live vault owned by this chat, on a new or imported wallet. */
+  async function openVault(chatId: string, key: { pubkey: string; encSecret: Uint8Array<ArrayBuffer> }, imported: boolean) {
+    // What an imported wallet already holds is its starting deposit (the hold baseline).
+    const start = imported && d.balances ? await d.balances(key.pubkey).catch(() => ({})) : {};
     const user = await db.user.create({ data: { wallet: key.pubkey, telegramChatId: chatId } });
     const vault = await createVault(db, user.id, { live: { agentPubkey: key.pubkey, encSecret: key.encSecret } });
+    if (Object.keys(start).length) await db.vault.update({ where: { id: vault.id }, data: { deposits: start } });
     await db.decision.create({
       data: {
         vaultId: vault.id,
         ts: new Date(now()),
         type: 'scan',
         title: 'Live vault created',
-        reason: 'Created in Telegram. Runs on Solana mainnet with real funds. Deposit SOL to start.',
+        reason: imported
+          ? 'Imported in Telegram. Runs on Solana mainnet with real funds; what the wallet held counts as the starting deposit.'
+          : 'Created in Telegram. Runs on Solana mainnet with real funds. Deposit SOL to start.',
         inputs: {},
       },
     });
-    const c: Ctx = { chatId, user, vault };
+    return { chatId, user, vault } as Ctx;
+  }
+
+  async function importWallet(m: TgMessage, chatId: string, text: string) {
+    // The message holds a private key: delete it first, whatever happens next.
+    await d.deleteMessage?.(chatId, m.message_id).catch(() => {});
+    if (!liveAllowed(chatId) || !d.importWallet) {
+      await state.del(chatId);
+      const s = notOpen(chatId);
+      return tg.send(chatId, s.text, { html: true, keyboard: s.keyboard });
+    }
+    const key = d.importWallet(text);
+    if (!key)
+      return tg.send(chatId, "🗑 Deleted your message. That isn't a valid Solana private key. Paste it again (the long key Phantom shows), or tap Cancel.", {
+        keyboard: [[{ text: '✖️ Cancel', callback_data: 'start' }]],
+      });
+    await state.del(chatId);
+    const taken = (await db.user.findUnique({ where: { wallet: key.pubkey } })) ?? (await db.vault.findFirst({ where: { agentPubkey: key.pubkey } }));
+    if (taken)
+      return tg.send(chatId, '🗑 Deleted your message. This wallet is already used on Binwise (on the website or in another chat), so it can\'t be imported here.', {
+        keyboard: notLinked.keyboard,
+      });
+    const c = await openVault(chatId, key, true);
+    const w = await wallet(c, '✅ <b>Wallet imported.</b> 🗑 Your message with the key was deleted.\n\n');
+    return tg.send(chatId, w.text + `\n\nThe agent starts by itself (🤖 Auto), or tap ➕ Add LP to pick a pool yourself.`, { html: true, keyboard: menu(c.vault) });
+  }
+
+  async function createWallet(chatId: string): Promise<Screen> {
+    if (!liveAllowed(chatId) || !d.newWallet) return createWalletIntro(chatId);
+    const c = await openVault(chatId, d.newWallet(), false);
+    const vault = c.vault;
     const w = await wallet(c, '✅ <b>Wallet created.</b>\n\n');
     return {
       text: w.text + `\n\nWhen the deposit arrives, the agent starts by itself (🤖 Auto), or tap ➕ Add LP to pick a pool yourself.`,
@@ -559,7 +622,16 @@ export function makeBot(d: BotDeps) {
       if (!count) return tg.send(chatId, notLinked.text, { html: true, keyboard: notLinked.keyboard });
       return tg.send(chatId, '👋 Disconnected. This chat no longer gets alerts or controls your vault.\n\nTo connect again, turn Telegram alerts off and on in the app.');
     }
-    if (!c) return tg.send(chatId, notLinked.text, { html: true, keyboard: notLinked.keyboard });
+    const importing = !c && !text.startsWith('/') && (await state.get(chatId)) === 'import';
+    if (importing) return importWallet(m, chatId, text);
+    // A private key pasted anywhere else: never leave it sitting in the chat.
+    if (text.length >= 64 && !text.startsWith('/') && d.importWallet?.(text)) {
+      await d.deleteMessage?.(chatId, m.message_id).catch(() => {});
+      return tg.send(chatId, "🗑 That looked like a private key, so it was deleted. Never paste a private key unless you've tapped 📥 Import wallet.");
+    }
+    if (!c) {
+      return tg.send(chatId, notLinked.text, { html: true, keyboard: notLinked.keyboard });
+    }
     // A withdrawal waiting for its address: a pasted address answers it.
     const pending = await readPending(chatId);
     if (pending && !pending.to && !text.startsWith('/')) {
@@ -593,6 +665,7 @@ export function makeBot(d: BotDeps) {
     if (!msg || msg.chat.type !== 'private' || !q.data) return tg.answer(q.id);
     if (q.data === 'start') {
       await tg.answer(q.id);
+      await state.del(String(msg.chat.id));
       const linked = await context(String(msg.chat.id));
       const s = linked ? welcome(linked) : notLinked;
       return tg.edit(String(msg.chat.id), msg.message_id, s.text, { html: true, keyboard: s.keyboard });
@@ -601,7 +674,8 @@ export function makeBot(d: BotDeps) {
     const c = await context(chatId);
     if (!c) {
       await tg.answer(q.id);
-      const s = q.data === 'cw' ? createWalletIntro(chatId) : q.data === 'cwx' ? await createWallet(chatId) : notLinked;
+      if (q.data === 'iw' && liveAllowed(chatId) && d.importWallet) await state.set(chatId, 'import', 600);
+      const s = q.data === 'cw' ? createWalletIntro(chatId) : q.data === 'cwx' ? await createWallet(chatId) : q.data === 'iw' ? importIntro(chatId) : notLinked;
       return tg.edit(chatId, msg.message_id, s.text, { html: true, keyboard: s.keyboard });
     }
     const [op, a, b] = q.data.split('|');
@@ -657,6 +731,7 @@ export function makeBot(d: BotDeps) {
         return show(await approvals(c));
       case 'cw':
       case 'cwx':
+      case 'iw':
       case 'wal':
         return show(await wallet(c));
       case 'wd':

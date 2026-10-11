@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { Keypair, PublicKey } from '@solana/web3.js';
 import bs58 from 'bs58';
-import { createAgentKey, exportAgentSecret, loadAgentKey, openSecret, sealSecret, walletAddress } from './keys';
+import { createAgentKey, exportAgentSecret, loadAgentKey, openSecret, sealImportedKey, sealSecret, walletAddress } from './keys';
 
 const secret = randomBytes(32).toString('base64');
 
@@ -41,5 +41,25 @@ describe('private key export', () => {
     // A program-derived address (off the curve) can't sign: funds sent there would be stuck.
     const [pda] = PublicKey.findProgramAddressSync([Buffer.from('x')], new PublicKey(w));
     expect(walletAddress(pda.toBase58())).toBeNull();
+  });
+});
+
+describe('wallet import', () => {
+  it('accepts base58 and byte-array keys, and seals them', () => {
+    const kp = Keypair.generate();
+    for (const input of [bs58.encode(kp.secretKey), ` ${JSON.stringify(Array.from(kp.secretKey))}\n`]) {
+      const r = sealImportedKey(input, secret)!;
+      expect(r.pubkey).toBe(kp.publicKey.toBase58());
+      expect(loadAgentKey(r.encSecret, secret, r.pubkey).publicKey.toBase58()).toBe(r.pubkey);
+    }
+  });
+  it('rejects anything that is not a whole, consistent key', () => {
+    const kp = Keypair.generate();
+    expect(sealImportedKey('hello', secret)).toBeNull();
+    expect(sealImportedKey(kp.publicKey.toBase58(), secret)).toBeNull(); // an address, not a key
+    const broken = Uint8Array.from(kp.secretKey);
+    broken[40] ^= 1; // public half doesn't match the secret half
+    expect(sealImportedKey(bs58.encode(broken), secret)).toBeNull();
+    expect(sealImportedKey('[1,2,3]', secret)).toBeNull();
   });
 });
