@@ -12,6 +12,7 @@ import { PoolDrawer } from './PoolDrawer';
 import { Sidebar } from './Sidebar';
 import { Toast } from './Toast';
 import { Topbar } from './Topbar';
+import { WALLET_LOGIN } from '@/lib/site';
 import { ConfirmLiveModal, ConnectModal, WalletProviders } from './Wallet';
 import { PAGES, pageFor } from './pages';
 
@@ -43,8 +44,8 @@ function Shell({ children }: { children: ReactNode }) {
       </div>
       <div className={`scrim${layer ? ' on' : ''}`} id="scrim" onClick={closeLayers}></div>
       <PoolDrawer />
-      <DepositModal />
-      <ConnectModal />
+      {WALLET_LOGIN && <DepositModal />}
+      {WALLET_LOGIN && <ConnectModal />}
       <ConfirmLiveModal />
       <Palette />
       <Toast />

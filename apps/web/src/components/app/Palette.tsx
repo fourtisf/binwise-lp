@@ -2,7 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { LIVE_DEFAULT } from '@/lib/site';
+import { BOT_URL, LIVE_DEFAULT, WALLET_LOGIN } from '@/lib/site';
 import { useAppData } from '@/lib/store';
 import { useUi } from '@/lib/ui';
 import { Icon, type IconId } from '../Sprite';
@@ -32,7 +32,9 @@ export function Palette() {
   const items = useMemo(() => {
     const cmds: Cmd[] = [
       ...PAGES.map((p) => ({ group: 'Go to', label: p.title, icon: p.icon, run: () => router.push(p.href) })),
-      { group: 'Actions', label: 'Deposit to vault', icon: 'i-plus', run: () => guard(openDeposit) },
+      WALLET_LOGIN
+        ? { group: 'Actions', label: 'Deposit to vault', icon: 'i-plus', run: () => guard(openDeposit) }
+        : { group: 'Actions', label: 'Open Telegram bot', icon: 'i-plus', run: () => window.open(BOT_URL, '_blank', 'noopener') },
       { group: 'Actions', label: paused ? 'Resume agent' : 'Pause agent', icon: paused ? 'i-play' : 'i-pause', run: togglePause },
       ...(LIVE_DEFAULT
         ? []
@@ -45,7 +47,7 @@ export function Palette() {
             },
           ]),
       { group: 'Actions', label: 'Backtest report', icon: 'i-act', run: () => router.push('/app/report') },
-      ...(client?.kind === 'http'
+      ...(client?.kind === 'http' && WALLET_LOGIN
         ? [
             me
               ? {

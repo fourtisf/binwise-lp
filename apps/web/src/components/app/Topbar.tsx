@@ -1,7 +1,7 @@
 'use client';
 
 import { useAppData } from '@/lib/store';
-import { LIVE_DEFAULT } from '@/lib/site';
+import { BOT_URL, LIVE_DEFAULT, WALLET_LOGIN } from '@/lib/site';
 import { useUi } from '@/lib/ui';
 import { Icon } from '../Sprite';
 import { shortWallet } from './Wallet';
@@ -39,11 +39,19 @@ export function Topbar({ title }: { title: string }) {
             </button>
           </div>
         )}
-        <button className="btn btn-white btn-sm" onClick={() => guard(openDeposit)}>
-          <Icon id="i-plus" />
-          Deposit
-        </button>
-        {api && !me ? (
+        {!WALLET_LOGIN ? (
+          // Vaults live in the Telegram bot: create or import a wallet, deposit and add LP there.
+          <a className="btn btn-white btn-sm" href={BOT_URL} target="_blank" rel="noreferrer">
+            <Icon id="i-plus" />
+            Open Telegram bot
+          </a>
+        ) : (
+          <button className="btn btn-white btn-sm" onClick={() => guard(openDeposit)}>
+            <Icon id="i-plus" />
+            Deposit
+          </button>
+        )}
+        {!WALLET_LOGIN ? null : api && !me ? (
           <button className="btn btn-dark btn-sm" onClick={openConnect}>
             Connect wallet
           </button>

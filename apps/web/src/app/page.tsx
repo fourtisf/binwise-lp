@@ -6,7 +6,7 @@ import { Nav } from '@/components/landing/Nav';
 import { Stage } from '@/components/landing/Stage';
 import { Logo } from '@/components/Logo';
 import { Icon } from '@/components/Sprite';
-import { LIVE_DEFAULT } from '@/lib/site';
+import { LIVE_DEFAULT, WALLET_LOGIN } from '@/lib/site';
 
 const Check = () => <Icon id="i-check" />;
 
@@ -103,8 +103,8 @@ export default function Landing() {
           <div className="steps3">
             <div className="st card spot">
               <span className="n">1</span>
-              <h3>Connect a wallet</h3>
-              <p>Phantom, Backpack or Solflare. Paper mode needs no deposit at all.</p>
+              <h3>{WALLET_LOGIN ? 'Connect a wallet' : 'Open the Telegram bot'}</h3>
+              <p>{WALLET_LOGIN ? 'Phantom, Backpack or Solflare. Paper mode needs no deposit at all.' : 'Create or import a Solana wallet in the chat and deposit SOL. No app to install.'}</p>
             </div>
             <div className="st card spot">
               <span className="n">2</span>
@@ -244,7 +244,13 @@ export default function Landing() {
       <div className="wrap">
         <div className="final">
           <h2>Put your liquidity to work.</h2>
-          <p>{LIVE_DEFAULT ? 'Connect a wallet, deposit a small amount, and watch every decision.' : 'Start in paper mode today. Go live when the numbers convince you.'}</p>
+          <p>
+            {!WALLET_LOGIN
+              ? 'Open the Telegram bot, deposit a small amount, and watch every decision here.'
+              : LIVE_DEFAULT
+                ? 'Connect a wallet, deposit a small amount, and watch every decision.'
+                : 'Start in paper mode today. Go live when the numbers convince you.'}
+          </p>
           <div className="ctas">
             <Link className="btn btn-white" href="/app">
               {LIVE_DEFAULT ? 'Launch app' : 'Start in paper mode'}

@@ -10,7 +10,7 @@ import { PairIcon } from '@/components/Tokens';
 import { dayLabel, lineChart, sparkPath } from '@/lib/charts/lineChart';
 import { hhmm, pct, usd } from '@/lib/format';
 import { useUi } from '@/lib/ui';
-import { LIVE_DEFAULT } from '@/lib/site';
+import { BOT_URL, LIVE_DEFAULT, WALLET_LOGIN } from '@/lib/site';
 import { useAppData } from '@/lib/store';
 
 const SHAPE_LABEL = { spot: 'spot', curve: 'curve', bidask: 'bid-ask' } as const;
@@ -73,15 +73,23 @@ export default function OverviewPage() {
     return (
       <div className="page on" id="p-overview">
         <div className="panel card" style={{ textAlign: 'center', padding: '48px 20px' }}>
-          <h3 style={{ fontSize: 19 }}>Connect a wallet to start</h3>
+          <h3 style={{ fontSize: 19 }}>{WALLET_LOGIN ? 'Connect a wallet to start' : 'Start in Telegram'}</h3>
           <p className="muted" style={{ margin: '8px auto 20px', maxWidth: '44ch' }}>
-            {LIVE_DEFAULT
+            {!WALLET_LOGIN
+              ? 'Create or import a wallet in the Binwise bot, deposit SOL and add LP. The agent runs on Solana mainnet with real funds: start small. This page shows the pools and every decision.'
+              : LIVE_DEFAULT
               ? 'Your vault runs on Solana mainnet with real funds. Start small and watch every decision.'
               : 'You get a paper vault with simulated funds. Watch every decision before risking anything.'}
           </p>
-          <button className="btn btn-white" onClick={openConnect}>
-            Connect wallet
-          </button>
+          {WALLET_LOGIN ? (
+            <button className="btn btn-white" onClick={openConnect}>
+              Connect wallet
+            </button>
+          ) : (
+            <a className="btn btn-white" href={BOT_URL} target="_blank" rel="noreferrer">
+              Open Telegram bot
+            </a>
+          )}
         </div>
       </div>
     );

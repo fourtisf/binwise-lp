@@ -26,7 +26,7 @@ import type {
 } from '@binwise/core';
 import { ApiError, getClient, type BinwiseClient } from './api/client';
 import { fmt, usd } from './format';
-import { LIVE_DEFAULT } from './site';
+import { LIVE_DEFAULT, WALLET_LOGIN } from './site';
 import { useUi } from './ui';
 
 type TickFn = (t: PositionTick) => void;
@@ -223,6 +223,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     const canAct = !!overview && !overview.readOnly && (client?.kind !== 'http' || !!me);
     const guard = (fn: () => void) => {
       if (canAct) fn();
+      else if (client?.kind === 'http' && !WALLET_LOGIN) toast('Manage your vault in the Binwise Telegram bot (Open Telegram bot, top right).');
       else if (client?.kind === 'http') openConnect();
       else toast('This vault is read-only.');
     };
