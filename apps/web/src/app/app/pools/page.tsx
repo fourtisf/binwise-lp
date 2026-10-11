@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import type { AgentCall } from '@binwise/core';
+import type { AgentCall, PoolRow } from '@binwise/core';
 import { Chips } from '@/components/Chips';
 import { Icon } from '@/components/Sprite';
 import { PairIcon } from '@/components/Tokens';
@@ -10,14 +10,21 @@ import { fmt, pct, usd } from '@/lib/format';
 import { useAppData } from '@/lib/store';
 import { useUi } from '@/lib/ui';
 
+/**
+ * Recommended: pools the agent would enter now, plus strong near-misses that only miss on the
+ * user's own market-cap floor or the deploy score: score 50+, 7-day trend up, tokens on the allowlist.
+ */
+const NEAR_MISS = new Set(['Below cap floor', 'Watch']);
+const recommended = (r: PoolRow) => r.call === 'in' || (r.call === 'watch' && NEAR_MISS.has(r.callLabel) && r.score >= 50 && r.trend7d > 0);
+
 export default function PoolsPage() {
   const { pools, ready } = useAppData();
   const { openPool } = useUi();
-  const [filter, setFilter] = useState<'all' | AgentCall>('all');
+  const [filter, setFilter] = useState<'all' | 'rec' | AgentCall>('all');
   const [q, setQ] = useState('');
   const cnt = (k: AgentCall) => pools.filter((r) => r.call === k).length;
   const rows = pools
-    .filter((r) => (filter === 'all' || r.call === filter) && r.pair.toLowerCase().includes(q))
+    .filter((r) => (filter === 'all' || (filter === 'rec' ? recommended(r) : r.call === filter)) && r.pair.toLowerCase().includes(q))
     .sort((a, b) => b.score - a.score);
 
   return (
@@ -27,6 +34,7 @@ export default function PoolsPage() {
           id="poolChips"
           items={[
             ['all', 'All', pools.length],
+            ['rec', 'Recommended', pools.filter(recommended).length],
             ['in', 'Deploy', cnt('in')],
             ['watch', 'Watch', cnt('watch')],
             ['out', 'Avoid', cnt('out')],
@@ -117,7 +125,9 @@ export default function PoolsPage() {
         </div>
       </div>
       <p className="dim" style={{ fontSize: 13, marginTop: 12 }}>
-        Select a pool to see how the agent scored it.
+        {filter === 'rec'
+          ? 'Recommended: pools the agent would enter now, plus strong pools (score 50+, rising 7-day trend, allowlisted tokens) that only miss your market-cap floor or the deploy score. Lower the floor in Strategy to let the agent use them.'
+          : 'Select a pool to see how the agent scored it.'}
       </p>
     </div>
   );
