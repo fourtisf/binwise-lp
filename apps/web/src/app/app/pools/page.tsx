@@ -6,7 +6,7 @@ import { Chips } from '@/components/Chips';
 import { Icon } from '@/components/Sprite';
 import { PairIcon } from '@/components/Tokens';
 import { sparkPath } from '@/lib/charts/lineChart';
-import { compactUsd, fmt, pct } from '@/lib/format';
+import { compactUsd, fmt, fmtM, pct } from '@/lib/format';
 import { useAppData } from '@/lib/store';
 import { useUi } from '@/lib/ui';
 
@@ -59,6 +59,7 @@ export default function PoolsPage() {
             <thead>
               <tr>
                 <th>Pool</th>
+                <th className="r">Market cap</th>
                 <th className="r">TVL</th>
                 <th className="r">Volume 24h</th>
                 <th className="r">Vol / TVL</th>
@@ -80,6 +81,8 @@ export default function PoolsPage() {
                           {x.pair}
                         </span>
                       </td>
+                      {/* Stable pairs have no risky token: no market cap to show. */}
+                      <td className="r num">{x.mcapM > 0 && x.mcapM < 1e6 ? fmtM(x.mcapM) : '—'}</td>
                       <td className="r num">{compactUsd(x.tvl)}</td>
                       <td className="r num">{compactUsd(x.volume24h)}</td>
                       <td className="r num">{fmt(x.volTvl, 2)}x</td>
@@ -116,7 +119,7 @@ export default function PoolsPage() {
                 })
               ) : (
                 <tr>
-                  <td colSpan={8} className="muted" style={{ padding: '28px 16px', cursor: 'default' }}>
+                  <td colSpan={9} className="muted" style={{ padding: '28px 16px', cursor: 'default' }}>
                     {pools.length ? 'No pools match. Clear the filter or pick another tab.' : ready ? 'No pool data yet. The agent refreshes pools every minute.' : 'Loading pools…'}
                   </td>
                 </tr>

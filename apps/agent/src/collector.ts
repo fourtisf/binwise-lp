@@ -183,13 +183,21 @@ async function activeLiquidity(deps: CollectorDeps, p: MeteoraPool, now: number)
 
 let lastEnrich = 0;
 
-/** Once an hour: logos and top-holder share from Jupiter for tokens we store. Best effort. */
+/**
+ * Logos, top-holder share and missing market caps from Jupiter: every token once an hour, and tokens
+ * still without a logo every run (so new tokens get theirs within a minute). Best effort.
+ */
 async function enrichTokens(deps: CollectorDeps, mints: string[]) {
   const now = (deps.now ?? Date.now)();
-  if (!deps.jupiter || now - lastEnrich < 3600_000) return;
-  lastEnrich = now;
+  if (!deps.jupiter) return;
+  const full = now - lastEnrich >= 3600_000;
+  const targets = full
+    ? mints
+    : (await deps.db.token.findMany({ where: { mint: { in: mints }, logoUrl: null }, select: { mint: true } })).map((t) => t.mint).slice(0, 100);
+  if (!targets.length) return;
+  if (full) lastEnrich = now;
   try {
-    for (const t of await deps.jupiter.tokens(mints)) {
+    for (const t of await deps.jupiter.tokens(targets)) {
       await deps.db.token.updateMany({
         where: { mint: t.id },
         data: {

@@ -10,7 +10,12 @@ import { PairIcon } from '../Tokens';
 
 /** Slide-out with how the agent scored a pool. */
 export function PoolDrawer() {
-  const { layer, drawerPoolId, closeLayers } = useUi();
+  const { layer, drawerPoolId, closeLayers, toast } = useUi();
+  const copy = (label: string, value: string) =>
+    navigator.clipboard
+      .writeText(value)
+      .then(() => toast(`${label} copied`))
+      .catch(() => toast(value));
   const { client, pools, overview, deploy } = useAppData();
   const [x, setX] = useState<PoolDetail | null>(null);
   const [amt, setAmt] = useState('');
@@ -111,6 +116,29 @@ export function PoolDrawer() {
               <span>Token market cap</span>
               <b className="num">{fmtM(x.mcapM)}</b>
             </div>
+          </div>
+          <div className="dsec">Contract addresses</div>
+          <div className="rows">
+            {[
+              [x.tokenA.symbol, x.tokenA.mint],
+              [x.tokenB.symbol, x.tokenB.mint],
+              ['Pool', x.id],
+            ]
+              .filter((r): r is [string, string] => !!r[1])
+              .map(([label, ca]) => (
+                <div key={label + ca}>
+                  <span>{label}</span>
+                  <button
+                    className="num"
+                    title={`Copy ${ca}`}
+                    onClick={() => copy(`${label} address`, ca)}
+                    style={{ background: 'none', border: 0, color: 'var(--text)', cursor: 'pointer', font: 'inherit', fontWeight: 600, display: 'inline-flex', gap: 6, alignItems: 'center' }}
+                  >
+                    {ca.slice(0, 4)}…{ca.slice(-4)}
+                    <span className="muted" style={{ fontSize: 12, fontWeight: 500 }}>Copy</span>
+                  </button>
+                </div>
+              ))}
           </div>
           {client?.kind === 'http' && overview && !overview.readOnly && (
             <>
