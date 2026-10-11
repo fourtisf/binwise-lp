@@ -12,19 +12,26 @@ const RPC = process.env.NEXT_PUBLIC_RPC_URL || 'https://api.mainnet-beta.solana.
 
 const WALLET_ERROR = 'binwise:wallet-error';
 
+/** Set when the user picks a wallet in this page; until then nothing talks to a wallet. */
+const intent = { picked: false };
+
 /**
  * Wallet Standard wallets (Phantom, Backpack, Solflare…) register themselves; no adapters needed.
- * autoConnect also connects a wallet right after the user picks it, so the sign-in flow never calls
- * connect() itself (two connects at once make Phantom fail with "Unexpected error").
+ *
+ * No silent reconnect on page load: sign-in is a cookie, so the wallet is only needed when the user
+ * acts. A silent reconnect to a locked Phantom stays pending, and the user's own connect then fails
+ * with "Unexpected error" (two connects at once). After the user picks a wallet, the provider
+ * connects it (exactly once); the modal only calls connect() for a wallet that was already picked.
  */
 export function WalletProviders({ children }: { children: ReactNode }) {
   const wallets = useMemo(() => [], []);
+  const autoConnect = useCallback(async () => intent.picked, []);
   const onError = useCallback((e: WalletError) => {
     window.dispatchEvent(new CustomEvent(WALLET_ERROR, { detail: e?.message || e?.name || 'Wallet error' }));
   }, []);
   return (
     <ConnectionProvider endpoint={RPC}>
-      <WalletProvider wallets={wallets} autoConnect onError={onError}>
+      <WalletProvider wallets={wallets} autoConnect={autoConnect} onError={onError}>
         {children}
       </WalletProvider>
     </ConnectionProvider>
@@ -172,6 +179,7 @@ export function ConnectModal() {
               onClick={() => {
                 setBusy(w.adapter.name);
                 pending.current = w.adapter.name;
+                intent.picked = true;
                 setAttempt((n) => n + 1);
                 // Already picked earlier but not connected (no new selection to trigger autoConnect): connect it directly.
                 if (wallet?.adapter.name === w.adapter.name && !connected && !connecting)

@@ -19,7 +19,7 @@ const SOL_FEE_RESERVE = 0.01;
 const PROFILE_NAME = { conservative: 'Conservative', balanced: 'Balanced', aggressive: 'Aggressive' } as const;
 
 export function DepositModal() {
-  const { layer, closeLayers, toast } = useUi();
+  const { layer, closeLayers, toast, openConnect } = useUi();
   const { overview, draft, deposit, depositLive, me } = useAppData();
   const { connection } = useConnection();
   const { publicKey, sendTransaction } = useWallet();
@@ -136,8 +136,10 @@ export function DepositModal() {
         className="btn btn-white"
         id="mGo"
         style={{ width: '100%', marginTop: 16 }}
-        disabled={!a || over || busy || walletMismatch || (live && !agree)}
+        disabled={walletMismatch ? busy : !a || over || busy || (live && !agree)}
         onClick={async () => {
+          // The signed-in wallet isn't connected in this tab (e.g. after a reload): connect it first.
+          if (walletMismatch) return openConnect();
           setBusy(true);
           try {
             if (!live) {
