@@ -487,14 +487,17 @@ export function makeBot(d: BotDeps) {
     keyboard: [[{ text: '⬅️ Back', callback_data: 'start' }]],
   });
 
+  /** " (up to $200 in positions while live trading is new)" when a per-wallet cap is set. */
+  const capNote = () => (Number.isFinite(liveLimits().maxUsd) ? ` (up to ${usd(liveLimits().maxUsd)} in positions while live trading is new)` : '');
+
   function importIntro(chatId: string): Screen {
     if (!liveAllowed(chatId) || !d.importWallet) return notOpen(chatId);
     return {
       text:
         `📥 <b>Import wallet</b>\n\nPaste the wallet's <b>private key</b> as your next message (from Phantom: Settings → Manage accounts → Show private key). ` +
         `Your message is deleted right away and the key is stored encrypted.\n\n` +
-        `⚠️ <b>Use a wallet just for Binwise.</b> The agent may trade everything in it on mainnet with <b>real funds</b> ` +
-        `(up to ${usd(liveLimits().maxUsd)} in positions while live trading is new). What's in it now counts as your starting deposit.\n` +
+        `⚠️ <b>Use a wallet just for Binwise.</b> The agent may trade everything in it on mainnet with <b>real funds</b>` +
+        `${capNote()}. What's in it now counts as your starting deposit.\n` +
         `No strategy is guaranteed to profit. Only use what you can afford to lose.`,
       keyboard: [[{ text: '✖️ Cancel', callback_data: 'start' }]],
     };
@@ -508,13 +511,12 @@ export function makeBot(d: BotDeps) {
           `Your Telegram ID: <code>${esc(chatId)}</code>\n(Owner: add it with deploy/go-live.sh to allow this chat.)`,
         keyboard: [[{ text: '⬅️ Back', callback_data: 'start' }]],
       };
-    const lim = liveLimits();
     return {
       text:
         `🆕 <b>Create your Binwise wallet</b>\n\n` +
         `• A new Solana wallet is made for you. The agent trades from it on mainnet with <b>real funds</b>.\n` +
         `• You can see its private key anytime (💳 Wallet → 🔑) and withdraw anytime.\n` +
-        `• While live trading is new, the agent puts at most ${usd(lim.maxUsd)} into positions per wallet.\n` +
+        (Number.isFinite(liveLimits().maxUsd) ? `• While live trading is new, the agent puts at most ${usd(liveLimits().maxUsd)} into positions per wallet.\n` : '') +
         `• No strategy is guaranteed to profit. Only deposit what you can afford to lose.\n\nCreate it?`,
       keyboard: [
         [

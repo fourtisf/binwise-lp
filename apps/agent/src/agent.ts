@@ -56,8 +56,11 @@ import {
  */
 
 export const CYCLE_MS = 60_000;
-/** Below this, a deploy isn't worth its fees. */
-export const MIN_POSITION_USD = 50;
+/** Below this, a deploy isn't worth its fees. MIN_POSITION_USD in .env (default $50, never below $1). */
+export const MIN_POSITION_USD = (() => {
+  const v = Number(process.env.MIN_POSITION_USD);
+  return process.env.MIN_POSITION_USD && Number.isFinite(v) && v >= 0 ? Math.max(1, v) : 50;
+})();
 
 const STEPS: CycleStep[] = [
   { title: 'Scan', running: 'Reading DLMM pools', done: '' },

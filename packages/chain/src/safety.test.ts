@@ -29,6 +29,8 @@ describe('live safety limits', () => {
     expect(liveLimits({})).toEqual({ maxUsd: 200, maxPositions: 1, maxTotalUsd: 2000 });
     expect(liveLimits({ LIVE_MAX_USD: '500', LIVE_MAX_POSITIONS: '2', LIVE_MAX_TOTAL_USD: '9000' })).toEqual({ maxUsd: 500, maxPositions: 2, maxTotalUsd: 9000 });
     expect(liveLimits({ LIVE_MAX_USD: 'lots' })).toEqual({ maxUsd: 200, maxPositions: 1, maxTotalUsd: 2000 });
+    // 0 = no limit.
+    expect(liveLimits({ LIVE_MAX_USD: '0', LIVE_MAX_POSITIONS: '0', LIVE_MAX_TOTAL_USD: '0' })).toEqual({ maxUsd: Infinity, maxPositions: Infinity, maxTotalUsd: Infinity });
   });
 });
 

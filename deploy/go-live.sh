@@ -110,6 +110,15 @@ if [[ "$who" == 1 ]]; then
   tg_ids="$tgid"
 fi
 
+# Money limits
+echo "    Batas dana yang boleh dipakai agent:"
+echo "      1) Tanpa batas: agent memakai seluruh deposit (sesuai strategi), posisi berapa pun"
+echo "      2) Aman untuk uji: maks \$200 per wallet, 1 posisi, \$2.000 total semua pengguna, posisi min \$50"
+while true; do
+  read -r -p "    Pilih 1 atau 2: " limits
+  [[ "$limits" == 1 || "$limits" == 2 ]] && break
+done
+
 # Telegram (optional)
 current_tg=$(env_get TELEGRAM_BOT_TOKEN)
 tg_user=""
@@ -132,16 +141,19 @@ env_set RPC_URL "$rpc"
 env_set NEXT_PUBLIC_RPC_URL "$rpc"
 env_set JUPITER_API_KEY "$jup"
 env_set LIVE_TRADING_ENABLED true
-[[ -n "$(env_get LIVE_MAX_USD)" ]] || env_set LIVE_MAX_USD 200
-[[ -n "$(env_get LIVE_MAX_POSITIONS)" ]] || env_set LIVE_MAX_POSITIONS 1
-[[ -n "$(env_get LIVE_MAX_TOTAL_USD)" ]] || env_set LIVE_MAX_TOTAL_USD 2000
+# 0 = no limit (see liveLimits); MIN_POSITION_USD never goes below $1.
+if [[ "$limits" == 1 ]]; then
+  env_set LIVE_MAX_USD 0; env_set LIVE_MAX_POSITIONS 0; env_set LIVE_MAX_TOTAL_USD 0; env_set MIN_POSITION_USD 1
+else
+  env_set LIVE_MAX_USD 200; env_set LIVE_MAX_POSITIONS 1; env_set LIVE_MAX_TOTAL_USD 2000; env_set MIN_POSITION_USD 50
+fi
 if [[ "$who" == 1 ]]; then env_set LIVE_WALLETS "$wallet"; else env_set LIVE_WALLETS '*'; fi
 env_set LIVE_TELEGRAM_IDS "$tg_ids"
 env_set DEFAULT_VAULT_MODE live
 env_set NEXT_PUBLIC_DEFAULT_VAULT_MODE live
 if [[ -n "$tg" ]]; then env_set TELEGRAM_BOT_TOKEN "$tg"; env_set TELEGRAM_BOT_USERNAME "$tg_user"; fi
 chown "$APP_USER:$APP_USER" "$ENV_FILE" && chmod 600 "$ENV_FILE"
-ok "Live: ON · batas \$$(env_get LIVE_MAX_USD) per vault, \$$(env_get LIVE_MAX_TOTAL_USD) total · $( [[ "$who" == 1 ]] && echo 'hanya wallet Anda' || echo 'semua wallet')"
+ok "Live: ON · $( [[ "$limits" == 1 ]] && echo 'tanpa batas dana' || echo "batas \$$(env_get LIVE_MAX_USD) per vault, \$$(env_get LIVE_MAX_TOTAL_USD) total") · $( [[ "$who" == 1 ]] && echo 'hanya wallet Anda' || echo 'semua wallet')"
 
 # ---------------------------------------------------------------- build + restart
 step "Build website dan nyalakan ulang (± 3 menit)"

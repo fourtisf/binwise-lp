@@ -153,6 +153,9 @@ Live mode sends real transactions from a per-vault agent wallet. Safety rails, a
 
 - `LIVE_TRADING_ENABLED=true` **and** the wallet listed in `LIVE_WALLETS` **and** the owner confirming in the app.
 - `LIVE_MAX_USD` (default 200) and `LIVE_MAX_POSITIONS` (default 1): the agent never deploys more, whatever is deposited.
+  `0` means no limit (also for `LIVE_MAX_TOTAL_USD`); `deploy/go-live.sh` asks. `MIN_POSITION_USD` (default 50, at least 1)
+  is the smallest position the agent opens. The strategy's own sizing (max % of the vault per pool, at most 2% of a pool's TVL)
+  always applies.
 - A private `RPC_URL` is required. Every transaction is simulated first, checked against the program allowlist, and the kill switch is checked before sending.
 - Withdrawals go only to the wallet that signed in, and keep working even if `LIVE_TRADING_ENABLED` is switched off again.
 

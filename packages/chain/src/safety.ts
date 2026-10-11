@@ -52,11 +52,12 @@ export function assertLiveOwner(
 }
 
 /**
- * Hard limits for live vaults while live trading is new: the agent never has more than
- * LIVE_MAX_USD in positions per vault, nor more than LIVE_MAX_POSITIONS positions (defaults $200, 1),
- * and never more than LIVE_MAX_TOTAL_USD across all live vaults together (default $2,000).
+ * Hard limits for live vaults: the agent never has more than LIVE_MAX_USD in positions per vault,
+ * nor more than LIVE_MAX_POSITIONS positions (defaults $200, 1), and never more than
+ * LIVE_MAX_TOTAL_USD across all live vaults together (default $2,000). 0 = no limit.
  */
 export function liveLimits(env: Record<string, string | undefined> = process.env): { maxUsd: number; maxPositions: number; maxTotalUsd: number } {
-  const num = (v: string | undefined, d: number) => (v != null && v !== '' && Number.isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : d);
+  const num = (v: string | undefined, d: number) =>
+    v != null && v !== '' && Number.isFinite(Number(v)) && Number(v) >= 0 ? (Number(v) === 0 ? Infinity : Number(v)) : d;
   return { maxUsd: num(env.LIVE_MAX_USD, 200), maxPositions: Math.floor(num(env.LIVE_MAX_POSITIONS, 1)), maxTotalUsd: num(env.LIVE_MAX_TOTAL_USD, 2000) };
 }
