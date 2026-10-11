@@ -126,6 +126,7 @@ export function poolRow(p: MockPool, s: StrategySettings): PoolRow {
     trend7d: p.trend7d,
     volatility: p.volatility,
     mcapM: p.mcapM,
+    fdvM: p.mcapM,
     spark: walk(p.seed, 24, p.trend7d / 100 / 24, 0.012, 100),
     score: scorePool(p),
     call,

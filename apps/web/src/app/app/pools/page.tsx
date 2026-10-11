@@ -59,7 +59,7 @@ export default function PoolsPage() {
             <thead>
               <tr>
                 <th>Pool</th>
-                <th className="r">Market cap</th>
+                <th className="r" title="Fully diluted: price × total supply, as GMGN and Dexscreener show it">Market cap</th>
                 <th className="r">TVL</th>
                 <th className="r">Volume 24h</th>
                 <th className="r">Vol / TVL</th>
@@ -81,8 +81,8 @@ export default function PoolsPage() {
                           {x.pair}
                         </span>
                       </td>
-                      {/* Stable pairs have no risky token: no market cap to show. */}
-                      <td className="r num">{x.mcapM > 0 && x.mcapM < 1e6 ? fmtM(x.mcapM) : '—'}</td>
+                      {/* Fully diluted, as trading tools show it (circulating when total supply is unknown); stable pairs: a dash. */}
+                      <td className="r num">{x.fdvM > 0 ? fmtM(x.fdvM) : x.mcapM > 0 && x.mcapM < 1e6 ? fmtM(x.mcapM) : '—'}</td>
                       <td className="r num">{compactUsd(x.tvl)}</td>
                       <td className="r num">{compactUsd(x.volume24h)}</td>
                       <td className="r num">{fmt(x.volTvl, 2)}x</td>

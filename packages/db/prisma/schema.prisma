@@ -129,6 +129,8 @@ model Token {
   holders                 Int?
   priceUsd                Float?
   mcapUsd                 Float?
+  /// Fully diluted value: price × total supply (what GMGN / Dexscreener show as MC)
+  fdvUsd                  Float?
   /// Share of supply held by the largest wallets, percent (from the holder check)
   topHoldersPct           Float?
   /// 0..1 output of the holder safety check; null = not checked yet

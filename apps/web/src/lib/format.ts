@@ -7,7 +7,8 @@ export const pct = (n: number, d = 2) => {
   const r = Number(n.toFixed(d));
   return (r >= 0 ? '+' : '−') + fmt(Math.abs(r), d) + '%';
 };
-export const fmtM = (v: number) => (v >= 1000 ? '$' + (v / 1000).toFixed(1).replace('.0', '') + 'B' : v < 1 ? '$' + Math.round(v * 1000) + 'K' : '$' + v + 'M');
+export const fmtM = (v: number) =>
+  v >= 1000 ? '$' + (v / 1000).toFixed(1).replace('.0', '') + 'B' : v < 1 ? '$' + Math.round(v * 1000) + 'K' : '$' + (v >= 100 ? Math.round(v) : Number(v.toFixed(1))) + 'M';
 /** Dollar amounts in K / M / B: $85K, $2.4M, $1.2B. */
 export const compactUsd = (n: number) => {
   const a = Math.abs(n);

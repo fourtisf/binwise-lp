@@ -113,8 +113,12 @@ export function PoolDrawer() {
               <b className="num">{x.volatility}%</b>
             </div>
             <div>
-              <span>Token market cap</span>
-              <b className="num">{fmtM(x.mcapM)}</b>
+              <span>Market cap (fully diluted)</span>
+              <b className="num">{x.fdvM > 0 ? fmtM(x.fdvM) : '—'}</b>
+            </div>
+            <div>
+              <span>Market cap (circulating)</span>
+              <b className="num">{x.mcapM > 0 && x.mcapM < 1e6 ? fmtM(x.mcapM) : '—'}</b>
             </div>
           </div>
           <div className="dsec">Contract addresses</div>

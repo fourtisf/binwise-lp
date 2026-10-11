@@ -103,6 +103,7 @@ async function upsertToken(db: PrismaClient, t: MeteoraToken) {
       priceUsd: t.price ?? null,
       // Meteora sometimes has no market cap: keep the last known one (e.g. from Jupiter).
       ...(t.market_cap != null ? { mcapUsd: t.market_cap } : {}),
+      ...(t.total_supply != null && t.price != null ? { fdvUsd: t.total_supply * t.price } : {}),
     },
     create: {
       mint: t.address,
@@ -114,6 +115,7 @@ async function upsertToken(db: PrismaClient, t: MeteoraToken) {
       freezeAuthorityDisabled: t.freeze_authority_disabled ?? null,
       priceUsd: t.price ?? null,
       mcapUsd: t.market_cap ?? null,
+      fdvUsd: t.total_supply != null && t.price != null ? t.total_supply * t.price : null,
     },
   });
 }

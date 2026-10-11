@@ -13,6 +13,7 @@ import {
 import {
   activeParams,
   assessmentInput,
+  isStable,
   latestSnapshots,
   startOfUtcDay,
   strategySettings,
@@ -77,6 +78,14 @@ async function sparkSeries(db: PrismaClient, poolIds: string[]) {
   return m;
 }
 
+/** FDV of the pool's smaller non-stable token, $M (0 when unknown or a stable pair). */
+function fdvM(a: Token | undefined, b: Token | undefined): number {
+  const risky = [a, b].filter((t): t is Token => !!t && !isStable(t));
+  const v = risky.map((t) => t.fdvUsd);
+  if (!risky.length || v.some((x) => x == null)) return 0;
+  return Math.round((Math.min(...(v as number[])) / 1e6) * 100) / 100;
+}
+
 async function row(s: SnapshotWithPool, tokens: Map<string, Token>, strategy: Strategy | null, params: AgentParams | null, spark: number[]) {
   const base = {
     call: s.call,
@@ -104,7 +113,8 @@ async function row(s: SnapshotWithPool, tokens: Map<string, Token>, strategy: St
     baseFee: s.pool.baseFee,
     trend7d: s.trend7d ?? 0,
     volatility: Math.round(s.volatility * 10) / 10,
-    mcapM: s.mcapM != null ? Math.round(s.mcapM) : 0,
+    mcapM: s.mcapM != null ? Math.round(s.mcapM * 100) / 100 : 0,
+    fdvM: fdvM(tokens.get(s.pool.mintA), tokens.get(s.pool.mintB)),
     spark,
     score: v.score,
     call: v.call as PoolRow['call'],

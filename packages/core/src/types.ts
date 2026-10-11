@@ -42,8 +42,10 @@ export interface PoolRow {
   trend7d: number;
   /** Daily realized volatility in percent. */
   volatility: number;
-  /** Token market cap in $M. */
+  /** Token market cap in $M (circulating supply). */
   mcapM: number;
+  /** Fully diluted value in $M (total supply), as GMGN / Dexscreener show it; 0 when unknown. */
+  fdvM: number;
   /** Recent price points for the trend sparkline. */
   spark: number[];
   score: number;
