@@ -46,7 +46,8 @@ Optional keys (edit `.env`, then `sudo -u binwise pm2 restart all`):
 ```bash
 sudo -u binwise pm2 ls                      # status
 sudo -u binwise pm2 logs binwise-agent      # live agent log (also: binwise-collector, binwise-api, binwise-web)
-bash install.sh binwise.org                 # update to the latest code (keeps .env and data)
+bash install.sh binwise.org                 # re-install (keeps .env and data)
+bash /home/binwise/binwise/deploy/update.sh   # update to the latest code: asks nothing, keeps .env and data
 ```
 
 The site's NEXT_PUBLIC_* settings are baked in at build time; the install script rebuilds every time.
