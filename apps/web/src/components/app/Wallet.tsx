@@ -12,6 +12,8 @@ import { Icon } from '../Sprite';
 const RPC = process.env.NEXT_PUBLIC_RPC_URL || 'https://api.mainnet-beta.solana.com';
 
 const WALLET_ERROR = 'binwise:wallet-error';
+const WALLET_ADVICE =
+  'The wallet itself refused (internal error). Most often another wallet extension (Trust, Bitget, MetaMask) is interfering: turn the others off in chrome://extensions, reload, and connect again. Also check Phantom → Settings → Connected apps and remove binwise.org.';
 
 /** The wallet's own error code, e.g. " · code -32603", when it gives one. */
 const codeOf = (e: unknown) => {
@@ -86,14 +88,22 @@ export function ConnectModal() {
     /rejected|cancel|denied/i.test(m)
       ? 'cancelled in the wallet. Try again and approve the request.'
       : /unexpected|internal|-32603/i.test(m)
-        ? `${m}. The wallet itself refused (internal error). Most often another wallet extension (Trust, Bitget, MetaMask) is interfering: turn the others off in chrome://extensions, reload, and connect again. Also check Phantom → Settings → Connected apps and remove binwise.org.`
+        ? `${m}. ${WALLET_ADVICE}`
         : m;
 
   /** Sign-in through the wallet's own injected provider (window.phantom.solana, …). */
+  /** Classic-API attempt already made for this click (its error, if it failed). */
+  const classicTried = useRef<string | null>(null);
+
+  /**
+   * Sign-in through the wallet's own injected provider (window.phantom.solana, …), the API GMGN and
+   * most Solana sites use. quiet: on a non-user failure, say nothing and return 'failed' so the
+   * caller can try the Wallet Standard way next.
+   */
   const injectedSignIn = useCallback(
-    async (name: string) => {
+    async (name: string, quiet = false): Promise<'ok' | 'stopped' | 'failed' | 'none'> => {
       const p = injectedFor(name);
-      if (!p || !client) return false;
+      if (!p || !client) return 'none';
       let step = 'The wallet did not connect';
       try {
         const address = await connectInjected(p);
@@ -106,16 +116,23 @@ export function ConnectModal() {
         closeLayers();
         toast(`Signed in as ${shortWallet(address)}`);
         reload();
+        return 'ok';
       } catch (e) {
         console.error('[binwise] classic wallet API', e, '|', phantomDiagnostics());
+        const m = (e as Error)?.message || 'cancelled';
         const thief = /phantom/i.test(name) ? impostorOf(p) : null;
-        toast(
-          thief
-            ? `${thief} is answering in place of Phantom on this page, so Phantom never sees the request. Turn off "${thief}" in chrome://extensions (or its "use as default wallet" setting), reload, and connect again.`
-            : `${step} (classic API${codeOf(e)}): ${friendly((e as Error)?.message || 'cancelled')}`,
-        );
+        const text = thief
+          ? `${thief} is answering in place of Phantom on this page, so Phantom never sees the request. Turn off "${thief}" in chrome://extensions (or its "use as default wallet" setting), reload, and connect again.`
+          : `${step} (classic API${codeOf(e)}): ${friendly(m)}`;
+        // The user said no, another wallet took over, or the wallet connected but a later step failed: stop here.
+        const stop = thief || /reject|cancel|denied/i.test(m) || step !== 'The wallet did not connect';
+        if (quiet && !stop) {
+          classicTried.current = `${m}${codeOf(e)}`;
+          return 'failed';
+        }
+        toast(text);
+        return 'stopped';
       }
-      return true;
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [client, closeLayers, toast, reload],
@@ -130,8 +147,12 @@ export function ConnectModal() {
       pending.current = null;
       const msg = String((e as CustomEvent).detail ?? '');
       (async () => {
-        if (!/reject|cancel|denied/i.test(msg) && (await injectedSignIn(name))) return;
-        toast(`The wallet did not connect: ${friendly(msg)}`);
+        if (!classicTried.current && !/reject|cancel|denied/i.test(msg) && (await injectedSignIn(name)) !== 'none') return;
+        toast(
+          classicTried.current
+            ? `The wallet refused both ways (classic: ${classicTried.current}; standard: ${msg}). ${WALLET_ADVICE}`
+            : `The wallet did not connect: ${friendly(msg)}`,
+        );
       })().finally(() => setBusy(null));
     };
     window.addEventListener(WALLET_ERROR, onErr);
@@ -222,8 +243,13 @@ export function ConnectModal() {
             <button
               className="btn btn-dark btn-sm"
               disabled={!!busy}
-              onClick={() => {
-                setBusy(w.adapter.name);
+              onClick={async () => {
+                const name = w.adapter.name;
+                setBusy(name);
+                classicTried.current = null;
+                // Classic injected API first (what GMGN and most Solana sites use); Wallet Standard next.
+                const first = await injectedSignIn(name, true);
+                if (first === 'ok' || first === 'stopped') return setBusy(null);
                 pending.current = w.adapter.name;
                 intent.picked = true;
                 setAttempt((n) => n + 1);
@@ -234,8 +260,12 @@ export function ConnectModal() {
                     pending.current = null;
                     const msg = (e as Error)?.message ?? '';
                     (async () => {
-                      if (name && !/reject|cancel|denied/i.test(msg) && (await injectedSignIn(name))) return;
-                      toast(`The wallet did not connect: ${friendly(msg)}`);
+                      if (name && !classicTried.current && !/reject|cancel|denied/i.test(msg) && (await injectedSignIn(name)) !== 'none') return;
+                      toast(
+                        classicTried.current
+                          ? `The wallet refused both ways (classic: ${classicTried.current}; standard: ${msg}). ${WALLET_ADVICE}`
+                          : `The wallet did not connect: ${friendly(msg)}`,
+                      );
                     })().finally(() => setBusy(null));
                   });
                 else select(w.adapter.name as WalletName);
