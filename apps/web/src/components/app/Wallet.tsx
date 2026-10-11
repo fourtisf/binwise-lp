@@ -4,6 +4,7 @@ import { ConnectionProvider, WalletProvider, useWallet } from '@solana/wallet-ad
 import { WalletReadyState, type WalletError, type WalletName } from '@solana/wallet-adapter-base';
 import bs58 from 'bs58';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { connectInjected, injectedFor, signMessageInjected } from '@/lib/injected';
 import { useAppData } from '@/lib/store';
 import { useUi } from '@/lib/ui';
 import { Icon } from '../Sprite';
@@ -80,17 +81,48 @@ export function ConnectModal() {
         ? `${m}. Unlock the wallet, close any other open wallet popups, and try again (if several wallet extensions are installed, try disabling the ones you don't use).`
         : m;
 
-  // Connection errors come from the provider (it connects the picked wallet itself).
+  /** Sign-in through the wallet's own injected provider (window.phantom.solana, …). */
+  const injectedSignIn = useCallback(
+    async (name: string) => {
+      const p = injectedFor(name);
+      if (!p || !client) return false;
+      let step = 'The wallet did not connect';
+      try {
+        const address = await connectInjected(p);
+        step = 'Could not reach Binwise';
+        const c = await client.signInChallenge(address);
+        step = 'The wallet did not sign';
+        const signature = await signMessageInjected(p, new TextEncoder().encode(c.message));
+        step = 'Binwise did not accept the sign-in';
+        await client.signIn(address, c.message, bs58.encode(signature));
+        closeLayers();
+        toast(`Signed in as ${shortWallet(address)}`);
+        reload();
+      } catch (e) {
+        toast(`${step}: ${friendly((e as Error)?.message || 'cancelled')}`);
+      }
+      return true;
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [client, closeLayers, toast, reload],
+  );
+
+  // Connection errors come from the provider (it connects the picked wallet itself). A generic
+  // wallet error on the standard connect falls back to the wallet's classic injected API.
   useEffect(() => {
     const onErr = (e: Event) => {
-      if (!pending.current) return;
+      const name = pending.current;
+      if (!name) return;
       pending.current = null;
-      setBusy(null);
-      toast(`The wallet did not connect: ${friendly(String((e as CustomEvent).detail ?? ''))}`);
+      const msg = String((e as CustomEvent).detail ?? '');
+      (async () => {
+        if (!/reject|cancel|denied/i.test(msg) && (await injectedSignIn(name))) return;
+        toast(`The wallet did not connect: ${friendly(msg)}`);
+      })().finally(() => setBusy(null));
     };
     window.addEventListener(WALLET_ERROR, onErr);
     return () => window.removeEventListener(WALLET_ERROR, onErr);
-  }, [toast]);
+  }, [toast, injectedSignIn]);
 
   // Once the picked wallet is connected, sign in.
   useEffect(() => {
@@ -184,9 +216,13 @@ export function ConnectModal() {
                 // Already picked earlier but not connected (no new selection to trigger autoConnect): connect it directly.
                 if (wallet?.adapter.name === w.adapter.name && !connected && !connecting)
                   connect().catch((e) => {
+                    const name = pending.current;
                     pending.current = null;
-                    setBusy(null);
-                    toast(`The wallet did not connect: ${friendly((e as Error)?.message ?? '')}`);
+                    const msg = (e as Error)?.message ?? '';
+                    (async () => {
+                      if (name && !/reject|cancel|denied/i.test(msg) && (await injectedSignIn(name))) return;
+                      toast(`The wallet did not connect: ${friendly(msg)}`);
+                    })().finally(() => setBusy(null));
                   });
                 else select(w.adapter.name as WalletName);
               }}

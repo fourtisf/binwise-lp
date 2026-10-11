@@ -8,6 +8,7 @@ import {
   createTransferCheckedInstruction,
   getAssociatedTokenAddressSync,
 } from '@solana/spl-token';
+import { activeInjected, sendInjected } from '@/lib/injected';
 import { fmt, usd } from '@/lib/format';
 import { useAppData } from '@/lib/store';
 import { useUi } from '@/lib/ui';
@@ -22,7 +23,10 @@ export function DepositModal() {
   const { layer, closeLayers, toast, openConnect } = useUi();
   const { overview, draft, deposit, depositLive, me } = useAppData();
   const { connection } = useConnection();
-  const { publicKey, sendTransaction } = useWallet();
+  const { publicKey: adapterKey, sendTransaction } = useWallet();
+  const publicKey = adapterKey;
+  /** True when the wallet adapter (not the injected fallback) holds this key. */
+  const viaAdapter = (k: PublicKey) => !!adapterKey && adapterKey.equals(k);
   const live = overview?.mode === 'live';
   const [tok, setTok] = useState('SOL');
   const [amt, setAmt] = useState('10');
@@ -44,7 +48,10 @@ export function DepositModal() {
   const bal = asset?.balance ?? 0;
   const a = parseFloat(amt) || 0;
   const over = a > bal;
-  const walletMismatch = live && (!publicKey || publicKey.toBase58() !== me?.wallet);
+  // Signed in through the wallet's classic API (fallback) in this tab: deposits go through it too.
+  const injected = activeInjected();
+  const fromKey = publicKey ?? (injected ? new PublicKey(injected.address) : null);
+  const walletMismatch = live && (!fromKey || fromKey.toBase58() !== me?.wallet);
   const label = walletMismatch
     ? 'Connect your signed-in wallet'
     : over
@@ -147,7 +154,8 @@ export function DepositModal() {
               return;
             }
             // Live: your wallet sends the transfer to the vault wallet; the API verifies it on-chain.
-            if (!publicKey || !me || publicKey.toBase58() !== me.wallet || !overview?.depositAddress || !asset?.mint) return;
+            if (!fromKey || !me || fromKey.toBase58() !== me.wallet || !overview?.depositAddress || !asset?.mint) return;
+            const publicKey = fromKey;
             const to = new PublicKey(overview.depositAddress);
             const tx = new Transaction();
             if (asset.symbol === 'SOL') tx.add(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: to, lamports: Math.floor(a * 1e9) }));
@@ -164,7 +172,14 @@ export function DepositModal() {
                 createTransferCheckedInstruction(from, mint, dest, publicKey, BigInt(Math.floor(a * 10 ** decimals)), decimals, [], programId),
               );
             }
-            const sig = await sendTransaction(tx, connection);
+            let sig: string;
+            if (viaAdapter(publicKey)) sig = await sendTransaction(tx, connection);
+            else {
+              const { blockhash } = await connection.getLatestBlockhash();
+              tx.feePayer = publicKey;
+              tx.recentBlockhash = blockhash;
+              sig = await sendInjected(injected!.provider, tx);
+            }
             closeLayers();
             await depositLive(sig);
           } catch (e) {
