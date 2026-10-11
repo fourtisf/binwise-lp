@@ -219,7 +219,8 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<AppData>(() => {
     const run = <T,>(p: Promise<T> | undefined, ok: (v: T) => void) => p?.then(ok).catch((e) => toast(errorText(e)));
-    const canAct = !overview?.readOnly;
+    // Signed out (API mode): no vault of one's own yet, so every action asks to connect a wallet first.
+    const canAct = !!overview && !overview.readOnly && (client?.kind !== 'http' || !!me);
     const guard = (fn: () => void) => {
       if (canAct) fn();
       else if (client?.kind === 'http') openConnect();

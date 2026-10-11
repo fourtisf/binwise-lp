@@ -120,7 +120,7 @@ export function DepositModal() {
         </div>
         <div>
           <span>Mode</span>
-          <b id="mMode2">{overview?.mode === 'live' ? 'Live, real funds' : 'Paper, simulated funds'}</b>
+          <b id="mMode2">{overview?.mode === 'live' ? 'Mainnet, real funds' : 'Paper, simulated funds'}</b>
         </div>
       </div>
       {live && (
