@@ -577,19 +577,29 @@ export class LiveExecutor implements Executor {
   }
 }
 
-/** Everything a wallet holds, by mint (UI amounts; SOL and wrapped SOL together). For display only. */
-export async function walletBalances(conn: Connection, owner: string): Promise<Record<string, number>> {
+/**
+ * Every token a wallet holds (SPL and Token-2022), with its decimals: UI amounts, SOL and wrapped SOL
+ * together under the SOL mint (always listed, even at 0). For display only.
+ */
+export async function walletTokens(conn: Connection, owner: string): Promise<{ mint: string; amount: number; decimals: number }[]> {
   const pk = new PublicKey(owner);
   const [lamports, ...lists] = await Promise.all([
     withRetry(() => conn.getBalance(pk), 2, 'getBalance'),
     ...[TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID].map((programId) => withRetry(() => conn.getParsedTokenAccountsByOwner(pk, { programId }), 2, 'getParsedTokenAccountsByOwner')),
   ]);
-  const out: Record<string, number> = { [NATIVE_MINT.toBase58()]: (lamports as number) / 1e9 };
+  const out = new Map<string, { amount: number; decimals: number }>([[NATIVE_MINT.toBase58(), { amount: (lamports as number) / 1e9, decimals: 9 }]]);
   for (const list of lists as Awaited<ReturnType<Connection['getParsedTokenAccountsByOwner']>>[])
     for (const a of list.value) {
       const info = a.account.data.parsed?.info;
       const amt = Number(info?.tokenAmount?.uiAmount ?? 0);
-      if (info?.mint && amt > 0) out[info.mint] = (out[info.mint] ?? 0) + amt;
+      if (!info?.mint || !(amt > 0)) continue;
+      const prev = out.get(info.mint);
+      out.set(info.mint, { amount: (prev?.amount ?? 0) + amt, decimals: Number(info.tokenAmount?.decimals ?? prev?.decimals ?? 0) });
     }
-  return out;
+  return [...out].map(([mint, t]) => ({ mint, ...t }));
+}
+
+/** Everything a wallet holds, by mint (UI amounts; SOL and wrapped SOL together). For display only. */
+export async function walletBalances(conn: Connection, owner: string): Promise<Record<string, number>> {
+  return Object.fromEntries((await walletTokens(conn, owner)).map((t) => [t.mint, t.amount]));
 }

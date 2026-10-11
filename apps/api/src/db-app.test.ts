@@ -465,6 +465,71 @@ describe('portfolio (live)', () => {
   });
 });
 
+describe('portfolio tokens', () => {
+  it('lists every token in both wallets: names and prices from Jupiter for tokens we do not track, cached', async () => {
+    const owner = wallet();
+    const agent = wallet().address;
+    const BONK = wallet().address;
+    const MYSTERY = wallet().address;
+    const accounts: Record<string, { mint: string; uiAmount: number; decimals: number }[]> = {
+      [owner.address]: [
+        { mint: BONK, uiAmount: 1_500_000, decimals: 5 },
+        { mint: MYSTERY, uiAmount: 42, decimals: 6 },
+        { mint: USDC, uiAmount: 25, decimals: 6 },
+      ],
+      [agent]: [{ mint: BONK, uiAmount: 2_000_000, decimals: 5 }],
+    };
+    const conn = {
+      getBalance: async (pk: { toBase58(): string }) => (pk.toBase58() === owner.address ? 3 : 0.5) * 1e9,
+      getParsedTokenAccountsByOwner: async (pk: { toBase58(): string }, f: { programId: { toBase58(): string } }) => ({
+        value: f.programId.toBase58().startsWith('Tokenz')
+          ? []
+          : (accounts[pk.toBase58()] ?? []).map((a) => ({ account: { data: { parsed: { info: { mint: a.mint, tokenAmount: { uiAmount: a.uiAmount, decimals: a.decimals } } } } } })),
+      }),
+    };
+    let lookups = 0;
+    const jupiter = {
+      tokens: async (mints: string[]) => {
+        lookups++;
+        return mints.includes(BONK) ? [{ id: BONK, name: 'Bonk', symbol: 'BONK', icon: 'https://example.com/bonk.png', decimals: 5, usdPrice: 0.00002 }] : [];
+      },
+    };
+    const sub2 = new Redis(process.env.REDIS_URL!);
+    const liveApp = await buildDbApp({ db, redis, sub: sub2, domain: 'test.binwise', rpc: () => conn as never, jupiter });
+    try {
+      const user = await ensureUser(db, owner.address);
+      const v = await createVault(db, user.id, { live: { agentPubkey: agent, encSecret: new Uint8Array(8) } });
+      const ip = { remoteAddress: '10.9.9.5' };
+      const nonce = (await liveApp.inject({ url: `/auth/nonce?wallet=${owner.address}`, ...ip })).json();
+      const login = await liveApp.inject({ method: 'POST', url: '/auth/verify', ...ip, payload: { wallet: owner.address, message: nonce.message, signature: owner.signMsg(nonce.message) } });
+      const headers = { cookie: `bw_session=${login.cookies.find((c) => c.name === 'bw_session')!.value}` };
+
+      const p = (await liveApp.inject({ url: `/vaults/${v.id}/portfolio`, headers })).json();
+      // Own wallet: every token, largest value first, unknown ones last without a price.
+      const cents = (x: number | null) => (x == null ? null : Math.round(x * 100) / 100);
+      expect(p.ownWallet.map((w: { token: { symbol: string }; amount: number; value: number | null }) => [w.token.symbol, w.amount, cents(w.value)])).toEqual([
+        ['SOL', 3, 450],
+        ['BONK', 1_500_000, 30],
+        ['USDC', 25, 25],
+        [`${MYSTERY.slice(0, 4)}…${MYSTERY.slice(-4)}`, 42, null],
+      ]);
+      expect(p.ownWallet[1].token.logo).toBe('https://example.com/bonk.png');
+      // Vault wallet: BONK counts at its Jupiter price, next to the SOL.
+      expect(p.holdings.map((h: { token: { symbol: string }; value: number }) => [h.token.symbol, cents(h.value)])).toEqual([
+        ['SOL', 75],
+        ['BONK', 40],
+      ]);
+      expect(p.value).toBeCloseTo(115);
+      // Looked up once, then cached (unknown mints too).
+      const before = lookups;
+      await liveApp.inject({ url: `/vaults/${v.id}/portfolio`, headers });
+      expect(lookups).toBe(before);
+    } finally {
+      await liveApp.close(); // also closes sub2
+    }
+  });
+});
+
 describe('realtime', () => {
   it('forwards agent events to the vault stream', async () => {
     const addr = app.server.address() as { port: number };

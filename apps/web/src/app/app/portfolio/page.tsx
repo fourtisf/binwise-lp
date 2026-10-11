@@ -45,6 +45,8 @@ export default function PortfolioPage() {
   const router = useRouter();
   const [p, setP] = useState<Portfolio | null>(null);
   const [failed, setFailed] = useState(false);
+  /** The own-wallet list shows the largest few until asked for all. */
+  const [allOwn, setAllOwn] = useState(false);
   const api = client?.kind === 'http';
 
   // On open, then every 30s (the agent revalues the vault every minute).
@@ -109,7 +111,10 @@ export default function PortfolioPage() {
   };
 
   const vsHoldUsd = p ? p.value - p.holdValue : 0;
-  const total = p ? p.holdings.reduce((s, h) => s + h.value, 0) : 0;
+  const total = p ? p.holdings.reduce((s, h) => s + (h.value ?? 0), 0) : 0;
+  const share = (v: number | null) => (v != null && total > 0 ? `${fmt((v / total) * 100, 1)}%` : '—');
+  const OWN_SHOWN = 8;
+  const ownShown = p ? (allOwn ? p.ownWallet : p.ownWallet.slice(0, OWN_SHOWN)) : [];
   const openCount = p ? p.holdings.filter((h) => h.kind === 'position').length : 0;
 
   return (
@@ -169,22 +174,27 @@ export default function PortfolioPage() {
             </div>
             <Address address={me.wallet} onCopy={() => copy(me.wallet, 'Wallet address')} />
           </div>
-          <div className="rows">
-            {p.ownWallet.map((w) => (
+          <div className="rows" id="pfOwnRows">
+            {ownShown.map((w) => (
               <div key={w.token.mint ?? w.token.symbol}>
-                <span className="pairname" style={{ color: 'var(--text)' }}>
+                <span className="pairname" style={{ color: 'var(--text)', minWidth: 0 }}>
                   <Tok t={w.token} />
                   {w.token.symbol}
                 </span>
-                <b className="num">
-                  {amount(w.amount)} {w.token.symbol}
-                  <span className="muted" style={{ fontWeight: 400, marginLeft: 8 }}>
-                    {usd(w.value, 2)}
+                <b className="num" style={{ textAlign: 'right' }}>
+                  {amount(w.amount)}
+                  <span className="muted" style={{ fontWeight: 400, marginLeft: 8 }} title={w.value == null ? 'No known price' : undefined}>
+                    {w.value != null ? usd(w.value, 2) : '—'}
                   </span>
                 </b>
               </div>
             ))}
           </div>
+          {p.ownWallet.length > OWN_SHOWN && (
+            <button className="muted" style={{ fontSize: 13, marginTop: 10, textDecoration: 'underline' }} onClick={() => setAllOwn((a) => !a)}>
+              {allOwn ? 'Show fewer' : `Show all ${p.ownWallet.length} tokens`}
+            </button>
+          )}
           {p.vaultWallet && (
             <p className="muted" style={{ fontSize: 13, lineHeight: 1.6, marginTop: 14 }}>
               To let the agent use it, send SOL or USDC from this wallet to your vault wallet{' '}
@@ -281,8 +291,10 @@ export default function PortfolioPage() {
                             </span>
                           </span>
                         </td>
-                        <td className="r num">{usd(h.value, 2)}</td>
-                        <td className="r num muted">{total > 0 ? `${fmt((h.value / total) * 100, 1)}%` : '—'}</td>
+                        <td className="r num" title={h.value == null ? 'No known price: not counted in the value' : undefined}>
+                          {h.value != null ? usd(h.value, 2) : '—'}
+                        </td>
+                        <td className="r num muted">{share(h.value)}</td>
                         <td className="r num">
                           {amount(h.amount)} {h.token.symbol}
                           {h.reserve ? (
@@ -309,8 +321,8 @@ export default function PortfolioPage() {
                             </span>
                           </span>
                         </td>
-                        <td className="r num">{usd(h.value, 2)}</td>
-                        <td className="r num muted">{total > 0 ? `${fmt((h.value / total) * 100, 1)}%` : '—'}</td>
+                        <td className="r num">{usd(h.value ?? 0, 2)}</td>
+                        <td className="r num muted">{share(h.value)}</td>
                         <td className="r muted">{h.manual ? 'LP, by hand' : 'LP position'}</td>
                       </tr>
                     ),

@@ -21,15 +21,18 @@ import {
   type Portfolio,
   type PortfolioHolding,
   type StreamEvent,
+  type TokenRef,
   type VaultBalance,
 } from '@binwise/core';
 import {
+  JupiterClient,
   LiveExecutor,
   SOL_RESERVE,
   isLiveWallet,
   liveLimits,
   minPositionUsd,
   walletBalances,
+  walletTokens,
   parseDeposit,
   createAgentKey,
   loadAgentKey,
@@ -48,7 +51,6 @@ import {
   shrinkDeposits as shrinkDepositsOf,
   strategySettings as strategySettingsOf,
   strategyData,
-  vaultValue,
   type PrismaClient,
   type Vault,
 } from '@binwise/db';
@@ -81,6 +83,8 @@ export interface DbAppOptions {
   domain?: string;
   secureCookies?: boolean;
   rpc?: () => Connection;
+  /** Token names, logos and prices for mints the collector doesn't track (Jupiter) */
+  jupiter?: Pick<JupiterClient, 'tokens'>;
 }
 
 /**
@@ -215,6 +219,56 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
       .filter((a) => a.amount > 1e-9 && (a.mint === SOL_MINT || a.usd >= 0.01))
       .sort((a, b) => (a.mint === SOL_MINT ? -1 : b.mint === SOL_MINT ? 1 : b.usd - a.usd));
     return { totalUsd: all.reduce((sum, a) => sum + a.usd, 0), shown };
+  }
+
+  const jupiter = o.jupiter ?? new JupiterClient();
+  type TokenInfo = { ref: TokenRef; priceUsd: number | null };
+  /**
+   * Symbol, logo and USD price for any mints: our token table first (what the agent prices with), then
+   * Jupiter for the rest, cached 10 minutes. A mint nobody knows shows as its short address, unpriced.
+   */
+  async function tokenInfo(mints: string[]): Promise<Map<string, TokenInfo>> {
+    const out = new Map<string, TokenInfo>();
+    const known = await tokenMap(db, mints);
+    for (const m of mints) {
+      const t = known.get(m);
+      if (t) out.set(m, { ref: tokenRef(m === SOL_MINT ? 'SOL' : t.symbol, t), priceUsd: t.priceUsd ?? null });
+    }
+    const missing = mints.filter((m) => !out.has(m));
+    const cacheKey = (m: string) => `binwise:tokinfo:${m}`;
+    const cached = missing.length ? await redis.mget(...missing.map(cacheKey)) : [];
+    const lookup: string[] = [];
+    missing.forEach((m, i) => {
+      if (cached[i] == null) return void lookup.push(m);
+      const c = JSON.parse(cached[i]!) as { symbol: string; icon?: string; usdPrice?: number } | null;
+      if (c) out.set(m, { ref: tokenRef(c.symbol, { mint: m, logoUrl: c.icon ?? null }), priceUsd: c.usdPrice ?? null });
+    });
+    if (lookup.length) {
+      const found = await jupiter.tokens(lookup, { timeoutMs: 4000, retries: 0 }).catch(() => null);
+      if (found) {
+        const byMint = new Map(found.map((t) => [t.id, t]));
+        for (const m of lookup) {
+          const t = byMint.get(m);
+          const c = t ? { symbol: t.symbol, icon: t.icon, usdPrice: t.usdPrice } : null;
+          await redis.set(cacheKey(m), JSON.stringify(c), 'EX', 600);
+          if (c) out.set(m, { ref: tokenRef(c.symbol, { mint: m, logoUrl: c.icon ?? null }), priceUsd: c.usdPrice ?? null });
+        }
+      }
+    }
+    for (const m of mints) if (!out.has(m)) out.set(m, { ref: tokenRef(`${m.slice(0, 4)}…${m.slice(-4)}`, { mint: m, logoUrl: null }), priceUsd: null });
+    return out;
+  }
+
+  /** Every token in an amount map (above zero) with what we know about it: priced ones by value, then the rest. */
+  async function describeTokens(amounts: Record<string, number>) {
+    const mints = Object.keys(amounts).filter((m) => amounts[m] > 1e-12);
+    const info = await tokenInfo(mints);
+    const list = mints.map((mint) => {
+      const t = info.get(mint)!;
+      return { mint, amount: amounts[mint], token: t.ref, value: t.priceUsd != null ? amounts[mint] * t.priceUsd : null };
+    });
+    list.sort((a, b) => (b.value ?? -1) - (a.value ?? -1) || a.token.symbol.localeCompare(b.token.symbol));
+    return { list, totalUsd: list.reduce((sum, a) => sum + (a.value ?? 0), 0) };
   }
 
   /** USD value of a token map at current prices. */
@@ -470,20 +524,26 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     const owner = await db.user.findUniqueOrThrow({ where: { id: vault.userId } });
     const live = vault.mode === 'live';
     const canRead = !!(o.rpc || process.env.RPC_URL);
-    const v = await vaultValue(db, vault.id);
-    const mirror = await pricedTokens(vault.cash as Record<string, number>);
+    const mirror = await describeTokens(vault.cash as Record<string, number>);
     const onChain =
       live && vault.agentPubkey && canRead
         ? await Promise.resolve()
             .then(() => walletBalances(rpc(), vault.agentPubkey!))
             .catch(() => null)
         : null;
-    const cash = onChain ? await pricedTokens(onChain) : mirror;
-    // The owner's own wallet (a wallet made in Telegram is the vault wallet itself: nothing separate).
-    const own =
-      !readOnly && live && owner.wallet !== vault.agentPubkey
-        ? (await walletAssets(owner.wallet).catch(() => [] as DepositAsset[])).filter((a) => a.balance > 1e-9)
+    const cash = onChain ? await describeTokens(onChain) : mirror;
+    // The owner's own wallet, every token (a wallet made in Telegram is the vault wallet itself: nothing separate).
+    const ownTokens =
+      !readOnly && live && canRead && owner.wallet !== vault.agentPubkey
+        ? await Promise.resolve()
+            .then(() => walletTokens(rpc(), owner.wallet))
+            .catch(() => [])
         : [];
+    const own = await describeTokens(Object.fromEntries(ownTokens.map((t) => [t.mint, t.amount])));
+    // Hold baseline at the same prices as the value, so the two always compare like for like.
+    const deposits = vault.deposits as Record<string, number>;
+    const depositInfo = await tokenInfo(Object.keys(deposits));
+    const holdValue = Object.entries(deposits).reduce((sum, [m, a]) => sum + a * (depositInfo.get(m)?.priceUsd ?? 0), 0);
     const [open, closed, closedCount, beatHold, totals, flowRows] = await Promise.all([
       db.position.findMany({ where: { vaultId: vault.id, status: 'open' }, include: { pool: true } }),
       db.position.findMany({ where: { vaultId: vault.id, status: 'closed' }, include: { pool: true }, orderBy: { closedAt: 'desc' }, take: 50 }),
@@ -499,11 +559,11 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
       tokenB: tokenRef(p.pool.tokenB, tokens.get(p.pool.mintB)),
     });
     const holdings: PortfolioHolding[] = [
-      ...cash.shown.map((a) => ({
+      ...cash.list.map((a) => ({
         kind: 'token' as const,
         token: a.token,
         amount: a.amount,
-        value: a.usd,
+        value: a.value,
         ...(live && a.mint === SOL_MINT ? { reserve: Math.min(a.amount, SOL_RESERVE) } : {}),
       })),
       ...open.map((p) => ({
@@ -514,9 +574,9 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
         inRange: p.inRange,
         manual: p.manual,
       })),
-    ].sort((a, b) => b.value - a.value);
+    ].sort((a, b) => (b.value ?? -1) - (a.value ?? -1));
     const positionsUsd = open.reduce((sum, p) => sum + p.valueUsd + p.feesUnclaimedUsd, 0);
-    const value = onChain ? cash.totalUsd + positionsUsd : v.value;
+    const value = cash.totalUsd + positionsUsd;
     const flows = flowRows
       .flatMap((d) => {
         const usd = (d.inputs as { flowUsd?: unknown } | null)?.flowUsd;
@@ -532,10 +592,10 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
       telegramLinked: !!owner.telegramChatId,
       value,
       source: onChain ? 'chain' : 'agent',
-      holdValue: v.hold,
-      netVsHold: v.hold > 0 ? (value / v.hold - 1) * 100 : null,
+      holdValue,
+      netVsHold: holdValue > 0 ? (value / holdValue - 1) * 100 : null,
       pendingUsd: onChain ? Math.max(0, cash.totalUsd - mirror.totalUsd) : 0,
-      ownWallet: own.map((a) => ({ token: { symbol: a.symbol, letter: a.letter, color: a.color, ...(a.logo ? { logo: a.logo } : {}), mint: a.mint }, amount: a.balance, value: a.balance * a.priceUsd })),
+      ownWallet: own.list.map((a) => ({ token: a.token, amount: a.amount, value: a.value })),
       fees: (totals._sum.feesClaimedUsd ?? 0) + (totals._sum.feesUnclaimedUsd ?? 0),
       costs: totals._sum.costsUsd ?? 0,
       holdings,

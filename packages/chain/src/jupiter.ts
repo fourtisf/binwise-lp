@@ -73,12 +73,12 @@ export class JupiterClient {
     return out;
   }
 
-  /** Token metadata (logo, audit) for up to 100 mints per call. */
-  async tokens(mints: string[]): Promise<JupiterToken[]> {
+  /** Token metadata (logo, audit, price) for up to 100 mints per call. `o`: a page can't wait 15s × 4 retries. */
+  async tokens(mints: string[], o: { timeoutMs?: number; retries?: number } = {}): Promise<JupiterToken[]> {
     const out: JupiterToken[] = [];
     for (let i = 0; i < mints.length; i += 100) {
       const query = mints.slice(i, i + 100).join(',');
-      out.push(...(await fetchJson<JupiterToken[]>(`${this.baseUrl}/tokens/v2/search?query=${query}`, { headers: this.headers, minIntervalMs: this.spacing })));
+      out.push(...(await fetchJson<JupiterToken[]>(`${this.baseUrl}/tokens/v2/search?query=${query}`, { headers: this.headers, minIntervalMs: this.spacing, ...o })));
     }
     return out;
   }

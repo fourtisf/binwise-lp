@@ -116,7 +116,15 @@ export interface VaultBalance {
 
 /** One line of a portfolio: an idle token, or an open position (value includes unclaimed fees). */
 export type PortfolioHolding =
-  | { kind: 'token'; token: TokenRef; amount: number; value: number; /** Live SOL kept for fees and rent (inside amount) */ reserve?: number }
+  | {
+      kind: 'token';
+      token: TokenRef;
+      amount: number;
+      /** Null when no price is known for the token (it doesn't count in the value) */
+      value: number | null;
+      /** Live SOL kept for fees and rent (inside amount) */
+      reserve?: number;
+    }
   | { kind: 'position'; positionId: string; pair: string; tokenA: TokenRef; tokenB: TokenRef; value: number; inRange: boolean; manual: boolean };
 
 export interface ClosedPosition {
@@ -156,8 +164,8 @@ export interface Portfolio {
   netVsHold: number | null;
   /** Funds in the vault wallet the agent hasn't recorded as a deposit yet (it does within a few minutes) */
   pendingUsd: number;
-  /** What the owner's own wallet holds (SOL, USDC): not in the vault, so the agent doesn't use it */
-  ownWallet: { token: TokenRef; amount: number; value: number }[];
+  /** Every token the owner's own wallet holds, largest value first (null: no known price). Not in the vault, so the agent doesn't use it. */
+  ownWallet: { token: TokenRef; amount: number; value: number | null }[];
   /** Fees earned by every position, all time */
   fees: number;
   /** Network fees, tips and slippage paid, all time */
