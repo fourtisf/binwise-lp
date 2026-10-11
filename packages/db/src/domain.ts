@@ -20,9 +20,13 @@ export const isStableSymbol = (t: Pick<Token, 'symbol' | 'isVerified'>) => t.isV
 export const isStable = (t: Pick<Token, 'symbol' | 'isVerified' | 'priceUsd'>) =>
   t.isVerified && STABLE_SYMBOLS.has(t.symbol.toUpperCase()) && t.priceUsd != null && Math.abs(t.priceUsd - 1) < 0.02;
 
-/** Allowlist: manual override wins; otherwise verified tokens without a live freeze authority pass. */
-export const isAllowed = (t: Pick<Token, 'allowed' | 'isVerified' | 'freezeAuthorityDisabled'>) =>
-  t.allowed ?? (t.isVerified && t.freezeAuthorityDisabled !== false);
+/**
+ * Allowlist: manual override wins; otherwise verified tokens without a live freeze authority pass.
+ * Verified dollar stablecoins pass despite theirs: USDC and USDT keep a freeze authority by design
+ * (issuer compliance), and treating that as a red flag would block every stablecoin pool.
+ */
+export const isAllowed = (t: Pick<Token, 'allowed' | 'isVerified' | 'freezeAuthorityDisabled' | 'symbol'>) =>
+  t.allowed ?? (t.isVerified && (t.freezeAuthorityDisabled !== false || isStableSymbol(t)));
 
 export function strategySettings(s: Strategy): StrategySettings {
   return {
@@ -150,8 +154,8 @@ type SnapshotLike = {
 /** Turns a stored snapshot into scoring input, so the collector, agent and API judge pools identically. */
 export async function assessmentInput(
   snap: SnapshotLike,
-  tokenX: Pick<Token, 'allowed' | 'isVerified' | 'freezeAuthorityDisabled'> | undefined,
-  tokenY: Pick<Token, 'allowed' | 'isVerified' | 'freezeAuthorityDisabled'> | undefined,
+  tokenX: Pick<Token, 'allowed' | 'isVerified' | 'freezeAuthorityDisabled' | 'symbol'> | undefined,
+  tokenY: Pick<Token, 'allowed' | 'isVerified' | 'freezeAuthorityDisabled' | 'symbol'> | undefined,
   params: { regimeEr: number; regimeMinMovePct: number },
 ) {
   const { regimeFrom } = await import('@binwise/core');
