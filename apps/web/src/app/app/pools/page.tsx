@@ -11,7 +11,7 @@ import { useAppData } from '@/lib/store';
 import { useUi } from '@/lib/ui';
 
 export default function PoolsPage() {
-  const { pools } = useAppData();
+  const { pools, ready } = useAppData();
   const { openPool } = useUi();
   const [filter, setFilter] = useState<'all' | AgentCall>('all');
   const [q, setQ] = useState('');
@@ -108,7 +108,7 @@ export default function PoolsPage() {
               ) : (
                 <tr>
                   <td colSpan={8} className="muted" style={{ padding: '28px 16px', cursor: 'default' }}>
-                    {pools.length ? 'No pools match. Clear the filter or pick another tab.' : 'Loading pools…'}
+                    {pools.length ? 'No pools match. Clear the filter or pick another tab.' : ready ? 'No pool data yet. The agent refreshes pools every minute.' : 'Loading pools…'}
                   </td>
                 </tr>
               )}

@@ -1,9 +1,17 @@
-import { Connection, PublicKey, type Commitment, type VersionedTransaction } from '@solana/web3.js';
+import { Connection, PublicKey, type Commitment, type ConnectionConfig, type VersionedTransaction } from '@solana/web3.js';
 import { fetchJson, withRetry } from './http';
+
+/** Longest one RPC request may take. Without it a stalled request would freeze the collector or agent forever. */
+export const RPC_TIMEOUT_MS = Number(process.env.RPC_TIMEOUT_MS ?? 20_000);
 
 export function makeConnection(url = process.env.RPC_URL, wsEndpoint = process.env.RPC_WS_URL || undefined, commitment: Commitment = 'confirmed') {
   if (!url) throw new Error('RPC_URL is not set');
-  return new Connection(url, { commitment, wsEndpoint });
+  return new Connection(url, {
+    commitment,
+    wsEndpoint,
+    fetch: ((input: string | URL, init?: RequestInit) =>
+      fetch(input, { ...init, signal: AbortSignal.timeout(RPC_TIMEOUT_MS) })) as unknown as ConnectionConfig['fetch'],
+  });
 }
 
 /**
