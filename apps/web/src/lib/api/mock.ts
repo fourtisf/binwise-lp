@@ -25,7 +25,7 @@ export function createMockClient(): BinwiseClient {
     useVault: () => {},
     me: () => Promise.resolve(null),
     demoVaultId: () => Promise.resolve(engine.vaultId),
-    signInMessage: unsupported,
+    signInChallenge: unsupported,
     signIn: unsupported,
     signOut: () => Promise.resolve(),
     overview: () => call(() => engine.getOverview()),

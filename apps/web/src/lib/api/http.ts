@@ -50,7 +50,7 @@ export function createHttpClient(api: string, ws: string): BinwiseClient {
     useVault: (id) => (vault = id),
     me: () => orNull(req('/me')),
     demoVaultId: async () => (await orNull(req<{ id: string }>('/vaults/demo')))?.id ?? null,
-    signInMessage: async (wallet) => (await req<{ message: string }>(`/auth/nonce?wallet=${encodeURIComponent(wallet)}`)).message,
+    signInChallenge: (wallet) => req(`/auth/nonce?wallet=${encodeURIComponent(wallet)}`),
     signIn: async (wallet, message, signature) => {
       await post('/auth/verify', { wallet, message, signature });
     },

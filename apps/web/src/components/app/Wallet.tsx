@@ -1,21 +1,30 @@
 'use client';
 
 import { ConnectionProvider, WalletProvider, useWallet } from '@solana/wallet-adapter-react';
-import { WalletReadyState, type WalletName } from '@solana/wallet-adapter-base';
+import { WalletReadyState, type WalletError, type WalletName } from '@solana/wallet-adapter-base';
 import bs58 from 'bs58';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useAppData } from '@/lib/store';
 import { useUi } from '@/lib/ui';
 import { Icon } from '../Sprite';
 
 const RPC = process.env.NEXT_PUBLIC_RPC_URL || 'https://api.mainnet-beta.solana.com';
 
-/** Wallet Standard wallets (Phantom, Backpack, Solflare…) register themselves; no adapters needed. */
+const WALLET_ERROR = 'binwise:wallet-error';
+
+/**
+ * Wallet Standard wallets (Phantom, Backpack, Solflare…) register themselves; no adapters needed.
+ * autoConnect also connects a wallet right after the user picks it, so the sign-in flow never calls
+ * connect() itself (two connects at once make Phantom fail with "Unexpected error").
+ */
 export function WalletProviders({ children }: { children: ReactNode }) {
   const wallets = useMemo(() => [], []);
+  const onError = useCallback((e: WalletError) => {
+    window.dispatchEvent(new CustomEvent(WALLET_ERROR, { detail: e?.message || e?.name || 'Wallet error' }));
+  }, []);
   return (
     <ConnectionProvider endpoint={RPC}>
-      <WalletProvider wallets={wallets} autoConnect>
+      <WalletProvider wallets={wallets} autoConnect onError={onError}>
         {children}
       </WalletProvider>
     </ConnectionProvider>
@@ -45,46 +54,86 @@ export const shortWallet = (w: string) => `${w.slice(0, 4)}…${w.slice(-4)}`;
 export function ConnectModal() {
   const { layer, closeLayers, toast } = useUi();
   const { client, reload } = useAppData();
-  const { wallets, select, connect, wallet, connected, publicKey, signMessage, disconnect } = useWallet();
+  const { wallets, select, connect, connecting, wallet, connected, publicKey, signMessage, signIn, disconnect } = useWallet();
   const [busy, setBusy] = useState<string | null>(null);
   // Installed wallets are only known in the browser; render the lists after mount to avoid a hydration mismatch.
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
   const pending = useRef<string | null>(null);
+  // Bumped on every click, so a wallet that is already connected signs in straight away.
+  const [attempt, setAttempt] = useState(0);
   const on = layer === 'connect';
   const installed = mounted ? wallets.filter((w) => w.readyState === WalletReadyState.Installed || w.readyState === WalletReadyState.Loadable) : [];
   const others = KNOWN_WALLETS.filter((k) => !installed.some((w) => sameWallet(k.name, w.adapter.name)));
 
-  // After select(), connect once the adapter is switched; then sign in.
+  const friendly = (m: string) =>
+    /rejected|cancel|denied/i.test(m)
+      ? 'cancelled in the wallet. Try again and approve the request.'
+      : /unexpected|internal/i.test(m)
+        ? `${m}. Unlock the wallet, close any other open wallet popups, and try again (if several wallet extensions are installed, try disabling the ones you don't use).`
+        : m;
+
+  // Connection errors come from the provider (it connects the picked wallet itself).
+  useEffect(() => {
+    const onErr = (e: Event) => {
+      if (!pending.current) return;
+      pending.current = null;
+      setBusy(null);
+      toast(`The wallet did not connect: ${friendly(String((e as CustomEvent).detail ?? ''))}`);
+    };
+    window.addEventListener(WALLET_ERROR, onErr);
+    return () => window.removeEventListener(WALLET_ERROR, onErr);
+  }, [toast]);
+
+  // Once the picked wallet is connected, sign in.
   useEffect(() => {
     if (!pending.current || wallet?.adapter.name !== pending.current) return;
-    if (!connected) {
-      connect().catch((e) => {
-        toast(e?.message ?? 'Wallet connection was cancelled.');
-        pending.current = null;
-        setBusy(null);
-      });
-      return;
-    }
-    if (!publicKey || !signMessage || !client) return;
+    if (!connected) return; // the provider is connecting it
+    if (!publicKey || (!signMessage && !signIn) || !client) return;
     pending.current = null;
     (async () => {
+      // Each step says what failed, so a wallet error is never a mystery.
+      let step = 'Could not reach Binwise';
       try {
         const address = publicKey.toBase58();
-        const message = await client.signInMessage(address);
-        const sig = await signMessage(new TextEncoder().encode(message));
-        await client.signIn(address, message, bs58.encode(sig));
+        const c = await client.signInChallenge(address);
+        let message: string;
+        let signature: Uint8Array;
+        if (signIn) {
+          // Standard Sign In With Solana (Phantom, Backpack, Solflare): the wallet builds and shows the message.
+          step = 'The wallet did not sign';
+          const out = await signIn({
+            domain: c.domain,
+            address,
+            statement: c.statement,
+            uri: window.location.origin,
+            version: '1',
+            chainId: 'mainnet',
+            nonce: c.nonce,
+            issuedAt: c.issuedAt,
+          });
+          if (out.account.address !== address) throw new Error('The wallet signed with a different account. Switch to the connected account and try again.');
+          message = new TextDecoder().decode(out.signedMessage);
+          signature = out.signature;
+        } else {
+          step = 'The wallet did not sign';
+          message = c.message;
+          signature = await signMessage!(new TextEncoder().encode(message));
+        }
+        step = 'Binwise did not accept the sign-in';
+        await client.signIn(address, message, bs58.encode(signature));
         closeLayers();
         toast(`Signed in as ${shortWallet(address)}`);
         reload();
       } catch (e) {
-        toast((e as Error).message || 'Sign-in was cancelled.');
+        const m = (e as Error)?.message || 'cancelled';
+        toast(`${step}: ${friendly(m)}`);
         await disconnect().catch(() => {});
       } finally {
         setBusy(null);
       }
     })();
-  }, [wallet, connected, publicKey, signMessage, client, connect, disconnect, closeLayers, toast, reload]);
+  }, [attempt, wallet, connected, publicKey, signMessage, signIn, client, disconnect, closeLayers, toast, reload]);
 
   return (
     <div
@@ -123,7 +172,15 @@ export function ConnectModal() {
               onClick={() => {
                 setBusy(w.adapter.name);
                 pending.current = w.adapter.name;
-                select(w.adapter.name as WalletName);
+                setAttempt((n) => n + 1);
+                // Already picked earlier but not connected (no new selection to trigger autoConnect): connect it directly.
+                if (wallet?.adapter.name === w.adapter.name && !connected && !connecting)
+                  connect().catch((e) => {
+                    pending.current = null;
+                    setBusy(null);
+                    toast(`The wallet did not connect: ${friendly((e as Error)?.message ?? '')}`);
+                  });
+                else select(w.adapter.name as WalletName);
               }}
             >
               {busy === w.adapter.name ? 'Check your wallet' : 'Connect'}

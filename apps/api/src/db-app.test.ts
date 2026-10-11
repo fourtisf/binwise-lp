@@ -72,6 +72,23 @@ describe('sign-in with Solana', () => {
     expect(res.statusCode).toBe(401);
   });
 
+  it('accepts the standard Sign In With Solana message for the issued nonce, once', async () => {
+    const w = wallet();
+    const c = (await app.inject(`/auth/nonce?wallet=${w.address}`)).json();
+    expect(c.nonce).toMatch(/^[0-9a-f]{32}$/);
+    const siws = `${c.domain} wants you to sign in with your Solana account:\n${w.address}\n\n${c.statement}\n\nURI: https://${c.domain}\nVersion: 1\nChain ID: mainnet\nNonce: ${c.nonce}\nIssued At: ${c.issuedAt}`;
+    const ok = await app.inject({ method: 'POST', url: '/auth/verify', payload: { wallet: w.address, message: siws, signature: w.signMsg(siws) } });
+    expect(ok.statusCode).toBe(200);
+    const again = await app.inject({ method: 'POST', url: '/auth/verify', payload: { wallet: w.address, message: siws, signature: w.signMsg(siws) } });
+    expect(again.statusCode).toBe(400);
+    // Another wallet can't use this nonce, even with its own valid signature.
+    const other = wallet();
+    const c2 = (await app.inject(`/auth/nonce?wallet=${w.address}`)).json();
+    const forged = siws.replaceAll(w.address, other.address).replace(c.nonce, c2.nonce);
+    const bad = await app.inject({ method: 'POST', url: '/auth/verify', payload: { wallet: other.address, message: forged, signature: other.signMsg(forged) } });
+    expect(bad.statusCode).toBe(400);
+  });
+
   it('rejects a reused or tampered message', async () => {
     const w = wallet();
     const { message } = (await app.inject(`/auth/nonce?wallet=${w.address}`)).json();

@@ -41,7 +41,8 @@ export interface BinwiseClient {
   useVault(id: string): void;
   me(): Promise<Me | null>;
   demoVaultId(): Promise<string | null>;
-  signInMessage(wallet: string): Promise<string>;
+  /** Sign-in challenge: our message for signMessage, and the fields for a standard Sign In With Solana request. */
+  signInChallenge(wallet: string): Promise<{ message: string; nonce: string; domain: string; issuedAt: string; statement: string }>;
   signIn(wallet: string, message: string, signatureB58: string): Promise<void>;
   signOut(): Promise<void>;
   overview(): Promise<VaultOverview>;

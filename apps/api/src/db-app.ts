@@ -40,7 +40,7 @@ import {
   type PrismaClient,
   type Vault,
 } from '@binwise/db';
-import { SESSION_COOKIE, SESSION_DAYS, makeSession, newNonce, readSession, signInMessage, verifyWalletSignature } from './auth';
+import { SESSION_COOKIE, SIGN_IN_STATEMENT, SESSION_DAYS, makeSession, newNonce, readSession, signInMessage, verifyWalletSignature } from './auth';
 import { EventHub } from './events';
 import { decisionView, overview, performance, poolRows, positionViews, tokenMap, tokenRef } from './views';
 
@@ -223,18 +223,33 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
       throw new ApiError(400, 'bad_wallet', 'That is not a Solana wallet address.');
     }
     const nonce = newNonce();
-    const message = signInMessage(wallet, nonce, new Date().toISOString(), o.domain ?? 'Binwise');
+    const issuedAt = new Date().toISOString();
+    const domain = o.domain ?? 'Binwise';
+    const message = signInMessage(wallet, nonce, issuedAt, domain);
     // Keyed by the nonce itself, so requesting a new message can't invalidate someone else's.
-    await redis.set(REDIS_KEYS.nonce(nonce), message, 'EX', 300);
-    return { message };
+    await redis.set(REDIS_KEYS.nonce(nonce), JSON.stringify({ message, wallet }), 'EX', 300);
+    // `message` for signMessage; the rest for wallets that sign in with the standard Sign In With Solana flow.
+    return { message, nonce, domain, issuedAt, statement: SIGN_IN_STATEMENT };
   });
 
   app.post<{ Body: { wallet?: string; message?: string; signature?: string } }>('/auth/verify', authLimit, async (req, reply) => {
     const { wallet = '', message = '', signature = '' } = req.body ?? {};
-    const nonce = /\nNonce: ([0-9a-f]{32})\n/.exec(message)?.[1];
-    // GETDEL: a message can be used exactly once, even by two requests at the same time.
-    const expected = nonce ? await redis.getdel(REDIS_KEYS.nonce(nonce)) : null;
-    if (!expected || expected !== message || !message.includes(`\nWallet: ${wallet}\n`)) throw new ApiError(400, 'bad_nonce', 'Sign-in request expired. Try again.');
+    const nonce = /\nNonce: ([0-9a-f]{32})(?:\n|$)/.exec(message)?.[1];
+    // GETDEL: a nonce can be used exactly once, even by two requests at the same time.
+    const raw = nonce ? await redis.getdel(REDIS_KEYS.nonce(nonce)) : null;
+    let issued: { message: string; wallet: string } | null = null;
+    try {
+      issued = raw ? (JSON.parse(raw) as { message: string; wallet: string }) : null;
+    } catch {
+      issued = null;
+    }
+    // Either our own message exactly, or the standard Sign In With Solana message the wallet built
+    // for this domain, this wallet and this nonce.
+    const ok =
+      !!issued &&
+      issued.wallet === wallet &&
+      (message === issued.message || message.startsWith(`${o.domain ?? 'Binwise'} wants you to sign in with your Solana account:\n${wallet}\n`));
+    if (!ok) throw new ApiError(400, 'bad_nonce', 'Sign-in request expired. Try again.');
     if (!verifyWalletSignature(wallet, message, signature)) throw new ApiError(401, 'bad_signature', 'Signature check failed.');
     const user = await ensureUser(db, wallet);
     if (!(await db.vault.count({ where: { userId: user.id } }))) {

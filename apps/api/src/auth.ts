@@ -11,6 +11,9 @@ export const SESSION_DAYS = 14;
 
 export const newNonce = () => randomBytes(16).toString('hex');
 
+/** The statement shown by wallets that use the standard Sign In With Solana flow. */
+export const SIGN_IN_STATEMENT = 'Sign in to Binwise. This does not send a transaction or cost anything.';
+
 export const signInMessage = (wallet: string, nonce: string, issuedAt: string, domain: string) =>
   `${domain} wants you to sign in to Binwise with your Solana wallet.\n\nWallet: ${wallet}\nNonce: ${nonce}\nIssued at: ${issuedAt}\n\nThis does not send a transaction or cost anything.`;
 
