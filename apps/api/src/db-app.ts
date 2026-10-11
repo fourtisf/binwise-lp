@@ -18,6 +18,8 @@ import {
   type DemoEvent,
   type DepositAsset,
   type StrategySettings,
+  type Portfolio,
+  type PortfolioHolding,
   type StreamEvent,
   type VaultBalance,
 } from '@binwise/core';
@@ -46,6 +48,7 @@ import {
   shrinkDeposits as shrinkDepositsOf,
   strategySettings as strategySettingsOf,
   strategyData,
+  vaultValue,
   type PrismaClient,
   type Vault,
 } from '@binwise/db';
@@ -190,6 +193,23 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
       await new Promise((r) => setTimeout(r, 250));
     }
     throw new ApiError(409, 'vault_busy', 'The agent is working on this vault right now. Try again in a few seconds.');
+  }
+
+  /**
+   * Token amounts with symbols, logos and USD values: the total, and the ones worth listing (no dust or
+   * unknown tokens), largest first with SOL on top.
+   */
+  async function pricedTokens(amounts: Record<string, number>) {
+    const tokens = await tokenMap(db, Object.keys(amounts));
+    const all = Object.entries(amounts).map(([mint, amount]) => {
+      const t = tokens.get(mint);
+      const symbol = mint === SOL_MINT ? 'SOL' : (t?.symbol ?? `${mint.slice(0, 4)}…`);
+      return { symbol, mint, amount, usd: amount * (t?.priceUsd ?? 0), token: tokenRef(symbol, t) };
+    });
+    const shown = all
+      .filter((a) => a.amount > 1e-9 && (a.mint === SOL_MINT || a.usd >= 0.01))
+      .sort((a, b) => (a.mint === SOL_MINT ? -1 : b.mint === SOL_MINT ? 1 : b.usd - a.usd));
+    return { totalUsd: all.reduce((sum, a) => sum + a.usd, 0), shown };
   }
 
   /** USD value of a token map at current prices. */
@@ -407,16 +427,9 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
       }
     }
     const reserveSol = live ? Math.min(held[SOL_MINT] ?? 0, SOL_RESERVE) : 0;
-    const idle: Record<string, number> = { ...held, ...(live ? { [SOL_MINT]: Math.max(0, (held[SOL_MINT] ?? 0) - SOL_RESERVE) } : {}) };
-    const tokens = await tokenMap(db, Object.keys(idle));
-    const priced = Object.entries(idle).map(([mint, amount]) => {
-      const t = tokens.get(mint);
-      return { symbol: mint === SOL_MINT ? 'SOL' : (t?.symbol ?? `${mint.slice(0, 4)}…`), mint, amount, usd: amount * (t?.priceUsd ?? 0) };
-    });
-    const availableUsd = priced.reduce((s, a) => s + a.usd, 0);
-    const assets = priced
-      .filter((a) => a.amount > 1e-9 && (a.mint === SOL_MINT || a.usd >= 0.01))
-      .sort((a, b) => (a.mint === SOL_MINT ? -1 : b.mint === SOL_MINT ? 1 : b.usd - a.usd));
+    const idle = await pricedTokens({ ...held, ...(live ? { [SOL_MINT]: Math.max(0, (held[SOL_MINT] ?? 0) - SOL_RESERVE) } : {}) });
+    const availableUsd = idle.totalUsd;
+    const assets = idle.shown.map(({ symbol, mint, amount, usd }) => ({ symbol, mint, amount, usd }));
     const out: VaultBalance = { availableUsd, assets, reserveSol, source };
     const poolId = req.query.pool;
     const snap = poolId && vault.strategy ? await db.poolSnapshot.findFirst({ where: { poolId }, orderBy: { ts: 'desc' } }) : null;
@@ -439,6 +452,85 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
       out.pool = { ...lim, minUsd: minPositionUsd() };
     }
     return out;
+  });
+
+  /**
+   * The owner's portfolio: what the vault holds (idle tokens and positions), how it did against holding
+   * since the start, fees and costs all time, closed positions and money in and out. Valued from the
+   * agent's last cycle like Overview, so the value and the hold baseline always match (a deposit counts
+   * in both at once).
+   */
+  app.get<VP>('/vaults/:id/portfolio', async (req): Promise<Portfolio> => {
+    const { vault } = await readable(req, req.params.id);
+    const owner = await db.user.findUniqueOrThrow({ where: { id: vault.userId } });
+    const live = vault.mode === 'live';
+    const v = await vaultValue(db, vault.id);
+    const cash = await pricedTokens(vault.cash as Record<string, number>);
+    const [open, closed, closedCount, beatHold, totals, flowRows] = await Promise.all([
+      db.position.findMany({ where: { vaultId: vault.id, status: 'open' }, include: { pool: true } }),
+      db.position.findMany({ where: { vaultId: vault.id, status: 'closed' }, include: { pool: true }, orderBy: { closedAt: 'desc' }, take: 50 }),
+      db.position.count({ where: { vaultId: vault.id, status: 'closed' } }),
+      db.position.count({ where: { vaultId: vault.id, status: 'closed', netVsHold: { gt: 0 } } }),
+      db.position.aggregate({ where: { vaultId: vault.id }, _sum: { feesClaimedUsd: true, feesUnclaimedUsd: true, costsUsd: true } }),
+      db.decision.findMany({ where: { vaultId: vault.id, type: { in: ['deploy', 'exit'] } }, orderBy: { ts: 'desc' }, take: 300, select: { ts: true, title: true, inputs: true, txSig: true } }),
+    ]);
+    const tokens = await tokenMap(db, [...open, ...closed].flatMap((p) => [p.pool.mintA, p.pool.mintB]));
+    const pairOf = (p: (typeof open)[number]) => ({
+      pair: `${p.pool.tokenA} / ${p.pool.tokenB}`,
+      tokenA: tokenRef(p.pool.tokenA, tokens.get(p.pool.mintA)),
+      tokenB: tokenRef(p.pool.tokenB, tokens.get(p.pool.mintB)),
+    });
+    const holdings: PortfolioHolding[] = [
+      ...cash.shown.map((a) => ({
+        kind: 'token' as const,
+        token: a.token,
+        amount: a.amount,
+        value: a.usd,
+        ...(live && a.mint === SOL_MINT ? { reserve: Math.min(a.amount, SOL_RESERVE) } : {}),
+      })),
+      ...open.map((p) => ({
+        kind: 'position' as const,
+        positionId: p.id,
+        ...pairOf(p),
+        value: p.valueUsd + p.feesUnclaimedUsd,
+        inRange: p.inRange,
+        manual: p.manual,
+      })),
+    ].sort((a, b) => b.value - a.value);
+    const flows = flowRows
+      .flatMap((d) => {
+        const usd = (d.inputs as { flowUsd?: unknown } | null)?.flowUsd;
+        return typeof usd === 'number' && usd !== 0 ? [{ ts: d.ts.getTime(), title: d.title, usd, ...(d.txSig ? { txSig: d.txSig } : {}) }] : [];
+      })
+      .slice(0, 30);
+    return {
+      wallet: owner.wallet,
+      vaultWallet: live ? vault.agentPubkey : null,
+      name: vault.name,
+      mode: vault.mode,
+      since: vault.createdAt.getTime(),
+      telegramLinked: !!owner.telegramChatId,
+      value: v.value,
+      holdValue: v.hold,
+      netVsHold: v.hold > 0 ? (v.value / v.hold - 1) * 100 : 0,
+      fees: (totals._sum.feesClaimedUsd ?? 0) + (totals._sum.feesUnclaimedUsd ?? 0),
+      costs: totals._sum.costsUsd ?? 0,
+      holdings,
+      closed: closed.map((p) => ({
+        id: p.id,
+        ...pairOf(p),
+        openedAt: p.openedAt.getTime(),
+        closedAt: (p.closedAt ?? p.openedAt).getTime(),
+        entryValue: p.entryValueUsd,
+        exitValue: p.valueUsd,
+        fees: p.feesClaimedUsd + p.feesUnclaimedUsd,
+        netVsHold: p.netVsHold,
+        manual: p.manual,
+      })),
+      closedCount,
+      beatHold,
+      flows,
+    };
   });
 
   app.get<VP & { Querystring: { range?: string } }>('/vaults/:id/performance', async (req) => {

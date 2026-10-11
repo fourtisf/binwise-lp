@@ -29,7 +29,8 @@ export function createMockClient(): BinwiseClient {
     signIn: unsupported,
     signOut: () => Promise.resolve(),
     overview: () => call(() => engine.getOverview()),
-    // Add LP by hand needs the real API.
+    // The portfolio and Add LP by hand need the real API.
+    portfolio: unsupported,
     balance: unsupported,
     performance: (range) => call(() => engine.getPerformance(range)),
     pools: () => call(() => engine.getPools()),

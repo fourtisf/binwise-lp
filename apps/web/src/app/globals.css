@@ -491,7 +491,7 @@ button.avatar:focus-visible{outline:2px solid var(--aqua);outline-offset:3px}
   .s2.last{grid-column:span 6}
   .vsrow{grid-template-columns:1fr}
   .kpis{grid-template-columns:1fr 1fr}
-  .g2{grid-template-columns:1fr}
+  .g2{grid-template-columns:minmax(0,1fr)}
   .posgrid{grid-template-columns:1fr 1fr}
   .g3{grid-template-columns:1fr 1fr}
   .preview{grid-column:1/-1;position:static}

@@ -23,9 +23,11 @@ function wallet() {
   return { address: bs58.encode(Buffer.from(raw, 'base64url')), signMsg: (m: string) => bs58.encode(sign(null, Buffer.from(m), privateKey)) };
 }
 
-async function signIn(w = wallet()) {
-  const { message } = (await app.inject(`/auth/nonce?wallet=${w.address}`)).json();
-  const res = await app.inject({ method: 'POST', url: '/auth/verify', payload: { wallet: w.address, message, signature: w.signMsg(message) } });
+/** `remoteAddress`: sign in from another address, so a test doesn't spend the others' sign-in rate limit. */
+async function signIn(w = wallet(), remoteAddress?: string) {
+  const ip = remoteAddress ? { remoteAddress } : {};
+  const { message } = (await app.inject({ url: `/auth/nonce?wallet=${w.address}`, ...ip })).json();
+  const res = await app.inject({ method: 'POST', url: '/auth/verify', payload: { wallet: w.address, message, signature: w.signMsg(message) }, ...ip });
   expect(res.statusCode).toBe(200);
   const cookie = res.cookies.find((c) => c.name === 'bw_session')!;
   return { w, headers: { cookie: `bw_session=${cookie.value}` } };
@@ -383,6 +385,40 @@ describe('vault balance (Add LP)', () => {
     } finally {
       await liveApp.close(); // also closes sub2
     }
+  });
+});
+
+describe('portfolio', () => {
+  it('shows holdings, net vs hold since the start, fees, closed positions and money in and out', async () => {
+    const { w, headers } = await signIn(wallet(), '10.9.9.7');
+    const id = (await app.inject({ url: '/me', headers })).json().vaults[0].id;
+    await app.inject({ method: 'POST', url: `/vaults/${id}/deposit`, headers, payload: { token: 'SOL', amount: 10 } });
+    await db.pool.create({ data: { id: 'PP1', name: 'SOL-USDC', tokenA: 'SOL', tokenB: 'USDC', mintA: SOL, mintB: USDC, binStep: 10, baseFee: 0.1 } });
+    const base = { vaultId: id, poolId: 'PP1', binStep: 10, lowerBin: 0, upperBin: 10, shape: 'spot' as const, entryAmountA: 1, entryAmountB: 150, entryPriceA: 150, entryPriceB: 1, entryValueUsd: 300, price: 150 };
+    const open = await db.position.create({ data: { ...base, valueUsd: 300, feesUnclaimedUsd: 5, costsUsd: 0.4 } });
+    await db.position.create({
+      data: { ...base, valueUsd: 290, feesClaimedUsd: 7, costsUsd: 0.6, netVsHold: 2, status: 'closed', openedAt: new Date(Date.now() - 86_400_000), closedAt: new Date() },
+    });
+
+    const res = await app.inject({ url: `/vaults/${id}/portfolio`, headers });
+    expect(res.statusCode).toBe(200);
+    const p = res.json();
+    expect(p).toMatchObject({ wallet: w.address, vaultWallet: null, mode: 'paper', telegramLinked: false, closedCount: 1, beatHold: 1 });
+    // 10 SOL idle ($1,500) + the open position with its unclaimed fees ($305), against holding the 10 SOL.
+    expect(p.value).toBeCloseTo(1805);
+    expect(p.holdValue).toBeCloseTo(1500);
+    expect(p.netVsHold).toBeCloseTo((1805 / 1500 - 1) * 100);
+    expect(p.fees).toBeCloseTo(12);
+    expect(p.costs).toBeCloseTo(1);
+    expect(p.holdings.map((h: { kind: string; value: number }) => [h.kind, Math.round(h.value)])).toEqual([
+      ['token', 1500],
+      ['position', 305],
+    ]);
+    expect(p.holdings[1]).toMatchObject({ positionId: open.id, pair: 'SOL / USDC', inRange: true });
+    expect(p.closed[0]).toMatchObject({ pair: 'SOL / USDC', entryValue: 300, exitValue: 290, fees: 7, netVsHold: 2 });
+    expect(p.flows[0]).toMatchObject({ title: 'Deposited 10.00 SOL', usd: 1500 });
+    // Private to the owner.
+    expect((await app.inject({ url: `/vaults/${id}/portfolio` })).statusCode).toBe(404);
   });
 });
 

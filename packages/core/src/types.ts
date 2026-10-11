@@ -113,6 +113,59 @@ export interface VaultBalance {
   pool?: { maxUsd: number; minUsd: number; limit: 'balance' | 'strategy' | 'cap' | 'live' | 'positions' | 'held' };
 }
 
+/** One line of a portfolio: an idle token, or an open position (value includes unclaimed fees). */
+export type PortfolioHolding =
+  | { kind: 'token'; token: TokenRef; amount: number; value: number; /** Live SOL kept for fees and rent (inside amount) */ reserve?: number }
+  | { kind: 'position'; positionId: string; pair: string; tokenA: TokenRef; tokenB: TokenRef; value: number; inRange: boolean; manual: boolean };
+
+export interface ClosedPosition {
+  id: string;
+  pair: string;
+  tokenA: TokenRef;
+  tokenB: TokenRef;
+  /** Unix ms */
+  openedAt: number;
+  closedAt: number;
+  entryValue: number;
+  /** Value at the last mark before closing */
+  exitValue: number;
+  fees: number;
+  /** Percent, at the last mark */
+  netVsHold: number;
+  manual: boolean;
+}
+
+/** Everything in a vault and how it did against holding (GET /vaults/:id/portfolio). */
+export interface Portfolio {
+  wallet: string;
+  /** Live: the vault's own wallet on Solana, to check its holdings on an explorer */
+  vaultWallet: string | null;
+  name: string;
+  mode: VaultMode;
+  /** Unix ms the vault was created */
+  since: number;
+  telegramLinked: boolean;
+  /** Idle tokens + open positions with unclaimed fees, as of the agent's last cycle (same as Overview) */
+  value: number;
+  /** Everything deposited, held instead, at today's prices */
+  holdValue: number;
+  /** value / holdValue − 1, percent, since the start (0 before any deposit). The headline. */
+  netVsHold: number;
+  /** Fees earned by every position, all time */
+  fees: number;
+  /** Network fees, tips and slippage paid, all time */
+  costs: number;
+  /** Largest first */
+  holdings: PortfolioHolding[];
+  /** Latest first (up to 50) */
+  closed: ClosedPosition[];
+  closedCount: number;
+  /** Closed positions that ended ahead of holding */
+  beatHold: number;
+  /** Deposits (+) and withdrawals (−) in USD at the time, newest first (up to 30) */
+  flows: { ts: number; title: string; usd: number; txSig?: string }[];
+}
+
 export interface Me {
   wallet: string;
   vaults: { id: string; name: string; mode: VaultMode }[];

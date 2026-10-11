@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { BOT_URL } from '@/lib/site';
 import { useAppData } from '@/lib/store';
@@ -7,7 +8,7 @@ import { useUi } from '@/lib/ui';
 import { Icon } from '../Sprite';
 import { shortWallet } from './Wallet';
 
-/** The avatar in the top bar: who is signed in, and a menu (copy address, Solscan, Telegram, sign out). */
+/** The avatar in the top bar: who is signed in, and a menu (portfolio, copy address, Solscan, Telegram, sign out). */
 export function AccountMenu() {
   const { me, client, overview, reload } = useAppData();
   const { toast } = useUi();
@@ -95,6 +96,10 @@ export function AccountMenu() {
             </small>
           </div>
         </div>
+        <Link role="menuitem" tabIndex={open ? 0 : -1} href="/app/portfolio" onClick={close}>
+          <Icon id="i-wallet" />
+          Portfolio
+        </Link>
         <button role="menuitem" tabIndex={open ? 0 : -1} onClick={copy}>
           <Icon id="i-copy" />
           Copy wallet address
