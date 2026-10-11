@@ -123,23 +123,23 @@ if ! $ASK_ALL && [[ "$(env_get LIVE_TRADING_ENABLED)" == true ]]; then
   if [[ "$(env_get LIVE_MAX_USD)" == 0 ]]; then limits=1; else limits=2; fi
   ok "Pilihan tersimpan dipakai (ubah dengan: bash deploy/go-live.sh --ubah)"
 else
-  [[ "$cur_wallets" == '*' ]] && cur_wallets=""
-  while true; do
-    read -r -p "    Alamat publik Phantom untuk login website (Enter = ${cur_wallets:-lewati, hanya pakai bot}): " wallet
-    wallet="${wallet:-$cur_wallets}"
-    [[ -z "$wallet" ]] && { ok "Tanpa wallet website: pakai bot Telegram"; break; }
-    [[ "$wallet" =~ ^[1-9A-HJ-NP-Za-km-z]{32,44}(,[1-9A-HJ-NP-Za-km-z]{32,44})*$ ]] && { ok "Alamat wallet valid"; break; }
-    warn "Itu bukan alamat Solana. Salin alamat dari Phantom (contoh: 7xKX...), atau tekan Enter untuk lewati."
-  done
-
   echo "    Siapa yang boleh memakai mode live (dana asli)?"
   echo "      1) Hanya saya dulu (disarankan untuk uji pertama)"
-  echo "      2) Semua orang (wallet baru langsung di mainnet)"
+  echo "      2) Semua orang, lewat bot maupun website (tanpa alamat wallet)"
   while true; do
     read -r -p "    Pilih 1 atau 2: " who
     [[ "$who" == 1 || "$who" == 2 ]] && break
   done
+  wallet=""
   if [[ "$who" == 1 ]]; then
+    [[ "$cur_wallets" == '*' ]] && cur_wallets=""
+    while true; do
+      read -r -p "    Alamat publik Phantom untuk login website (Enter = ${cur_wallets:-lewati, hanya pakai bot}): " wallet
+      wallet="${wallet:-$cur_wallets}"
+      [[ -z "$wallet" ]] && { ok "Tanpa wallet website: pakai bot Telegram"; break; }
+      [[ "$wallet" =~ ^[1-9A-HJ-NP-Za-km-z]{32,44}(,[1-9A-HJ-NP-Za-km-z]{32,44})*$ ]] && { ok "Alamat wallet valid"; break; }
+      warn "Itu bukan alamat Solana. Salin alamat dari Phantom (contoh: 7xKX...), atau tekan Enter untuk lewati."
+    done
     echo "    Wallet yang dibuat di bot Telegram: hanya untuk ID Telegram yang diizinkan (lihat ID: @userinfobot)."
     while true; do
       read -r -p "    ID Telegram Anda (Enter = ${tg_ids:-lewati}): " tgid
