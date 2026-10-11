@@ -318,7 +318,7 @@ footer{margin-top:120px;border-top:1px solid var(--line);padding:56px 0 40px}
 .bico{width:26px;height:26px;border-radius:8px;display:grid;place-items:center;background:rgba(255,255,255,.04);border:1px solid var(--line);transition:.3s;color:var(--dim)}
 .bico svg{width:13px;height:13px}
 .bstep b{font-size:13.5px;font-weight:500;display:block}
-.bstep span{font-size:12.5px;color:var(--muted);display:block;margin-top:1px}
+.bstep>div span{font-size:12.5px;color:var(--muted);display:block;margin-top:1px}
 .bstep.done .bico{background:var(--aqua-a);border-color:rgba(75,227,207,.3);color:var(--aqua)}
 .bstep.run .bico{background:var(--indigo-a);border-color:rgba(139,141,255,.45);color:#A9ABFF}
 .bstep.run .bico svg{animation:spin 1s linear infinite}
