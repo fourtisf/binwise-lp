@@ -100,6 +100,17 @@ sudo -u binwise -H bash -lc 'cd ~/binwise && pnpm --filter @binwise/agent kill o
 curl -X POST https://binwise.org/api/admin/kill -H "x-admin-token: $ADMIN_TOKEN" -H 'content-type: application/json' -d '{"on":true}'
 ```
 
+## Go live (one command)
+
+```bash
+bash /home/binwise/binwise/deploy/go-live.sh
+```
+
+Asks for the Helius key, Jupiter key, the owner's wallet address, who may trade live (only the owner, or everyone)
+and the Telegram bot token; checks each one works; updates the code, rebuilds the site and restarts everything.
+Keys are typed on the server and stored only in `.env` (a backup of the previous `.env` is kept next to it).
+Run it again to change keys or to open live mode to everyone.
+
 ## Mainnet for everyone
 
 To let any visitor connect a wallet and have the agent trade real funds:
