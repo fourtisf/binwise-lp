@@ -10,3 +10,7 @@ export const LIVE_DEFAULT = process.env.NEXT_PUBLIC_DEFAULT_VAULT_MODE === 'live
  */
 export const WALLET_LOGIN = process.env.NEXT_PUBLIC_WALLET_LOGIN !== 'false';
 export const BOT_URL = `https://t.me/${process.env.NEXT_PUBLIC_TELEGRAM_BOT || 'binwiselpbot'}`;
+
+/** Binwise on X */
+export const X_HANDLE = '@binwiseofficial';
+export const X_URL = 'https://x.com/binwiseofficial';

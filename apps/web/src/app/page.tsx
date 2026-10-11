@@ -6,7 +6,7 @@ import { Nav } from '@/components/landing/Nav';
 import { Stage } from '@/components/landing/Stage';
 import { Logo } from '@/components/Logo';
 import { Icon } from '@/components/Sprite';
-import { LIVE_DEFAULT, WALLET_LOGIN } from '@/lib/site';
+import { LIVE_DEFAULT, WALLET_LOGIN, X_URL } from '@/lib/site';
 
 const Check = () => <Icon id="i-check" />;
 
@@ -283,7 +283,9 @@ export default function Landing() {
             </div>
             <div>
               <h4>Community</h4>
-              <a href="#">X</a>
+              <a href={X_URL} target="_blank" rel="noreferrer">
+                X
+              </a>
               <a href="#">Telegram</a>
               <a href="#">Discord</a>
             </div>
