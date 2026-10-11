@@ -30,4 +30,19 @@ describe('parseDeposit', () => {
     };
     expect(parseDeposit(tx([ix], meta), owner.toBase58(), agent.toBase58())).toEqual({ [USDC]: 99 });
   });
+  it('a wallet created in Telegram (owner = agent) counts money from any other address, including plain token transfers', () => {
+    const a = agent.toBase58();
+    expect(parseDeposit(tx([sol(stranger.toBase58(), 1e9)]), a, a)).toEqual({ [SOL_MINT]: 1 });
+    // The agent's own transfers are never deposits.
+    expect(parseDeposit(tx([sol(a, 1e9)]), a, a)).toEqual({});
+    const ix = { program: 'spl-token', parsed: { type: 'transfer', info: { authority: stranger.toBase58(), source: 'x', destination: agentUsdc.toBase58(), amount: '25000000' } } };
+    const meta = {
+      err: null,
+      preTokenBalances: [],
+      postTokenBalances: [{ accountIndex: 1, mint: USDC, owner: a, uiTokenAmount: { uiAmount: 25, decimals: 6 } }],
+    };
+    expect(parseDeposit(tx([ix], meta), a, a)).toEqual({ [USDC]: 25 });
+    // A plain transfer doesn't count for website vaults (only the registered wallet, via transferChecked).
+    expect(parseDeposit(tx([{ ...ix, parsed: { ...ix.parsed, info: { ...ix.parsed.info, authority: owner.toBase58() } } }], meta), owner.toBase58(), a)).toEqual({});
+  });
 });

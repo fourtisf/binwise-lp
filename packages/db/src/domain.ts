@@ -75,6 +75,17 @@ export async function createVault(
   });
 }
 
+/**
+ * After a withdrawal, shrink the hold baseline by the same share of its value, whatever token
+ * was withdrawn, so net vs hold isn't distorted by money taken out.
+ */
+export async function shrinkDeposits(db: PrismaClient, deposits: Record<string, number>, withdrawnUsd: number) {
+  const tokens = await db.token.findMany({ where: { mint: { in: Object.keys(deposits) } } });
+  const holdUsd = Object.entries(deposits).reduce((s, [m, a]) => s + a * (tokens.find((t) => t.mint === m)?.priceUsd ?? 0), 0);
+  const k = holdUsd > 0 ? Math.max(0, 1 - withdrawnUsd / holdUsd) : 0;
+  return Object.fromEntries(Object.entries(deposits).map(([m, a]) => [m, a * k]));
+}
+
 /** Latest snapshot per pool, no older than `maxAgeMin` minutes. */
 export async function latestSnapshots(db: PrismaClient, maxAgeMin = 10, now = Date.now()) {
   return db.poolSnapshot.findMany({

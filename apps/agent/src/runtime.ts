@@ -4,7 +4,7 @@ import {
   LiveExecutor,
   PaperExecutor,
   assertLiveTradingAllowed,
-  assertLiveWallet,
+  assertLiveOwner,
   loadAgentKey,
   makeConnection,
   type Executor,
@@ -14,6 +14,7 @@ import { getDb, type PrismaClient } from '@binwise/db';
 import { PublicKey } from '@solana/web3.js';
 import type { Redis } from 'ioredis';
 import { publish, redisIdempotency, redisKillSwitch, withVaultLock } from './redis';
+import type { WithdrawChain } from './wallet';
 import type { AgentDeps, VaultWithStrategy } from './agent';
 import { Telegram } from './telegram';
 import { proposalMessage } from './bot';
@@ -60,7 +61,7 @@ export function makeAgentDeps(redis: Redis, db: PrismaClient = getDb(), telegram
       assertLiveTradingAllowed(vault);
       if (!vault.encSecret) throw new Error('Live vault has no agent key.');
       const user = await db.user.findUniqueOrThrow({ where: { id: vault.userId } });
-      assertLiveWallet(user.wallet);
+      assertLiveOwner(user, vault.agentPubkey);
       return new LiveExecutor({
         conn: makeConnection(),
         agent: loadAgentKey(vault.encSecret, undefined, vault.agentPubkey),
@@ -72,5 +73,23 @@ export function makeAgentDeps(redis: Redis, db: PrismaClient = getDb(), telegram
         costs,
       });
     },
+  };
+}
+
+/**
+ * Withdrawals from Telegram: a live executor that sends to `to` (the registered wallet, or for a
+ * wallet created in Telegram the address its owner typed). Like the app's withdraw, not gated on
+ * LIVE_TRADING_ENABLED, so turning live trading off never traps funds; the kill switch still applies.
+ */
+export function makeWithdrawChain(redis: Redis): (vault: { encSecret: Uint8Array | null; agentPubkey: string | null }, to: string) => Promise<WithdrawChain> {
+  return async (vault, to) => {
+    if (!vault.encSecret) throw new Error('This vault has no agent wallet.');
+    return new LiveExecutor({
+      conn: makeConnection(),
+      agent: loadAgentKey(vault.encSecret, undefined, vault.agentPubkey),
+      ownerWallet: new PublicKey(to),
+      killSwitch: redisKillSwitch(redis),
+      idempotency: redisIdempotency(redis),
+    });
   };
 }

@@ -90,6 +90,18 @@ while true; do
   read -r -p "    Pilih 1 atau 2: " who
   [[ "$who" == 1 || "$who" == 2 ]] && break
 done
+tg_ids="$(env_get LIVE_TELEGRAM_IDS)"
+if [[ "$who" == 1 ]]; then
+  echo "    Wallet yang dibuat langsung di bot Telegram: hanya untuk ID Telegram yang diizinkan."
+  echo "    (Lihat ID Anda: kirim /id ke bot. Kosongkan untuk lewati.)"
+  while true; do
+    read -r -p "    ID Telegram Anda (Enter = ${tg_ids:-lewati}): " tgid
+    tgid="${tgid:-$tg_ids}"
+    [[ -z "$tgid" || "$tgid" =~ ^[0-9]+(,[0-9]+)*$ ]] && break
+    warn "ID Telegram hanya angka (contoh: 123456789)."
+  done
+  tg_ids="$tgid"
+fi
 
 # Telegram (optional)
 current_tg=$(env_get TELEGRAM_BOT_TOKEN)
@@ -117,6 +129,7 @@ env_set LIVE_TRADING_ENABLED true
 [[ -n "$(env_get LIVE_MAX_POSITIONS)" ]] || env_set LIVE_MAX_POSITIONS 1
 [[ -n "$(env_get LIVE_MAX_TOTAL_USD)" ]] || env_set LIVE_MAX_TOTAL_USD 2000
 if [[ "$who" == 1 ]]; then env_set LIVE_WALLETS "$wallet"; else env_set LIVE_WALLETS '*'; fi
+env_set LIVE_TELEGRAM_IDS "$tg_ids"
 env_set DEFAULT_VAULT_MODE live
 env_set NEXT_PUBLIC_DEFAULT_VAULT_MODE live
 if [[ -n "$tg" ]]; then env_set TELEGRAM_BOT_TOKEN "$tg"; env_set TELEGRAM_BOT_USERNAME "$tg_user"; fi
@@ -163,6 +176,7 @@ Langkah berikutnya:
   2. Deposit kecil dulu: 0,3 SOL (biaya & sewa) + \$50–200.
   3. Tunggu agent menambah LP (lihat Activity atau Telegram), lalu uji Withdraw.
 $( [[ -n "$tg" ]] && echo "  4. Telegram: Strategy → nyalakan \"Telegram alerts\" → tekan Start di @${tg_user}." )
+$( [[ -n "$tg" ]] && echo "     Atau tanpa website: buka @${tg_user} → /start → 🆕 Create wallet." )
 $( [[ "$who" == 1 ]] && echo "  Setelah uji lancar, buka untuk semua orang: jalankan script ini lagi dan pilih 2." )
 
 Rem darurat (hentikan semua transaksi):

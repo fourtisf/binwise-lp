@@ -1,9 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createVault, ensureUser, getDb } from '@binwise/db';
-import { PaperExecutor, type Holdings } from '@binwise/chain';
+import { PaperExecutor, SOL_MINT, createAgentKey, type Holdings } from '@binwise/chain';
+import { Keypair } from '@solana/web3.js';
+import { randomBytes } from 'node:crypto';
 import { collectOnce, DEFAULT_COLLECTOR } from './collector';
 import { runManualAction, runManualDeploy, type AgentDeps, type VaultWithStrategy } from './agent';
-import { makeBot, proposalMessage, resultMessage, type ManualRequest } from './bot';
+import { makeBot, memoryChatState, proposalMessage, resultMessage, type ManualRequest } from './bot';
+import { runWithdraw, type WithdrawChain } from './wallet';
 import type { Keyboard, TelegramApi, TgUpdate } from './telegram';
 import { FakeMeteora, POOL, USDC, asMeteora, resetDb } from './test-helpers';
 
@@ -17,12 +20,37 @@ let answers: string[];
 let updateId = 0;
 const usedKeys = new Set<string>();
 
+const KEY_SECRET = randomBytes(32).toString('base64');
+let deleted: number[];
+let chatState = memoryChatState();
+let liveOk = true;
+let walletBalances: Record<string, number> = {};
 const tg: TelegramApi = {
-  send: async (chatId, text, o) => void sent.push({ chatId, text, keyboard: o?.keyboard }),
+  send: async (chatId, text, o) => {
+    sent.push({ chatId, text, keyboard: o?.keyboard });
+    return 900 + sent.length;
+  },
   edit: async (chatId, messageId, text, o) => void sent.push({ chatId, text, keyboard: o?.keyboard, messageId }),
   answer: async (_id, text) => void answers.push(text ?? ''),
 };
-const bot = () => makeBot({ db, tg, enqueue: async (_v, r) => void queue.push(r), appUrl: 'https://binwise.org', now: () => now });
+const bot = () =>
+  makeBot({
+    db,
+    tg,
+    enqueue: async (_v, r) => void queue.push(r),
+    appUrl: 'https://binwise.org',
+    now: () => now,
+    balances: async () => walletBalances,
+    newWallet: () => {
+      const k = createAgentKey(KEY_SECRET);
+      return { pubkey: k.pubkey, encSecret: new Uint8Array(k.encSecret) };
+    },
+    exportKey: async () => 'SECRET-KEY-BASE58',
+    deleteMessage: async (_c, id) => void deleted.push(id),
+    liveAllowed: () => liveOk,
+    state: chatState,
+    keyMessageMs: 5,
+  });
 const say = (text: string, chatType: 'private' | 'group' = 'private') =>
   bot()({ update_id: ++updateId, message: { message_id: updateId, chat: { id: CHAT, type: chatType }, text } } as TgUpdate);
 const press = (data: string, messageId = 77) =>
@@ -57,6 +85,10 @@ beforeEach(async () => {
   queue = [];
   sent = [];
   answers = [];
+  deleted = [];
+  chatState = memoryChatState();
+  liveOk = true;
+  walletBalances = {};
   usedKeys.clear();
   now = Date.UTC(2026, 9, 10, 12);
   const user = await ensureUser(db, 'Wallet1111111111111111111111111111111111111');
@@ -76,7 +108,7 @@ describe('telegram bot', () => {
     expect(last().text).toMatch(/isn't connected to a vault yet/);
     await say('/start code123');
     expect(last().text).toMatch(/^✅ Connected/);
-    expect(buttons().map((b) => b.text)).toEqual(['📊 Status', '➕ Add LP', '💼 Positions', '🗳 Approvals', '🤖 Mode: Auto', '⏸ Pause agent', '🌐 Open app']);
+    expect(buttons().map((b) => b.text)).toEqual(['📊 Status', '➕ Add LP', '💼 Positions', '💳 Wallet', '🗳 Approvals', '🤖 Mode: Auto', '⏸ Pause agent', '🌐 Open app']);
     expect(callbackOf('🤖 Mode: Auto')).toBe('mode|manual');
     // The code works once.
     await say('/start code123');
@@ -224,5 +256,138 @@ describe('telegram bot', () => {
     await say('/status');
     expect(last().text).toMatch(/Value: <b>\$10,000<\/b>/);
     expect(last().text).toMatch(/Net vs holding: <b>\+0\.00%<\/b>/);
+  });
+
+  it('creates a wallet in the chat: live vault, deposit address, no website needed', async () => {
+    await say('/start');
+    expect(last().text).toMatch(/isn't connected to a vault yet/);
+    expect(callbackOf('🆕 Create wallet')).toBe('cw');
+    await press('cw');
+    expect(last().text).toMatch(/real funds/);
+    expect(last().text).toMatch(/No strategy is guaranteed to profit/);
+    walletBalances = { [SOL_MINT]: 0.05 };
+    await press('cwx');
+    expect(last().text).toMatch(/Wallet created/);
+    const user = await db.user.findFirstOrThrow({ where: { telegramChatId: String(CHAT) } });
+    const v = await db.vault.findFirstOrThrow({ where: { userId: user.id } });
+    expect(v.mode).toBe('live');
+    // The wallet is its own owner: deposits from anywhere count, withdrawals go where its owner says.
+    expect(user.wallet).toBe(v.agentPubkey);
+    expect(v.encSecret).not.toBeNull();
+    expect(last().text).toContain(`<code>${v.agentPubkey}</code>`);
+    expect(last().text).toMatch(/Needs at least 0.3 SOL/);
+    // A second tap doesn't make a second wallet.
+    await press('cwx');
+    expect(await db.vault.count({ where: { userId: user.id } })).toBe(1);
+    // It can't be unlinked (this chat is the only way to reach it).
+    await say('/unlink');
+    expect(last().text).toMatch(/stays connected/);
+    expect(await db.user.count({ where: { telegramChatId: String(CHAT) } })).toBe(1);
+    // Linking a website wallet here would cut it off: refused.
+    await say('/start code123');
+    expect(last().text).toMatch(/already has a Binwise wallet/);
+  });
+
+  it("doesn't create wallets while live is limited to other users, and shows the Telegram id to allow", async () => {
+    liveOk = false;
+    await press('cw');
+    expect(last().text).toMatch(/isn't open yet/);
+    expect(last().text).toContain(`<code>${CHAT}</code>`);
+    await press('cwx');
+    expect(await db.user.count({ where: { telegramChatId: String(CHAT) } })).toBe(0);
+  });
+
+  it('shows the private key only after a warning, then deletes the message', async () => {
+    await press('cwx');
+    await press('wal');
+    await press('key');
+    expect(last().text).toMatch(/Anyone with this key controls the wallet/);
+    expect(sent.some((m) => m.text.includes('SECRET-KEY-BASE58'))).toBe(false);
+    await press('keyx');
+    const keyMsg = sent.find((m) => m.text.includes('SECRET-KEY-BASE58'))!;
+    expect(keyMsg.text).toMatch(/<tg-spoiler><code>SECRET-KEY-BASE58<\/code><\/tg-spoiler>/);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(deleted).toEqual([900 + sent.indexOf(keyMsg) + 1]);
+    // Logged for the owner, without the key.
+    const d = await db.decision.findFirstOrThrow({ where: { title: 'Private key shown' } });
+    expect(JSON.stringify(d)).not.toContain('SECRET');
+  });
+
+  it('paper vaults have no wallet to show', async () => {
+    await say('/start code123');
+    await press('wal');
+    expect(last().text).toMatch(/simulated money/);
+    await press('keyx');
+    expect(sent.some((m) => m.text.includes('SECRET-KEY-BASE58'))).toBe(false);
+  });
+
+  it('withdraws from a bot wallet to a pasted address, once', async () => {
+    await press('cwx');
+    walletBalances = { [SOL_MINT]: 2, [USDC]: 50 };
+    await press('wd');
+    expect(buttons().map((b) => b.text)).toEqual(['SOL · 2', 'USDC · 50', '⬅️ Wallet']);
+    await press(`wt|${SOL_MINT}`);
+    await press(`wp|${SOL_MINT}|50`);
+    expect(last().text).toMatch(/Paste the Solana address/);
+    await say('not-an-address');
+    expect(last().text).toMatch(/isn't a Solana wallet address/);
+    const dest = Keypair.generate().publicKey.toBase58();
+    await say(dest);
+    expect(last().text).toMatch(/Withdraw <b>50%<\/b> of the idle <b>SOL<\/b>/);
+    expect(last().text).toContain(dest);
+    await press('wx', 88);
+    expect(queue).toEqual([{ id: `tg-${CHAT}-88`, action: 'withdraw', mint: SOL_MINT, pct: 50, to: dest, chatId: String(CHAT) }]);
+    // The confirmation can't be used again.
+    await press('wx', 88);
+    expect(queue).toHaveLength(1);
+
+    // The agent sends it: half of the withdrawable SOL, to the typed address, baseline shrunk.
+    const v = await db.vault.findFirstOrThrow({ where: { mode: 'live' } });
+    await db.vault.update({ where: { id: v.id }, data: { deposits: { [SOL_MINT]: 2 } } });
+    await db.token.upsert({ where: { mint: SOL_MINT }, update: { priceUsd: 100 }, create: { mint: SOL_MINT, symbol: 'SOL', decimals: 9, priceUsd: 100, isVerified: true } });
+    const calls: { mint: string; amount: number; to: string; key: string }[] = [];
+    const used = new Set<string>();
+    const chainFor = async (_v: unknown, to: string): Promise<WithdrawChain> => ({
+      holdings: async () => ({ [USDC]: 50 }),
+      withdrawableSol: async () => 1.999,
+      withdraw: async (mint, amount, key) => {
+        if (used.has(key)) throw new (await import('@binwise/chain')).DuplicateAction('dup');
+        used.add(key);
+        calls.push({ mint, amount, to, key });
+        return 'SIG';
+      },
+    });
+    const wd = { db, killSwitch: { isKilled: async () => false }, chainFor, now: () => now };
+    const r = await runWithdraw(wd, v, { id: queue[0].id, mint: SOL_MINT, pct: 50, to: dest });
+    expect(calls).toEqual([{ mint: SOL_MINT, amount: 0.9995, to: dest, key: `withdraw:${queue[0].id}` }]);
+    expect(resultMessage(r)).toMatch(/^✅ Withdrew 0.9995 SOL/);
+    expect(((await db.vault.findUniqueOrThrow({ where: { id: v.id } })).deposits as Record<string, number>)[SOL_MINT]).toBeCloseTo(2 - 0.9995, 6);
+    expect(await runWithdraw(wd, v, { id: queue[0].id, mint: SOL_MINT, pct: 50, to: dest })).toBeNull();
+    // A bad address never reaches the chain; the kill switch stops everything.
+    await expect(runWithdraw(wd, v, { id: 'x', mint: SOL_MINT, pct: 100, to: 'nope' })).rejects.toThrow(/not a wallet address/);
+    await expect(runWithdraw({ ...wd, killSwitch: { isKilled: async () => true } }, v, { id: 'y', mint: SOL_MINT, pct: 100, to: dest })).rejects.toThrow(/halted/);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('website vaults withdraw only to the registered wallet, whatever the request says', async () => {
+    await say('/start code123');
+    const v = await vault();
+    const k = createAgentKey(KEY_SECRET);
+    await db.vault.update({ where: { id: v.id }, data: { mode: 'live', agentPubkey: k.pubkey, encSecret: new Uint8Array(k.encSecret) } });
+    walletBalances = { [SOL_MINT]: 1 };
+    await press(`wp|${SOL_MINT}|100`);
+    expect(last().text).toMatch(/This is your registered wallet/);
+    expect(last().text).toContain('Wallet1111111111111111111111111111111111111');
+    const tos: string[] = [];
+    const chainFor = async (_v: unknown, to: string): Promise<WithdrawChain> => ({
+      holdings: async () => ({}),
+      withdrawableSol: async () => 1,
+      withdraw: async () => {
+        tos.push(to);
+        return 'SIG';
+      },
+    });
+    await runWithdraw({ db, killSwitch: { isKilled: async () => false }, chainFor }, await vault(), { id: 'w1', mint: SOL_MINT, pct: 100, to: Keypair.generate().publicKey.toBase58() });
+    expect(tos).toEqual(['Wallet1111111111111111111111111111111111111']);
   });
 });

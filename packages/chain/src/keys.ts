@@ -1,5 +1,6 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
-import { Keypair } from '@solana/web3.js';
+import { Keypair, PublicKey } from '@solana/web3.js';
+import bs58 from 'bs58';
 
 /**
  * Agent keypair custody (CLAUDE.md §3): secrets are sealed with AES-256-GCM
@@ -50,5 +51,28 @@ export function loadAgentKey(encSecret: Uint8Array, secret?: string, expectedPub
     return kp;
   } finally {
     raw.fill(0);
+  }
+}
+
+/**
+ * The vault's private key in the format wallets import (base58, as Phantom and Solflare show it).
+ * Only for showing it to the vault's owner on request; never log or store the result.
+ */
+export function exportAgentSecret(encSecret: Uint8Array, expectedPubkey: string | null, secret?: string): string {
+  const sk = loadAgentKey(encSecret, secret, expectedPubkey).secretKey;
+  try {
+    return bs58.encode(sk);
+  } finally {
+    sk.fill(0);
+  }
+}
+
+/** A normal wallet address someone can send to (on the curve: not a program-owned address). */
+export function walletAddress(input: string): string | null {
+  try {
+    const pk = new PublicKey(input.trim());
+    return PublicKey.isOnCurve(pk.toBytes()) ? pk.toBase58() : null;
+  } catch {
+    return null;
   }
 }

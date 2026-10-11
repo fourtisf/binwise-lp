@@ -31,6 +31,7 @@ import {
   pendingProposals,
   proposalView,
   rejectProposal,
+  shrinkDeposits as shrinkDepositsOf,
   strategyData,
   type PrismaClient,
   type Vault,
@@ -184,15 +185,8 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     return Object.entries(amounts).reduce((s, [m, a]) => s + a * (tokens.find((t) => t.mint === m)?.priceUsd ?? 0), 0);
   }
 
-  /**
-   * After a withdrawal, shrink the hold baseline by the same share of its value, whatever token
-   * was withdrawn, so net vs hold isn't distorted by money taken out.
-   */
-  async function shrinkDeposits(deposits: Record<string, number>, withdrawnUsd: number) {
-    const holdUsd = await usdValue(deposits);
-    const k = holdUsd > 0 ? Math.max(0, 1 - withdrawnUsd / holdUsd) : 0;
-    return Object.fromEntries(Object.entries(deposits).map(([m, a]) => [m, a * k]));
-  }
+  /** See shrinkDeposits in @binwise/db. */
+  const shrinkDeposits = (deposits: Record<string, number>, withdrawnUsd: number) => shrinkDepositsOf(db, deposits, withdrawnUsd);
 
   const moneyLimit = { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } };
 

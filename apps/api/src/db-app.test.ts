@@ -99,6 +99,11 @@ describe('vaults', () => {
     expect(ds[0].title).toBe('Deposited 10.00 SOL');
     const over = await app.inject({ method: 'POST', url: `/vaults/${id}/deposit`, headers, payload: { token: 'SOL', amount: 1000 } });
     expect(over.json().message).toBe('Not enough SOL');
+    // Withdrawing half shrinks the hold baseline by half, so net vs hold isn't distorted.
+    const w = await app.inject({ method: 'POST', url: `/vaults/${id}/withdraw`, headers, payload: { token: 'SOL', amount: 5 } });
+    expect(w.statusCode).toBe(200);
+    const v = await db.vault.findUniqueOrThrow({ where: { id } });
+    expect(Object.values(v.deposits as Record<string, number>)[0]).toBeCloseTo(5);
   });
 
   it('saves a valid strategy and rejects an invalid one', async () => {

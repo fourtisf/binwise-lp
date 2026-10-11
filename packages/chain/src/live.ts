@@ -576,3 +576,20 @@ export class LiveExecutor implements Executor {
     }
   }
 }
+
+/** Everything a wallet holds, by mint (UI amounts; SOL and wrapped SOL together). For display only. */
+export async function walletBalances(conn: Connection, owner: string): Promise<Record<string, number>> {
+  const pk = new PublicKey(owner);
+  const [lamports, ...lists] = await Promise.all([
+    withRetry(() => conn.getBalance(pk), 2, 'getBalance'),
+    ...[TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID].map((programId) => withRetry(() => conn.getParsedTokenAccountsByOwner(pk, { programId }), 2, 'getParsedTokenAccountsByOwner')),
+  ]);
+  const out: Record<string, number> = { [NATIVE_MINT.toBase58()]: (lamports as number) / 1e9 };
+  for (const list of lists as Awaited<ReturnType<Connection['getParsedTokenAccountsByOwner']>>[])
+    for (const a of list.value) {
+      const info = a.account.data.parsed?.info;
+      const amt = Number(info?.tokenAmount?.uiAmount ?? 0);
+      if (info?.mint && amt > 0) out[info.mint] = (out[info.mint] ?? 0) + amt;
+    }
+  return out;
+}

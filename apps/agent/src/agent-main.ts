@@ -1,9 +1,10 @@
-import { JupiterClient } from '@binwise/chain';
+import { JupiterClient, createAgentKey, exportAgentSecret, makeConnection, walletBalances } from '@binwise/chain';
 import { getDb } from '@binwise/db';
 import { CYCLE_MS, runApprovedProposal, runManualAction, runManualDeploy, runVaultCycle, type ManualResult } from './agent';
-import { BOT_COMMANDS, makeBot, proposalMessage, resultMessage, type ManualRequest } from './bot';
+import { BOT_COMMANDS, makeBot, resultMessage, type ManualRequest } from './bot';
 import { KEYS, makeRedis, publish, withVaultLock } from './redis';
-import { makeAgentDeps } from './runtime';
+import { makeAgentDeps, makeWithdrawChain } from './runtime';
+import { runWithdraw } from './wallet';
 import { Telegram } from './telegram';
 import { tickOnce } from './ticker';
 
@@ -12,6 +13,7 @@ const db = getDb();
 const redis = makeRedis();
 const telegram = process.env.TELEGRAM_BOT_TOKEN ? new Telegram(process.env.TELEGRAM_BOT_TOKEN) : null;
 const deps = makeAgentDeps(redis, db, telegram);
+const withdrawChain = makeWithdrawChain(redis);
 const jupiter = new JupiterClient();
 const CONCURRENCY = Number(process.env.AGENT_CONCURRENCY ?? 4);
 
@@ -84,7 +86,9 @@ async function manualActions() {
               ? await runManualDeploy(deps, vault, req.poolId!, req.usd ?? 0, req.id)
               : req.action === 'proposal'
                 ? await runApprovedProposal(deps, vault, req.proposalId!, req.id)
-                : await runManualAction(deps, vault, req.positionId!, req.action, req.id);
+                : req.action === 'withdraw'
+                  ? await runWithdraw({ db, killSwitch: deps.killSwitch, chainFor: withdrawChain }, vault, { id: req.id, mint: req.mint!, pct: req.pct ?? 100, to: req.to })
+                  : await runManualAction(deps, vault, req.positionId!, req.action, req.id);
         } catch (e) {
           error = (e as Error).message;
           const verb = req.action === 'deploy' ? 'add LP' : req.action === 'proposal' ? 'carry out the approved trade' : req.action;
@@ -104,6 +108,21 @@ if (telegram) {
     enqueue: async (vaultId, req) => void (await redis.lpush(KEYS.actions(vaultId), JSON.stringify(req))),
     onPaused: async (v) => void (await publish(redis, v.id, { type: 'cycle', cycle: { cycle: v.cycle, step: -1, paused: true, intervalMs: CYCLE_MS, elapsedMs: 0, steps: [] } })),
     appUrl: `https://${process.env.PUBLIC_DOMAIN || 'binwise.org'}`,
+    balances: (address) => walletBalances(makeConnection(), address),
+    newWallet: () => {
+      const k = createAgentKey();
+      return { pubkey: k.pubkey, encSecret: new Uint8Array(k.encSecret) };
+    },
+    exportKey: async (v) => {
+      if (!v.encSecret) throw new Error('This vault has no agent wallet.');
+      return exportAgentSecret(v.encSecret, v.agentPubkey);
+    },
+    deleteMessage: (chatId, id) => telegram.deleteMessage(chatId, id),
+    state: {
+      get: (chatId) => redis.get(`binwise:tg:state:${chatId}`),
+      set: async (chatId, value, ttl) => void (await redis.set(`binwise:tg:state:${chatId}`, value, 'EX', ttl)),
+      del: async (chatId) => void (await redis.del(`binwise:tg:state:${chatId}`)),
+    },
   });
   telegram.setCommands(BOT_COMMANDS).catch((e) => console.error(`[telegram] ${(e as Error).message}`));
   void telegram.poll(bot, console.log);

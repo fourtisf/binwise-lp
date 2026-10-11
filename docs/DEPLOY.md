@@ -63,15 +63,29 @@ The site's NEXT_PUBLIC_* settings are baked in at build time; the install script
 
 ## Telegram bot
 
-One bot does alerts and control: 📊 Status, ➕ Add LP, 💼 Positions (claim / close), ⏸ Pause / ▶️ Resume.
+One bot does alerts and control: 📊 Status, ➕ Add LP, 💼 Positions (claim / close), 💳 Wallet (deposit, withdraw, private key), ⏸ Pause / ▶️ Resume.
 Add LP only offers pools that pass the agent's checks right now, asks for confirmation, respects the live limits,
-and the agent manages the position afterwards. The bot only answers private chats linked from the app.
+and the agent manages the position afterwards. The bot only answers private chats.
 
 1. In Telegram, open @BotFather → `/newbot` → pick a name and a username ending in `bot`. Copy the token.
 2. Put `TELEGRAM_BOT_TOKEN=<token>` and `TELEGRAM_BOT_USERNAME=<username without @>` in `.env`, then `sudo -u binwise pm2 restart all`.
 3. In the app: **Strategy** → turn on **Telegram alerts** → Telegram opens → press **Start**. The link code works for 15 minutes.
 
 To disconnect a chat, send `/unlink` to the bot.
+
+### Wallets created in the bot (no website needed)
+
+In an unlinked chat, **🆕 Create wallet** makes a new live vault with its own agent wallet, owned by that chat.
+**💳 Wallet** shows the deposit address and balance, **💸 Withdraw** sends idle funds to an address the user pastes
+(website vaults: only to their registered wallet), and **🔑 Private key** shows the key (base58, imports into Phantom)
+after a warning, in a message that deletes itself after 60 seconds. Showing the key is logged in Activity (never the key).
+
+- Deposits to a bot wallet count from any address (exchange or wallet).
+- Who may create one: everyone when `LIVE_WALLETS=*`; otherwise only Telegram ids in `LIVE_TELEGRAM_IDS`
+  (comma-separated; `/id` in the bot shows it; `deploy/go-live.sh` asks for it with option 1).
+- A bot wallet can't be unlinked from its chat (that chat is how its owner reaches it).
+- Moving funds out with the key in another wallet works, but the agent sees it as a drop in value and may close
+  positions and pause; 💸 Withdraw keeps the numbers right.
 
 ## 3. Backtest report (build step 4)
 

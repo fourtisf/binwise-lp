@@ -33,7 +33,8 @@ export interface TgUpdate {
 
 /** What the bot needs from Telegram; tests swap in a fake. */
 export interface TelegramApi {
-  send(chatId: string, text: string, opts?: { html?: boolean; keyboard?: Keyboard }): Promise<void>;
+  /** Returns the new message's id when Telegram reports it. */
+  send(chatId: string, text: string, opts?: { html?: boolean; keyboard?: Keyboard }): Promise<number | void>;
   edit(chatId: string, messageId: number, text: string, opts?: { html?: boolean; keyboard?: Keyboard }): Promise<void>;
   answer(callbackId: string, text?: string): Promise<void>;
 }
@@ -67,8 +68,13 @@ export class Telegram implements TelegramApi {
     };
   }
 
-  async send(chatId: string, text: string, opts?: { html?: boolean; keyboard?: Keyboard }) {
-    await this.call('sendMessage', { chat_id: chatId, ...Telegram.body(text, opts) });
+  async send(chatId: string, text: string, opts?: { html?: boolean; keyboard?: Keyboard }): Promise<number | void> {
+    const r = await this.call<{ message_id: number }>('sendMessage', { chat_id: chatId, ...Telegram.body(text, opts) });
+    return r.result?.message_id;
+  }
+
+  async deleteMessage(chatId: string, messageId: number) {
+    await this.call('deleteMessage', { chat_id: chatId, message_id: messageId });
   }
 
   async edit(chatId: string, messageId: number, text: string, opts?: { html?: boolean; keyboard?: Keyboard }) {
