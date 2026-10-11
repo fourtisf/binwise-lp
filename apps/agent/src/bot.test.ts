@@ -468,10 +468,15 @@ describe('telegram bot', () => {
     const st = await db.strategy.findFirstOrThrow();
     expect(st.profile).toBe('conservative');
     expect(st.maxPositionUsd).toBe(1250);
+    await press('sc|100');
+    expect((await db.strategy.findFirstOrThrow()).minMcap).toBe(100);
+    expect(last().text).toMatch(/Minimum token market cap: <b>\$100M<\/b>/);
+    await press('sc|7'); // not an offered value
+    expect((await db.strategy.findFirstOrThrow()).minMcap).toBe(100);
     await press('sa|40');
     expect((await db.strategy.findFirstOrThrow()).maxAllocPct).toBe(40);
     await press('sm|0');
     expect((await db.strategy.findFirstOrThrow()).maxPositionUsd).toBe(0);
-    expect(await db.decision.count({ where: { title: 'Strategy updated' } })).toBe(5);
+    expect(await db.decision.count({ where: { title: 'Strategy updated' } })).toBe(6);
   });
 });

@@ -370,6 +370,9 @@ export function makeBot(d: BotDeps) {
   const PROFILE_LABEL: Record<RiskProfile, string> = { conservative: '🛡 Conservative', balanced: '⚖️ Balanced', aggressive: '🔥 Aggressive' };
   const CAP_OPTIONS = [25, 50, 100, 250, 500, 1000, 5000];
   const POOL_PCTS = [10, 25, 40, 60].filter((p) => p >= STRATEGY_LIMITS.maxAllocPct[0] && p <= STRATEGY_LIMITS.maxAllocPct[1]);
+  /** Minimum token market cap choices, $M */
+  const MCAPS = [50, 100, 250, 500, 1000, 2000].filter((m) => m >= STRATEGY_LIMITS.minMcapM[0] && m <= STRATEGY_LIMITS.minMcapM[1]);
+  const mcapText = (m: number) => (m >= 1000 ? `$${m / 1000}B` : `$${m}M`);
 
   function settings(c: Ctx): Screen {
     if (!c.vault.strategy) return welcome(c);
@@ -381,9 +384,11 @@ export function makeBot(d: BotDeps) {
         `Risk: <b>${PROFILE_LABEL[st.profile]}</b>\n` +
         `Max per position: <b>${st.maxPositionUsd > 0 ? usd(st.maxPositionUsd) : 'no cap (by pool share)'}</b>\n` +
         `Max share of the vault in one pool: <b>${st.maxAllocPct}%</b>\n` +
+        `Minimum token market cap: <b>${mcapText(st.minMcapM)}</b>\n` +
         `Exit when the 7-day trend is below: <b>−${Math.abs(st.trendExitPct)}%</b>\n` +
         `Daily loss stop: <b>${st.dailyStopPct}%</b>\n\n` +
         `The agent never puts more than the max per position into one pool, and never more than the pool share. ` +
+        `Tokens below the minimum market cap show as "Below cap floor" and are skipped (smaller caps swing harder). ` +
         `Risk sets the pools it picks and how tight it trades.`,
       keyboard: [
         (Object.keys(PROFILE_LABEL) as RiskProfile[]).map((p) => ({ text: tick(st.profile === p, PROFILE_LABEL[p]), callback_data: `sr|${p}` })),
@@ -394,6 +399,8 @@ export function makeBot(d: BotDeps) {
         ],
         [{ text: '✏️ Type an amount', callback_data: 'smx' }],
         POOL_PCTS.map((p) => ({ text: tick(st.maxAllocPct === p, `${p}% per pool`), callback_data: `sa|${p}` })),
+        MCAPS.slice(0, 3).map((m) => ({ text: tick(st.minMcapM === m, `Min cap ${mcapText(m)}`), callback_data: `sc|${m}` })),
+        MCAPS.slice(3).map((m) => ({ text: tick(st.minMcapM === m, `Min cap ${mcapText(m)}`), callback_data: `sc|${m}` })),
         [{ text: '⬅️ Menu', callback_data: 'menu' }],
       ],
     };
@@ -807,6 +814,12 @@ export function makeBot(d: BotDeps) {
       case 'smx':
         await state.set(chatId, 'maxusd', 600);
         return show({ text: '✏️ Send the most the agent may put into <b>one position</b>, in dollars (e.g. <code>150</code>). Send 0 for no cap.', keyboard: [[{ text: '✖️ Cancel', callback_data: 'set' }]] });
+      case 'sc': {
+        const m = Number(a);
+        const [lo, hi] = STRATEGY_LIMITS.minMcapM;
+        if (!(m >= lo && m <= hi) || !c.vault.strategy) return show(settings(c));
+        return show(settings(await saveSettings(c, { minMcapM: m }, `Minimum market cap ${mcapText(m)}`)), 'Saved');
+      }
       case 'sa': {
         const pct = Number(a);
         const [lo, hi] = STRATEGY_LIMITS.maxAllocPct;
