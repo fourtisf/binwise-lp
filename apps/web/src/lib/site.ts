@@ -5,9 +5,8 @@
 export const LIVE_DEFAULT = process.env.NEXT_PUBLIC_DEFAULT_VAULT_MODE === 'live';
 
 /**
- * Wallet sign-in and deposits on the website. Off (default): vaults are created, funded and managed
- * in the Telegram bot; the website shows pools, the agent and its decisions. NEXT_PUBLIC_WALLET_LOGIN=true
- * turns the wallet flow back on.
+ * Wallet sign-in and deposits on the website (on by default). NEXT_PUBLIC_WALLET_LOGIN=false hides
+ * them and points visitors to the Telegram bot instead.
  */
-export const WALLET_LOGIN = process.env.NEXT_PUBLIC_WALLET_LOGIN === 'true';
+export const WALLET_LOGIN = process.env.NEXT_PUBLIC_WALLET_LOGIN !== 'false';
 export const BOT_URL = `https://t.me/${process.env.NEXT_PUBLIC_TELEGRAM_BOT || 'binwiselpbot'}`;

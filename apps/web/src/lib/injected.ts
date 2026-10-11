@@ -58,3 +58,31 @@ export async function sendInjected(p: InjectedSolana, tx: Transaction): Promise<
   const r = await p.signAndSendTransaction(tx);
   return typeof r === 'string' ? r : r.signature;
 }
+
+/**
+ * Which extension really answers as `window.phantom.solana`. Bitget, Trust, OKX and others can take
+ * over Phantom's slot ("use as default" settings); requests then reach the wrong wallet and fail.
+ */
+export function impostorOf(p: object | null | undefined): string | null {
+  const f = (p ?? {}) as Record<string, unknown>;
+  if (f.isBitKeep || f.isBitget || f.isBitgetWallet) return 'Bitget Wallet';
+  if (f.isTrust || f.isTrustWallet) return 'Trust Wallet';
+  if (f.isOkxWallet || f.isOKExWallet) return 'OKX Wallet';
+  if (f.isCoinbaseWallet) return 'Coinbase Wallet';
+  if (f.isMetaMask) return 'MetaMask';
+  if (f.isSolflare) return 'Solflare';
+  if (f.isBackpack) return 'Backpack';
+  return null;
+}
+
+/** What answers as Phantom on this page, for the console and error messages. */
+export function phantomDiagnostics(): string {
+  if (typeof window === 'undefined') return '';
+  const w = window as unknown as { phantom?: { solana?: object }; solana?: object };
+  const p = w.phantom?.solana;
+  const parts = [
+    p ? `window.phantom.solana from ${impostorOf(p) ?? 'Phantom'}` : 'no window.phantom.solana',
+    w.solana ? `window.solana from ${impostorOf(w.solana) ?? 'Phantom'}` : 'no window.solana',
+  ];
+  return parts.join(', ');
+}

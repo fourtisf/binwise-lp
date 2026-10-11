@@ -4,7 +4,7 @@ import { ConnectionProvider, WalletProvider, useWallet } from '@solana/wallet-ad
 import { WalletReadyState, type WalletError, type WalletName } from '@solana/wallet-adapter-base';
 import bs58 from 'bs58';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { connectInjected, injectedFor, signMessageInjected } from '@/lib/injected';
+import { connectInjected, impostorOf, injectedFor, phantomDiagnostics, signMessageInjected } from '@/lib/injected';
 import { useAppData } from '@/lib/store';
 import { useUi } from '@/lib/ui';
 import { Icon } from '../Sprite';
@@ -85,8 +85,8 @@ export function ConnectModal() {
   const friendly = (m: string) =>
     /rejected|cancel|denied/i.test(m)
       ? 'cancelled in the wallet. Try again and approve the request.'
-      : /unexpected|internal/i.test(m)
-        ? `${m}. Unlock the wallet, close any other open wallet popups, and try again (if several wallet extensions are installed, try disabling the ones you don't use).`
+      : /unexpected|internal|-32603/i.test(m)
+        ? `${m}. The wallet itself refused (internal error). Most often another wallet extension (Trust, Bitget, MetaMask) is interfering: turn the others off in chrome://extensions, reload, and connect again. Also check Phantom → Settings → Connected apps and remove binwise.org.`
         : m;
 
   /** Sign-in through the wallet's own injected provider (window.phantom.solana, …). */
@@ -107,8 +107,13 @@ export function ConnectModal() {
         toast(`Signed in as ${shortWallet(address)}`);
         reload();
       } catch (e) {
-        console.error('[binwise] classic wallet API', e);
-        toast(`${step} (classic API${codeOf(e)}): ${friendly((e as Error)?.message || 'cancelled')}`);
+        console.error('[binwise] classic wallet API', e, '|', phantomDiagnostics());
+        const thief = /phantom/i.test(name) ? impostorOf(p) : null;
+        toast(
+          thief
+            ? `${thief} is answering in place of Phantom on this page, so Phantom never sees the request. Turn off "${thief}" in chrome://extensions (or its "use as default wallet" setting), reload, and connect again.`
+            : `${step} (classic API${codeOf(e)}): ${friendly((e as Error)?.message || 'cancelled')}`,
+        );
       }
       return true;
     },
