@@ -542,6 +542,12 @@ describe('add LP by hand: options and funding from the wallet', () => {
     expect(detail.lp).toMatchObject({ price: 150, binStep: 25, maxBins: 69 });
     expect(['spot', 'curve', 'bidask']).toContain(detail.lp.shape);
     expect(detail.lp.binsEachSide).toBeGreaterThan(0);
+    // Mints come along even for tokens missing from the token table: the app searches pools by contract address.
+    const NEW = 'NewTokenMint11111111111111111111111111111111';
+    await db.pool.create({ data: { id: 'PL9', name: 'NEW-USDC', tokenA: 'NEW', tokenB: 'USDC', mintA: NEW, mintB: USDC, binStep: 25, baseFee: 0.1 } });
+    await db.poolSnapshot.create({ data: { poolId: 'PL9', tvl: 1e6, volume24h: 2e6, price: 1, volatility: 3, score: 50, scoreBreakdown: [], call: 'watch', callLabel: 'Watch', reason: 'ok' } });
+    const unknown = (await app.inject({ url: `/pools/PL9?vault=${id}`, headers })).json();
+    expect([unknown.tokenA.mint, unknown.tokenB.mint]).toEqual([NEW, USDC]);
 
     const ok = await app.inject({ method: 'POST', url: `/vaults/${id}/deploy`, headers, payload: { poolId: 'PL1', usd: 50, shape: 'curve', range: { below: 10, above: 4 } } });
     expect(ok.statusCode).toBe(202);

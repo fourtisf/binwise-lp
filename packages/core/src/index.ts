@@ -8,5 +8,6 @@ export * from './rules';
 export * from './backtest';
 export * from './keys';
 export * from './risk';
+export * from './search';
 export * from './optimize';
 export * from './universe';

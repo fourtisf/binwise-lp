@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import type { AgentCall, PoolRow } from '@binwise/core';
+import { poolMatches, type AgentCall, type PoolRow } from '@binwise/core';
 import { Chips } from '@/components/Chips';
 import { Icon } from '@/components/Sprite';
 import { PairIcon } from '@/components/Tokens';
@@ -25,7 +25,7 @@ export default function PoolsPage() {
   const [q, setQ] = useState('');
   const cnt = (k: AgentCall) => pools.filter((r) => r.call === k).length;
   const rows = pools
-    .filter((r) => (filter === 'all' || (filter === 'rec' ? recommended(r) : r.call === filter)) && r.pair.toLowerCase().includes(q))
+    .filter((r) => (filter === 'all' || (filter === 'rec' ? recommended(r) : r.call === filter)) && poolMatches(r, q))
     .sort((a, b) => b.score - a.score);
 
   return (
@@ -47,9 +47,9 @@ export default function PoolsPage() {
           <Icon id="i-search" />
           <input
             id="poolSearch"
-            placeholder="Filter by token"
-            aria-label="Filter pools"
-            onChange={(e) => setQ(e.target.value.toLowerCase().trim())}
+            placeholder="Ticker or contract address"
+            aria-label="Filter pools by ticker or contract address"
+            onChange={(e) => setQ(e.target.value)}
           />
         </label>
       </div>

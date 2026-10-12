@@ -103,8 +103,9 @@ async function row(s: SnapshotWithPool, tokens: Map<string, Token>, strategy: St
   return {
     id: s.poolId,
     pair: `${s.pool.tokenA} / ${s.pool.tokenB}`,
-    tokenA: tokenRef(s.pool.tokenA, tokens.get(s.pool.mintA)),
-    tokenB: tokenRef(s.pool.tokenB, tokens.get(s.pool.mintB)),
+    // The mints always come along, even for tokens not in our table: the app searches pools by contract address.
+    tokenA: tokenRef(s.pool.tokenA, tokens.get(s.pool.mintA) ?? { mint: s.pool.mintA, logoUrl: null }),
+    tokenB: tokenRef(s.pool.tokenB, tokens.get(s.pool.mintB) ?? { mint: s.pool.mintB, logoUrl: null }),
     tvl: s.tvl,
     volume24h: s.volume24h,
     volTvl: s.tvl > 0 ? s.volume24h / s.tvl : 0,

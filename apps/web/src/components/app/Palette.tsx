@@ -1,6 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
+import { poolMatches } from '@binwise/core';
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { BOT_URL, LIVE_DEFAULT, WALLET_LOGIN } from '@/lib/site';
 import { useAppData } from '@/lib/store';
@@ -14,6 +15,8 @@ interface Cmd {
   icon: IconId;
   run: () => void;
   hint?: string;
+  /** Own matching (pools: ticker or contract address) instead of the label */
+  match?: (q: string) => boolean;
 }
 
 /** ⌘K command menu: jump to pages, run actions, open a pool. */
@@ -69,6 +72,7 @@ export function Palette() {
         label: x.pair,
         icon: 'i-pools' as IconId,
         hint: `Score ${x.score}`,
+        match: (s: string) => poolMatches(x, s),
         run: () => {
           router.push('/app/pools');
           openPool(x.id);
@@ -76,7 +80,7 @@ export function Palette() {
       })),
     ];
     const s = q.toLowerCase().trim();
-    return cmds.filter((c) => !s || c.label.toLowerCase().includes(s) || c.group.toLowerCase().includes(s));
+    return cmds.filter((c) => !s || (c.match ? c.match(q) : c.label.toLowerCase().includes(s)) || c.group.toLowerCase().includes(s));
   }, [q, pools, paused, paper, router, openPool, togglePause, setMode, client, me, reload, toast, openConnect]);
 
   useEffect(() => {
@@ -167,7 +171,7 @@ export function Palette() {
             );
           })
         ) : (
-          <div className="pempty">No results. Try a token like JUP or a page like Pools.</div>
+          <div className="pempty">No results. Try a ticker like JUP, a contract address, or a page like Pools.</div>
         )}
       </div>
       <div className="pfoot">
