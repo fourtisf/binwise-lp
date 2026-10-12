@@ -18,7 +18,7 @@ import { usd } from '@/lib/format';
 import { BOT_URL } from '@/lib/site';
 import { useAppData } from '@/lib/store';
 import { useUi } from '@/lib/ui';
-import { SignInError, sendWithWallet, walletFor } from '@/lib/wallets';
+import { SignInError, rememberWallet, sendWithWallet, walletFor, type Wallet } from '@/lib/wallets';
 import { Icon } from '../Sprite';
 import { Tok } from '../Tokens';
 import { LpRecommend, RecDot } from './LpRecommend';
@@ -87,6 +87,8 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
   const [payS, setPayS] = useState('');
   const [moving, setMoving] = useState(false);
   const [moveErr, setMoveErr] = useState<string | null>(null);
+  /** The wallet the owner picked to approve transfers in, when several are installed */
+  const [walletPick, setWalletPick] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
 
   // A new pool starts on the recommendation; the side is set once its Add LP data arrives.
@@ -312,7 +314,7 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
   const neededUsd = want > 0 && bal ? Math.max(0, neededIdle - bal.availableUsd) : 0;
   const suggestSol = wallet && wallet.solPriceUsd > 0 && neededUsd > 0 ? Math.min(movable, Math.ceil((neededUsd / wallet.solPriceUsd + reserveShort) * 1000) / 1000) : 0;
   /** Sends `sol` from the owner's wallet to the vault and waits until the API has checked it on-chain. */
-  const sendSol = async (sol: number, w: NonNullable<ReturnType<typeof walletFor>>): Promise<boolean> => {
+  const sendSol = async (sol: number, w: Wallet): Promise<boolean> => {
     const { tx } = await client!.depositTx(sol);
     // If the wallet can sign but not send (Phantom's "Unexpected error"), Binwise sends it: only this transfer to the vault.
     const signature = await sendWithWallet(w, me!.wallet, fromBase64(tx), async (signed) => (await client!.depositSend(toBase64(signed))).signature);
@@ -334,15 +336,48 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
         ? `Cancelled in ${name}. Nothing was sent.`
         : e.kind === 'pending'
           ? `${name} already has a request open. Finish or close it, then try again.`
-          : e.message
+          : e.kind === 'wallet' && wallets.length > 1
+            ? `Signed in with another wallet? Pick it under “Approve in”.\n${e.message}`
+            : e.message
       : e instanceof ApiError
         ? e.message
         : 'Something went wrong. Nothing was sent; try again.';
+  /** Where transfers are approved: the wallet picked here, else the one used to sign in (see walletFor). */
+  const approver = wallets.find((w) => w.name === walletPick) ?? (me ? walletFor(wallets, me.wallet) : null);
   /** The wallet to approve with, or why there is none. */
   const pickWallet = (sol: number) => {
     if (!(sol > 0) || sol > movable) return `Enter up to ${amount(movable)} SOL (a little stays for the network fee).`;
-    return walletFor(wallets, me!.wallet) ?? 'No wallet found in this browser. Open this page where you signed in (Phantom, Solflare or Backpack).';
+    if (!wallets.length) return 'No wallet found in this browser. Open this page where you signed in (Phantom, Solflare, Backpack or Bitget).';
+    return approver ?? 'Pick the wallet you signed in with under “Approve in”.';
   };
+  /** With several wallets installed: which one approves the transfer (the one holding the signed-in account). */
+  const approveIn = wallets.length > 1 && me && (
+    <>
+      <span style={label}>Approve in</span>
+      <div className="seg" style={{ ...segFull, flexWrap: 'wrap' }} role="group" aria-label="Wallet to approve in">
+        {wallets.map((w) => (
+          <button
+            key={w.name}
+            style={{ ...segBtn, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, whiteSpace: 'nowrap' }}
+            aria-pressed={approver?.name === w.name}
+            disabled={moving}
+            onClick={() => {
+              setWalletPick(w.name);
+              rememberWallet(w.name);
+              setMoveErr(null);
+            }}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            {w.icon && <img src={w.icon} alt="" style={{ width: 16, height: 16, borderRadius: 4 }} />}
+            {w.name}
+          </button>
+        ))}
+      </div>
+      <p className="muted" style={{ fontSize: 12, lineHeight: 1.5, marginTop: 6 }}>
+        The wallet you signed in with ({me.wallet.slice(0, 4)}…{me.wallet.slice(-4)}).
+      </p>
+    </>
+  );
   const move = async () => {
     const sol = Number(moveS);
     setMoveErr(null);
@@ -519,13 +554,14 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
           <p className="muted" style={{ fontSize: 12, lineHeight: 1.5, marginTop: 8 }}>
             You approve the transfer in your wallet. The vault keeps {VAULT_RESERVE_SOL} SOL for network fees{reserveShort > 0 ? ' (not there yet)' : ''}; the rest can go into LP.
           </p>
+          {approveIn}
           {moveErr && (
             <p className="down" style={{ fontSize: 12.5, lineHeight: 1.5, marginTop: 8, whiteSpace: 'pre-line' }}>
               {moveErr}
             </p>
           )}
           <button className="btn btn-dark btn-sm" style={{ width: '100%', marginTop: 10 }} disabled={moving || !(Number(moveS) > 0)} onClick={move}>
-            {moving ? 'Approve in your wallet…' : `Move ${Number(moveS) > 0 ? amount(Number(moveS)) + ' ' : ''}SOL to the vault`}
+            {moving ? `Approve in ${approver?.name ?? 'your wallet'}…` : `Move ${Number(moveS) > 0 ? amount(Number(moveS)) + ' ' : ''}SOL to the vault`}
           </button>
         </div>
       )}
@@ -678,6 +714,7 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
               That adds about {usd(payLpUsd, 2)} of LP; the minimum is {usd(lim.minUsd)}.{reserveShort > 0 ? ` ${VAULT_RESERVE_SOL} SOL of it stays in the vault for network fees.` : ''}
             </p>
           )}
+          {approveIn}
           {moveErr && (
             <p className="down" style={{ fontSize: 12.5, lineHeight: 1.5, marginTop: 8, whiteSpace: 'pre-line' }}>
               {moveErr}
@@ -824,7 +861,7 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
         <Icon id="i-plus" />
         {payMode
           ? moving
-            ? 'Approve in your wallet…'
+            ? `Approve in ${approver?.name ?? 'your wallet'}…`
             : `Swap & add LP${paySol > 0 ? ` with ${amount(paySol)} SOL` : ''}`
           : swaps && !blocked && swaps.out.length
             ? `Swap & add LP to ${x.pair}`

@@ -203,9 +203,12 @@ const remembered = () => {
   }
 };
 
-/** The wallet to ask for `owner`'s approval: the one used to sign in, else one already showing that account. */
+/**
+ * The wallet to ask for `owner`'s approval: the one used to sign in, else one already showing that account,
+ * else the only one installed. Null when several are installed and none of that is known: the user picks.
+ */
 export const walletFor = (wallets: Wallet[], owner: string) =>
-  wallets.find((w) => w.name === remembered()) ?? wallets.find((w) => w.accounts.some((a) => a.address === owner)) ?? wallets[0] ?? null;
+  wallets.find((w) => w.name === remembered()) ?? wallets.find((w) => w.accounts.some((a) => a.address === owner)) ?? (wallets.length === 1 ? wallets[0] : null);
 
 /** Broadcasts a transaction the wallet signed but didn't send (base64 → Binwise → Solana); returns its signature. */
 export type Relay = (signed: Uint8Array) => Promise<string>;
@@ -218,13 +221,14 @@ export type Relay = (signed: Uint8Array) => Promise<string>;
  * 2. Sign only, and `relay` sends it: Phantom's own sending can fail with "Unexpected error" (-32603).
  * 3. and 4. The same two through the wallet's classic API.
  *
+ * Each API connects first (it must show the signed-in account); if that fails, its two ways are skipped.
  * Returns the signature (base58). A "no", an open request, the wallet being on another account or a
  * Binwise error (the relay refusing) stops right there.
  */
 export async function sendWithWallet(w: Wallet, owner: string, tx: Uint8Array, relay?: Relay): Promise<string> {
   const tried: string[] = [];
   const wrongAccount = () => new SignInError('account', `Switch ${w.name} to the account you signed in with (${owner.slice(0, 4)}…${owner.slice(-4)}), then try again.`);
-  const attempt = async (label: string, run: () => Promise<string>): Promise<string | null> => {
+  const attempt = async <T,>(label: string, run: () => Promise<T>): Promise<T | null> => {
     try {
       return await run();
     } catch (e) {
@@ -236,48 +240,55 @@ export async function sendWithWallet(w: Wallet, owner: string, tx: Uint8Array, r
       return null;
     }
   };
-  const standardAccount = async () => {
-    const accounts = w.accounts.some((a) => a.address === owner) ? w.accounts : (await (w.features as StandardConnectFeature)[StandardConnect].connect()).accounts;
-    const account = accounts.find((a) => a.address === owner);
-    if (!account) throw wrongAccount();
-    return account;
-  };
   const relayed = (signed: Uint8Array) => binwise(relay!(signed));
 
-  if (SolanaSignAndSendTransaction in w.features) {
+  const send = SolanaSignAndSendTransaction in w.features;
+  const signOnly = !!relay && SolanaSignTransaction in w.features;
+  const account =
+    send || signOnly
+      ? await attempt('Connect', async () => {
+          const accounts = w.accounts.some((a) => a.address === owner) ? w.accounts : (await (w.features as StandardConnectFeature)[StandardConnect].connect()).accounts;
+          const found = accounts.find((a) => a.address === owner);
+          if (!found) throw wrongAccount();
+          return found;
+        })
+      : null;
+  if (account && send) {
     const sig = await attempt('Send', async () => {
-      const account = await standardAccount();
       const [out] = await (w.features as SolanaSignAndSendTransactionFeature)[SolanaSignAndSendTransaction].signAndSendTransaction({ account, chain: 'solana:mainnet', transaction: tx });
       if (!out) throw new Error('The wallet returned no signature.');
       return bs58.encode(out.signature);
     });
     if (sig) return sig;
   }
-  if (relay && SolanaSignTransaction in w.features) {
+  if (account && signOnly) {
     const sig = await attempt('Sign', async () => {
-      const account = await standardAccount();
       const [out] = await (w.features as SolanaSignTransactionFeature)[SolanaSignTransaction].signTransaction({ account, chain: 'solana:mainnet', transaction: tx });
       if (!out) throw new Error('The wallet returned no signed transaction.');
       return relayed(out.signedTransaction);
     });
     if (sig) return sig;
   }
+
   const injected = injectedFor(w.name);
   const p = injected && !(/phantom/i.test(w.name) && impostorOf(injected)) ? injected : null;
-  const classic = async () => {
-    if ((await connectInjected(p!)) !== owner) throw wrongAccount();
-    const { Transaction } = await import('@solana/web3.js');
-    return Transaction.from(tx);
-  };
-  if (p?.signAndSendTransaction) {
+  // Classic transactions go in as @solana/web3.js objects, a fresh one per request.
+  const Tx =
+    p && (p.signAndSendTransaction || (relay && p.signTransaction))
+      ? await attempt('Classic connect', async () => {
+          if ((await connectInjected(p)) !== owner) throw wrongAccount();
+          return (await import('@solana/web3.js')).Transaction;
+        })
+      : null;
+  if (Tx && p?.signAndSendTransaction) {
     const sig = await attempt('Classic send', async () => {
-      const r = await p.signAndSendTransaction!(await classic());
+      const r = await p.signAndSendTransaction!(Tx.from(tx));
       return typeof r === 'string' ? r : r.signature;
     });
     if (sig) return sig;
   }
-  if (relay && p?.signTransaction) {
-    const sig = await attempt('Classic sign', async () => relayed((await p.signTransaction!(await classic())).serialize()));
+  if (Tx && relay && p?.signTransaction) {
+    const sig = await attempt('Classic sign', async () => relayed((await p.signTransaction!(Tx.from(tx))).serialize()));
     if (sig) return sig;
   }
   console.error(`[binwise] ${w.name} could not send:`, tried, '|', phantomDiagnostics());
