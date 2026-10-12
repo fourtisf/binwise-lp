@@ -79,6 +79,11 @@ export function WalletTaskCard() {
           {p.message}
         </p>
       )}
+      {p.phase === 'error' && p.resume && (
+        <button className="btn btn-white btn-sm" style={{ width: '100%', marginTop: 10 }} onClick={() => void inWallet(p.resume!, t.title, t.wallet ?? undefined)}>
+          Finish the LP with the tokens in my wallet
+        </button>
+      )}
     </div>
   );
 }

@@ -846,7 +846,12 @@ describe('self-custody: checks before anything is sent, and recording once', () 
     const conn = {
       getBalance: async () => 5e9,
       getAccountInfo: async () => ({ owner: TOKEN_PROGRAM }),
-      getParsedTokenAccountsByOwner: async () => ({ value: [] }),
+      // The owner holds 40 USDC (what an Add LP that stopped after its swaps left there).
+      getParsedTokenAccountsByOwner: async (_o: unknown, { programId }: { programId: PublicKey }) => ({
+        value: programId.equals(TOKEN_PROGRAM)
+          ? [{ pubkey: Keypair.generate().publicKey, account: { data: { parsed: { info: { mint: USDC, tokenAmount: { amount: '40000000', uiAmount: 40, decimals: 6 } } } } } }]
+          : [],
+      }),
       getLatestBlockhash: async () => ({ blockhash: Keypair.generate().publicKey.toBase58(), lastValidBlockHeight: 100 }),
       simulateTransaction: async (_tx: unknown, o?: { accounts?: { addresses: string[] } }) => ({
         value: {
@@ -865,8 +870,9 @@ describe('self-custody: checks before anything is sent, and recording once', () 
       new VersionedTransaction(new TransactionMessage({ payerKey: kp.publicKey, recentBlockhash: Keypair.generate().publicKey.toBase58(), instructions }).compileToV0Message());
     const swapTx = v0();
     const onChain: Record<string, object | null> = {};
+    const openAsked: { budget: Record<string, number> }[] = [];
     const planner = {
-      open: async () => ({
+      open: async (_d: unknown, r: { budget: Record<string, number> }) => (openAsked.push(r), {
         steps: [
           { label: 'Swap SOL → USDC', tx: Buffer.from(swapTx.serialize()).toString('base64'), kind: 'swap', check: { from: SOL, to: REAL_USDC, amountIn: '500000000', minOut: '70000000' } },
           { label: 'Open', tx: 'AQ==', kind: 'open' },
@@ -932,6 +938,18 @@ describe('self-custody: checks before anything is sent, and recording once', () 
       expect((await db.vault.findUniqueOrThrow({ where: { id: v.id } })).deposits).toEqual(depositsBefore);
       expect(await db.decision.count({ where: { vaultId: v.id, type: 'exit' } })).toBe(0);
       expect((await scApp.inject({ url: `/vaults/${v.id}/wallet/pending`, headers })).json()).toEqual([]);
+
+      // Finishing an Add LP that stopped after its swaps: the pool's tokens already in the wallet, never more than it holds.
+      openAsked.length = 0;
+      const finish = await prepare({ action: 'open', poolId: 'PS2', sol: 0, use: { [USDC]: 50 }, override: true });
+      expect(finish.statusCode).toBe(200);
+      expect(openAsked[0].budget).toEqual({ [USDC]: 40 });
+      expect(finish.json().budget).toEqual({ sol: 0, use: { [USDC]: 40 } });
+      expect(finish.json().summary[0]).toMatch(/40 USDC/);
+      await scApp.inject({ method: 'POST', url: `/vaults/${v.id}/wallet/plans/${finish.json().planId}/cancel`, headers });
+      // Only this pool's tokens, and something to put in.
+      expect((await prepare({ action: 'open', poolId: 'PS2', sol: 0, use: { [Keypair.generate().publicKey.toBase58()]: 5 }, override: true })).json().error).toBe('invalid_use');
+      expect((await prepare({ action: 'open', poolId: 'PS2', sol: 0, override: true })).json().error).toBe('invalid_amount');
     } finally {
       process.env.LIVE_TRADING_ENABLED = prev;
       if (prev === undefined) delete process.env.LIVE_TRADING_ENABLED;

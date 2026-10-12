@@ -22,6 +22,7 @@ import {
   planOpen,
   planRebalance,
   readWalletPosition,
+  walletBalances,
   type Amounts,
   type PoolCtx,
   type SwapCheck,
@@ -205,6 +206,8 @@ export function registerSelfCustody(app: FastifyInstance, c: SelfCustodyCtx) {
       positionId?: string;
       proposalId?: string;
       legacyOnly?: boolean;
+      /** Open: pool tokens already in the wallet to put in too (an Add LP that stopped half way), by mint, UI amounts */
+      use?: Record<string, number>;
     };
   }>('/vaults/:id/wallet/prepare', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req) => {
     const v = await selfVault(req, req.params.id);
@@ -216,8 +219,8 @@ export function registerSelfCustody(app: FastifyInstance, c: SelfCustodyCtx) {
     if (b.action === 'open') {
       if (v.status !== 'running') throw new ApiError(409, 'paused', 'The agent is paused. Resume it first.');
       const poolId = String(b.poolId ?? '');
-      const sol = Number(b.sol);
-      if (!Number.isFinite(sol) || sol <= 0) throw new ApiError(400, 'invalid_amount', 'Enter how much SOL to use.');
+      const sol = Number(b.sol ?? 0);
+      if (!Number.isFinite(sol) || sol < 0 || (sol === 0 && !Object.keys(b.use ?? {}).length)) throw new ApiError(400, 'invalid_amount', 'Enter how much SOL to use.');
       const shape = b.shape as LiquidityShape | undefined;
       if (shape != null && !['spot', 'curve', 'bidask'].includes(shape)) throw new ApiError(400, 'invalid_shape', 'Shape must be spot, curve or bidask.');
       const range = b.range != null ? ({ below: Number(b.range.below), above: Number(b.range.above) } as CustomRange) : undefined;
@@ -243,17 +246,39 @@ export function registerSelfCustody(app: FastifyInstance, c: SelfCustodyCtx) {
           throw new ApiError(502, 'rpc_unavailable', 'Could not reach Solana right now. Nothing was prepared; try again in a moment.');
         });
       const spendable = Math.max(0, lamports / 1e9 - WALLET_KEEP_SOL);
-      const lim = await c.addLimit(v, poolId, spendable * prices[SOL]);
+      // Pool tokens already in the wallet (what an Add LP that stopped half way swapped into), never more than it holds.
+      const use: Amounts = {};
+      for (const [m, a] of Object.entries(b.use ?? {})) {
+        if ((m !== ctx.mintX && m !== ctx.mintY) || m === SOL) throw new ApiError(400, 'invalid_use', "Only this pool's tokens can be added from your wallet.");
+        if (Number(a) > 0) use[m] = Number(a);
+      }
+      if (Object.keys(use).length) {
+        const held = await walletBalances(c.chain(), v.user.wallet).catch(() => {
+          throw new ApiError(502, 'rpc_unavailable', 'Could not reach Solana right now. Nothing was prepared; try again in a moment.');
+        });
+        for (const m of Object.keys(use)) use[m] = Math.min(use[m], held[m] ?? 0);
+      }
+      const useUsd = Object.entries(use).reduce((sum, [m, a]) => sum + a * prices[m], 0);
+      if (!(sol > 0) && !(useUsd > 0)) throw new ApiError(400, 'invalid_amount', Object.keys(b.use ?? {}).length ? "Your wallet doesn't hold those tokens any more." : 'Enter how much SOL to use.');
+      const lim = await c.addLimit(v, poolId, spendable * prices[SOL] + useUsd);
       if (lim.maxUsd < lim.minUsd)
         throw new ApiError(409, 'too_small', `This pool can take ${usdText(Math.max(0, lim.maxUsd))} from you now, below the ${usdText(lim.minUsd)} minimum.`);
-      // Never more than the pool, your max per position and the live limits allow.
-      const useSol = Math.min(sol, lim.maxUsd / prices[SOL]);
-      const capNote = useSol >= sol ? '' : lim.limit === 'balance' ? `, what your wallet can spend after ${WALLET_KEEP_SOL} SOL for rent and fees` : ', the most this pool takes from you';
+      // Never more than the pool, your max per position and the live limits allow: all of it scaled down alike.
+      const scale = Math.min(1, lim.maxUsd / (sol * prices[SOL] + useUsd));
+      const decimalsOf = (m: string) => (m === ctx.mintX ? ctx.decimalsX : ctx.decimalsY);
+      const floorTo = (n: number, d: number) => Math.floor(n * 10 ** d) / 10 ** d;
+      const useSol = floorTo(sol * scale, 9);
+      const useTokens = Object.fromEntries(Object.entries(use).map(([m, a]) => [m, floorTo(a * scale, decimalsOf(m))]).filter(([, a]) => (a as number) > 0)) as Amounts;
+      const capNote = scale >= 1 ? '' : lim.limit === 'balance' ? `, what your wallet can spend after ${WALLET_KEEP_SOL} SOL for rent and fees` : ', the most this pool takes from you';
+      const paying = [
+        ...(useSol > 0 ? [`${useSol.toLocaleString('en-US', { maximumFractionDigits: 4 })} SOL`] : []),
+        ...Object.entries(useTokens).map(([m, a]) => `${a.toLocaleString('en-US', { maximumFractionDigits: 4 })} ${symbols[m] ?? m.slice(0, 4)}`),
+      ].join(' + ');
       const plan = await plainly(
         planner.open(deps(legacyOnly, symbols), {
           owner: v.user.wallet,
           pool: ctx,
-          budget: { [SOL]: Math.floor(useSol * 1e9) / 1e9 },
+          budget: { ...(useSol > 0 ? { [SOL]: useSol } : {}), ...useTokens },
           prices,
           shape: shape ?? advice.shape,
           side,
@@ -263,11 +288,11 @@ export function registerSelfCustody(app: FastifyInstance, c: SelfCustodyCtx) {
       );
       const valueUsd = plan.position.amountX * ctx.usdX + plan.position.amountY * ctx.usdY;
       const summary = [
-        `Into ${pair}: about ${usdText(valueUsd)} (${useSol.toLocaleString('en-US', { maximumFractionDigits: 4 })} SOL${capNote}).`,
+        `Into ${pair}: about ${usdText(valueUsd)} (${paying}${capNote}).`,
         `${plan.rentSol.toFixed(3)} SOL more for the position's rent and fees; the rent comes back when it closes${plan.newBinArrays ? ` (except ${plan.newBinArrays} new bin array${plan.newBinArrays > 1 ? 's' : ''})` : ''}.`,
         'The position belongs to your wallet. Binwise never holds it.',
       ];
-      return store(
+      const stored = await store(
         {
           ...base,
           action: 'open',
@@ -278,6 +303,8 @@ export function registerSelfCustody(app: FastifyInstance, c: SelfCustodyCtx) {
         plan.steps,
         summary,
       );
+      // The swaps, in step order: if the page stops after some of them, it can finish with what they brought in.
+      return { ...stored, budget: { sol: useSol, use: useTokens }, swaps: plan.swaps };
     }
 
     if (b.action === 'close' || b.action === 'claim') {
@@ -681,7 +708,8 @@ function refusal(err: unknown, logs: string[] | null | undefined): string {
   const text = `${JSON.stringify(err)} ${(logs ?? []).join(' ')}`;
   if (/BlockhashNotFound|blockhash/i.test(text)) return 'It was approved after about a minute, so Solana no longer takes it. Nothing more was sent; try again.';
   if (/InsufficientFundsForRent/.test(text)) return 'Your wallet needs a little more SOL to stay open after this. Nothing more was sent.';
-  if (/insufficient (lamports|funds)|0x1\b|custom program error: 0x1\b/i.test(text)) return "Your wallet doesn't hold enough for this step any more. Nothing more was sent.";
+  // Custom error 1 is "insufficient funds" in both the System and the Token program.
+  if (/insufficient (lamports|funds)|0x1\b|custom program error: 0x1\b|"Custom":1\}/i.test(text)) return "Your wallet doesn't hold enough for this step any more. Nothing more was sent.";
   if (/slippage|ExceededBinSlippageTolerance|0x1771|SlippageToleranceExceeded/i.test(text)) return 'The price moved too much before it landed. Nothing more was sent; try again.';
   return `Solana refused it (${JSON.stringify(err)}). Nothing more was sent.`;
 }

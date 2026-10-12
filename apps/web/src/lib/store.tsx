@@ -30,7 +30,7 @@ import { ApiError, getClient, type BinwiseClient, type WalletAction } from './ap
 import { usd } from './format';
 import { LIVE_DEFAULT, WALLET_LOGIN } from './site';
 import { useUi } from './ui';
-import { finishPendingPlans, runWalletPlan, walletErrorText, type PlanPhase } from './wallet-plan';
+import { PlanStopped, finishPendingPlans, runWalletPlan, walletErrorText, type PlanPhase } from './wallet-plan';
 import { SignInError, findWalletFor, installedSolanaWallets, rememberWallet, type Wallet } from './wallets';
 
 type TickFn = (t: PositionTick) => void;
@@ -41,7 +41,8 @@ export interface WalletTask {
   action: WalletAction;
   wallet: Wallet | null;
   /** find: looking for the signed-in wallet; pick: not found, the owner picks it; then the plan's own phases */
-  phase: PlanPhase | { phase: 'find' } | { phase: 'pick'; wallets: Wallet[] } | { phase: 'error'; message: string };
+  /** error: `resume`, an Add LP that can finish from what its swaps brought into the wallet */
+  phase: PlanPhase | { phase: 'find' } | { phase: 'pick'; wallets: Wallet[] } | { phase: 'error'; message: string; resume?: WalletAction };
 }
 
 interface AppData {
@@ -285,7 +286,8 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
         const message = walletErrorText(e, name);
         // A wallet that failed by itself: maybe not the one signed in with, so offer the others.
         const others = e instanceof SignInError && e.kind === 'wallet' ? installedSolanaWallets() : [];
-        if (live()) update({ phase: others.length > 1 ? { phase: 'pick', wallets: others } : { phase: 'error', message } });
+        const resume = e instanceof PlanStopped ? e.resume : undefined;
+        if (live()) update({ phase: others.length > 1 ? { phase: 'pick', wallets: others } : { phase: 'error', message, resume } });
         // The card shows the error itself, except while it offers the other wallets or after "Stop waiting".
         if (others.length > 1 || !live()) toast(message, 9000);
         return false;

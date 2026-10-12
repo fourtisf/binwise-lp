@@ -34,7 +34,16 @@ export class ApiError extends Error {
 
 /** Self-custody: what the owner's wallet is asked to sign (POST /vaults/:id/wallet/prepare). */
 export type WalletAction =
-  | { action: 'open'; poolId: string; sol: number; override?: boolean; shape?: LiquidityShape; range?: CustomRange }
+  | {
+      action: 'open';
+      poolId: string;
+      sol: number;
+      override?: boolean;
+      shape?: LiquidityShape;
+      range?: CustomRange;
+      /** Pool tokens already in the wallet to put in too, by mint (finishing an Add LP that stopped after its swaps) */
+      use?: Record<string, number>;
+    }
   | { action: 'close' | 'claim'; positionId: string }
   | { action: 'proposal'; proposalId: string };
 
@@ -43,6 +52,9 @@ export interface WalletPlan {
   planId: string;
   steps: { label: string; tx: string; kind: 'swap' | 'open' | 'add' | 'close' | 'claim' }[];
   summary: string[];
+  /** Add LP: what it spends (SOL, and pool tokens from the wallet) and its swaps, in step order (UI amounts) */
+  budget?: { sol: number; use: Record<string, number> };
+  swaps?: { from: string; to: string; inUi: number; minOutUi: number }[];
 }
 
 /** What Solana says about a transaction sent through POST /vaults/:id/wallet/send. */
