@@ -675,8 +675,8 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
                   <p className="muted" style={{ fontSize: 12, lineHeight: 1.5, marginTop: rows.length ? 6 : 2 }}>
                     {selfCustody
                       ? paySol > 0
-                        ? `One approval in your wallet: it swaps the SOL into ${symA} and ${symB} through Jupiter (at most 0.5% slippage) and opens the position in your wallet. About 0.06 SOL more goes to the position's rent and network fees; the rent comes back when it closes.`
-                        : `Enter how much SOL to use. Your wallet swaps it into ${symA} and ${symB} through Jupiter and opens the position, all in one approval. You don't need to hold either token.`
+                        ? `Approved in your wallet (one approval, or one per transaction in wallets like Bitget): it swaps the SOL into ${symA} and ${symB} through Jupiter (at most 0.5% slippage) and opens the position in your wallet. About 0.06 SOL more goes to the position's rent and network fees; the rent comes back when it closes.`
+                        : `Enter how much SOL to use. Your wallet swaps it into ${symA} and ${symB} through Jupiter and opens the position, approved in your wallet. You don't need to hold either token.`
                       : holdBoth
                         ? `No swap needed: the vault already holds ${symA} and ${symB}.`
                         : rows.length
