@@ -65,13 +65,13 @@ describe('compound and daily stop', () => {
 });
 
 describe('manual Add LP limit', () => {
-  const base = { idleUsd: 1000, positionsUsd: 0, openPositions: 0, poolTvlUsd: 1e7, maxAllocPct: 50, capUsd: Infinity };
-  it('is the smallest of idle funds, strategy share and the per-position cap', () => {
-    expect(manualDeployLimit(base)).toEqual({ maxUsd: 500, limit: 'strategy' });
-    expect(manualDeployLimit({ ...base, maxAllocPct: 100 })).toEqual({ maxUsd: 980, limit: 'balance' });
+  const base = { idleUsd: 1000, positionsUsd: 0, openPositions: 0, poolTvlUsd: 1e7, capUsd: Infinity };
+  it('is the smallest of idle funds, the pool depth and the per-position cap, not the strategy share per pool', () => {
+    // The owner's chosen amount into the owner's chosen pool: all the idle funds (2% kept for fees).
+    expect(manualDeployLimit(base)).toEqual({ maxUsd: 980, limit: 'balance' });
     expect(manualDeployLimit({ ...base, capUsd: 120 })).toEqual({ maxUsd: 120, limit: 'cap' });
     // At most 2% of the pool's liquidity.
-    expect(manualDeployLimit({ ...base, poolTvlUsd: 10_000 })).toEqual({ maxUsd: 200, limit: 'strategy' });
+    expect(manualDeployLimit({ ...base, poolTvlUsd: 10_000 })).toEqual({ maxUsd: 200, limit: 'pool' });
   });
   it('counts open positions in the vault value but only spends idle funds', () => {
     expect(manualDeployLimit({ ...base, idleUsd: 100, positionsUsd: 900 })).toEqual({ maxUsd: 98, limit: 'balance' });

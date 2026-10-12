@@ -41,6 +41,11 @@ export default function Landing() {
               ? 'Real funds on mainnet. Start small: withdrawals only ever go back to your own wallet.'
               : 'No deposit needed to try. Withdrawals only ever go back to your own wallet.'}
           </p>
+          {/* The Binwise token's contract address, once it launches. */}
+          <div className="ca-pill" id="ca">
+            <b>CA</b>
+            <span>Coming soon</span>
+          </div>
         </div>
 
         <div className="wrap">

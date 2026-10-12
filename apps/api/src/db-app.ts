@@ -556,12 +556,11 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
             positionsUsd,
             openPositions: open.length,
             poolTvlUsd: snap.tvl,
-            maxAllocPct: s.maxAllocPct,
             capUsd: positionCapUsd(s),
             params,
             live: limits ? { maxUsd: limits.maxUsd, maxPositions: limits.maxPositions, roomTotalUsd: limits.maxTotalUsd - (await liveTotalUsd(db)) } : undefined,
           });
-      out.pool = { ...lim, minUsd: minPositionUsd(), allocPct: s.maxAllocPct, ceilingUsd: Number.isFinite(ceiling) ? ceiling : null };
+      out.pool = { ...lim, minUsd: minPositionUsd(), ceilingUsd: Number.isFinite(ceiling) ? ceiling : null };
     }
     return out;
   });

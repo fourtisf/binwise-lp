@@ -1158,7 +1158,6 @@ export async function runManualDeploy(
     positionsUsd,
     openPositions: open.length,
     poolTvlUsd: view.ctx.tvlUsd,
-    maxAllocPct: s.maxAllocPct,
     capUsd: positionCapUsd(s),
     params,
     live: live ? { maxUsd: live.maxUsd, maxPositions: live.maxPositions, roomTotalUsd: live.maxTotalUsd - (await liveTotalUsd(db)) } : undefined,

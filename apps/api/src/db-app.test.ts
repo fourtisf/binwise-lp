@@ -334,8 +334,8 @@ describe('vault balance (Add LP)', () => {
     expect(b.availableUsd).toBeCloseTo(1500);
     expect(b.assets).toEqual([{ symbol: 'SOL', mint: SOL, amount: 10, usd: 1500 }]);
     expect(b).toMatchObject({ reserveSol: 0, source: 'agent' });
-    // Balanced strategy: at most 25% of the vault in one pool.
-    expect(b.pool).toEqual({ maxUsd: 375, limit: 'strategy', minUsd: 50, allocPct: 25, ceilingUsd: 20_000 });
+    // Add LP by hand isn't held to the strategy's share per pool: all idle funds (2% kept for fees), within 2% of the pool.
+    expect(b.pool).toEqual({ maxUsd: 1470, limit: 'balance', minUsd: 50, ceilingUsd: 20_000 });
     // Without a pool: just the balance.
     expect((await app.inject({ url: `/vaults/${id}/balance`, headers })).json().pool).toBeUndefined();
 

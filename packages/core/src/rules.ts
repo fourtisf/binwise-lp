@@ -15,20 +15,21 @@ export function positionSizeUsd(vaultValueUsd: number, maxAllocPct: number, pool
 }
 
 /** Which limit decides how much a manual Add LP can put into a pool. */
-export type DeployLimit = 'balance' | 'strategy' | 'cap' | 'live' | 'positions';
+export type DeployLimit = 'balance' | 'pool' | 'cap' | 'live' | 'positions';
 
 /**
  * The most a manual Add LP puts into one pool right now, and the limit that decides it: the idle
- * funds (2% kept for fees), the strategy (max % of the vault per pool, at most a share of the pool's
- * TVL), the user's per-position cap, and for live vaults the live limits. The agent, the API and
- * the website all size Add LP with this, so the amount shown is the amount used.
+ * funds (2% kept for fees), the pool's depth (at most a share of its TVL), the user's per-position
+ * cap, and for live vaults the live limits. Not the strategy's max share of the vault per pool: that
+ * spreads the agent's own deploys, while Add LP is the owner putting a chosen amount into a chosen
+ * pool. The agent, the API and the website all size Add LP with this, so the amount shown is the
+ * amount used.
  */
 export function manualDeployLimit(i: {
   idleUsd: number;
   positionsUsd: number;
   openPositions: number;
   poolTvlUsd: number;
-  maxAllocPct: number;
   /** positionCapUsd(strategy): Infinity when the user set none */
   capUsd: number;
   params?: AgentThresholds;
@@ -38,7 +39,7 @@ export function manualDeployLimit(i: {
   if (i.live && i.openPositions >= i.live.maxPositions) return { maxUsd: 0, limit: 'positions' };
   const caps: [number, DeployLimit][] = [
     [i.idleUsd * 0.98, 'balance'],
-    [positionSizeUsd(i.idleUsd + i.positionsUsd, i.maxAllocPct, i.poolTvlUsd, i.params), 'strategy'],
+    [i.poolTvlUsd * (i.params ?? DEFAULT_THRESHOLDS).maxPoolShare, 'pool'],
     [i.capUsd, 'cap'],
   ];
   if (i.live) caps.push([Math.min(i.live.maxUsd - i.positionsUsd, i.live.roomTotalUsd), 'live']);

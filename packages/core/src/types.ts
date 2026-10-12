@@ -137,9 +137,7 @@ export interface VaultBalance {
   pool?: {
     maxUsd: number;
     minUsd: number;
-    limit: 'balance' | 'strategy' | 'cap' | 'live' | 'positions' | 'held';
-    /** The strategy's max share of the vault in one pool, percent */
-    allocPct: number;
+    limit: 'balance' | 'pool' | 'cap' | 'live' | 'positions' | 'held';
     /** What more funds in the vault can't raise (2% of the pool, the per-position cap, the live limits); null: none */
     ceilingUsd: number | null;
   };

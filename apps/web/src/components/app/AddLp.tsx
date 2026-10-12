@@ -28,7 +28,7 @@ import { useSolanaWallets } from './Wallet';
 /** Why Add LP can't put more into this pool (VaultBalance.pool.limit), in plain words. */
 const LIMIT_TEXT: Record<NonNullable<VaultBalance['pool']>['limit'], string> = {
   balance: 'Limited by the idle funds in your vault.',
-  strategy: 'Limited by your strategy: its max share of the vault per pool, and never more than 2% of the pool.',
+  pool: 'Limited by the pool: never more than 2% of its liquidity.',
   cap: 'Limited by your max per position (Strategy).',
   live: 'Limited by the live trading limits for now.',
   positions: 'Live vaults can hold a limited number of positions for now. Close one in Positions first.',
@@ -196,6 +196,28 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
         ? { below: 0, above: 2 * lp.binsEachSide }
         : { below: 2 * lp.binsEachSide, above: 0 };
   const onRec = !!lp && lp.side !== null && (shape === 'agent' || shape === lp.shape) && side === recSide && mode === 'agent';
+  const recWidth = !lp
+    ? ''
+    : recSide === 'both'
+      ? `±${((binPrice(lp.binsEachSide, lp.binStep) - 1) * 100).toFixed(1)}%`
+      : recSide === 'x'
+        ? `+${((binPrice(2 * lp.binsEachSide + 1, lp.binStep) - 1) * 100).toFixed(1)}%`
+        : `−${((1 - binPrice(-2 * lp.binsEachSide, lp.binStep)) * 100).toFixed(1)}%`;
+  const sideName = (k: Side) => (k === 'both' ? 'Both tokens' : k === 'x' ? `Only ${symA}` : `Only ${symB}`);
+  /** Under each row of options: what the agent would pick here, ticked when chosen, else one click to use it. */
+  const recHint = (text: string, on: boolean, pick: () => void) => (
+    <p className="rechint" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6, fontSize: 12.5, marginTop: 7, color: 'var(--muted)' }}>
+      <RecDot />
+      Recommended here: <b style={{ color: 'var(--text)', fontWeight: 500 }}>{text}</b>
+      {on ? (
+        <span className="up">✓</span>
+      ) : (
+        <button style={{ fontSize: 12.5, color: 'var(--aqua)', textDecoration: 'underline' }} onClick={pick}>
+          Use it
+        </button>
+      )}
+    </p>
+  );
   const useRec = () => {
     setShape('agent');
     setSide(recSide);
@@ -282,11 +304,10 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
   const wallet = bal?.wallet;
   const movable = wallet ? Math.max(0, Math.floor((wallet.sol - WALLET_FEE_SOL) * 10_000) / 10_000) : 0;
   const reserveShort = bal?.vaultSol != null ? Math.max(0, VAULT_RESERVE_SOL - bal.vaultSol) : 0;
-  // What the vault must hold for `want` here: idle funds (2% kept for fees) and the strategy's share per pool
+  // What the vault must hold for `want` here: idle funds, 2% kept for fees; limits that more funds can't raise
   // both have to allow it; limits that more funds can't raise (pool size, per-position cap, live) cap the target.
   const target = lim?.ceilingUsd != null ? Math.min(want, lim.ceilingUsd) : want;
-  const positionsUsd = positions.reduce((sum, p) => sum + p.value, 0);
-  const neededIdle = lim ? Math.max(target / 0.98, target / (lim.allocPct / 100) - positionsUsd) : target / 0.98;
+  const neededIdle = target / 0.98;
   const neededUsd = want > 0 && bal ? Math.max(0, neededIdle - bal.availableUsd) : 0;
   const suggestSol = wallet && wallet.solPriceUsd > 0 && neededUsd > 0 ? Math.min(movable, Math.ceil((neededUsd / wallet.solPriceUsd + reserveShort) * 1000) / 1000) : 0;
   /** Sends `sol` from the owner's wallet to the vault and waits until the API has checked it on-chain. */
@@ -346,7 +367,7 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
   const paySol = Number(payS) || 0;
   // What reaches the vault after the fee reserve, and how much of it this pool may take (same limits as above).
   const payIdleUsd = (bal?.availableUsd ?? 0) + Math.max(0, paySol - reserveShort) * solPrice;
-  const payLpUsd = lim ? Math.max(0, Math.min(payIdleUsd * 0.98, ((payIdleUsd + positionsUsd) * lim.allocPct) / 100, lim.ceilingUsd ?? Infinity)) : 0;
+  const payLpUsd = lim ? Math.max(0, Math.min(payIdleUsd * 0.98, lim.ceilingUsd ?? Infinity)) : 0;
   const paySwaps: Swap[] =
     payMode && shareA != null && payLpUsd > 0
       ? (
@@ -488,12 +509,6 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
               {reserveShort > 0 ? ' (incl. the fee reserve)' : ''}
             </button>
           )}
-          {lim && neededUsd > 0 && neededIdle > target / 0.98 + 0.5 && (
-            <p className="muted" style={{ fontSize: 12, lineHeight: 1.5, marginTop: 6 }}>
-              Your strategy puts at most {lim.allocPct}% of the vault in one pool, so adding {usd(target)} needs about {usd(neededIdle + positionsUsd)} in the vault. You can raise
-              the share in Strategy.
-            </p>
-          )}
           {lim?.ceilingUsd != null && want > lim.ceilingUsd && (
             <p className="muted" style={{ fontSize: 12, lineHeight: 1.5, marginTop: 6 }}>
               This pool takes at most {usd(lim.ceilingUsd, 2)} from you (pool size, your max per position or the live limits), however much is in the vault.
@@ -522,13 +537,7 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
               symB={symB}
               lo={price(binPrice(active0 - recRange.below, lp.binStep))}
               hi={price(binPrice(active0 + recRange.above + 1, lp.binStep))}
-              width={
-                recSide === 'both'
-                  ? `±${((binPrice(lp.binsEachSide, lp.binStep) - 1) * 100).toFixed(1)}%`
-                  : recSide === 'x'
-                    ? `+${((binPrice(2 * lp.binsEachSide + 1, lp.binStep) - 1) * 100).toFixed(1)}%`
-                    : `−${((1 - binPrice(-2 * lp.binsEachSide, lp.binStep)) * 100).toFixed(1)}%`
-              }
+              width={recWidth}
               inUse={onRec}
               onUse={useRec}
             />
@@ -539,10 +548,11 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
             {(['agent', 'spot', 'curve', 'bidask'] as const).map((k) => (
               <button key={k} style={segBtn} aria-pressed={shape === k} onClick={() => setShape(k)}>
                 {k === lp.shape && <RecDot />}
-                {k === 'agent' ? `Agent (${SHAPE_NAME[lp.shape]})` : SHAPE_NAME[k]}
+                {k === 'agent' ? 'Agent' : SHAPE_NAME[k]}
               </button>
             ))}
           </div>
+          {recHint(SHAPE_NAME[lp.shape], shape === 'agent' || shape === lp.shape, () => setShape(lp.shape))}
           {drawn && (
             <LpShape
               shape={shape}
@@ -572,6 +582,13 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
               </button>
             ))}
           </div>
+          {lp.side === null ? (
+            <p className="muted" style={{ fontSize: 12.5, lineHeight: 1.5, marginTop: 7 }}>
+              No recommendation: the pool is trending down, so the agent wouldn&apos;t add liquidity here now.
+            </p>
+          ) : (
+            recHint(sideName(recSide), side === recSide, () => setSide(recSide))
+          )}
           {side !== 'both' && (
             <p className="muted" style={{ fontSize: 12, lineHeight: 1.5, marginTop: 6 }}>
               {side === 'x' ? `All ${symA}, in bins above the current price: it sells into ${symB} as price rises.` : `All ${symB}, in bins below the current price: it buys ${symA} as price falls.`}
@@ -589,6 +606,7 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
               </button>
             ))}
           </div>
+          {lp.side !== null && recHint(`Agent width, ${recWidth}`, mode === 'agent', () => setMode('agent'))}
           {mode === 'custom' && (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
               <input
@@ -734,11 +752,7 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
                       {payIdleUsd - payLpUsd >= 1 && lim && (
                         <div>
                           ≈ {usd(payIdleUsd - payLpUsd, 2)} stays in the vault as SOL{' '}
-                          {payLpUsd < payIdleUsd * 0.98 - 0.5 && lim.ceilingUsd != null && payLpUsd >= lim.ceilingUsd - 0.01
-                            ? '(this pool takes no more from you)'
-                            : payLpUsd < payIdleUsd * 0.98 - 0.5
-                              ? `(your strategy puts at most ${lim.allocPct}% of the vault in one pool; raise it in Strategy)`
-                              : '(for fees)'}
+                          {payLpUsd < payIdleUsd * 0.98 - 0.5 ? '(this pool takes no more from you: 2% of its liquidity, your max per position or the live limits)' : '(2% kept for swap and network fees)'}
                         </div>
                       )}
                     </div>
