@@ -10,7 +10,11 @@ const clock = (s: number) => (s < 60 ? `${s}s` : `${Math.floor(s / 60)}:${String
 /** Brings a panel that opens under the button into view: the drawer can end at the button. */
 function useShown() {
   const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => ref.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), []);
+  // A block, not an expression: newer Chrome returns a Promise from scrollIntoView, and React would call
+  // whatever the effect returns as its cleanup ("n is not a function" when the panel closes).
+  useEffect(() => {
+    ref.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, []);
   return ref;
 }
 
