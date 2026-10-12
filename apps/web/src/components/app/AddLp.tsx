@@ -746,17 +746,42 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
                       <b>≈ {usd(r.usd, 2)}</b>
                     </div>
                   ))}
-                  {payMode && paySol > 0 && (
-                    <div className="num muted" style={{ fontSize: 12.5, lineHeight: 1.6, marginTop: rows.length ? 4 : 0 }}>
-                      {reserveShort > 0 && <div>{amount(Math.min(paySol, reserveShort))} SOL stays in the vault for network fees</div>}
-                      {payIdleUsd - payLpUsd >= 1 && lim && (
-                        <div>
-                          ≈ {usd(payIdleUsd - payLpUsd, 2)} stays in the vault as SOL{' '}
-                          {payLpUsd < payIdleUsd * 0.98 - 0.5 ? '(this pool takes no more from you: 2% of its liquidity, your max per position or the live limits)' : '(2% kept for swap and network fees)'}
-                        </div>
-                      )}
-                    </div>
-                  )}
+                  {payMode &&
+                    paySol > 0 &&
+                    (() => {
+                      // Where the SOL goes: into the LP, or kept in the vault (still the owner's).
+                      const reserveSol = Math.min(paySol, reserveShort);
+                      const capped = payLpUsd < payIdleUsd * 0.98 - 0.5;
+                      const bufferUsd = capped ? 0 : payIdleUsd - payLpUsd;
+                      const keptUsd = Math.max(0, paySol * solPrice - payLpUsd);
+                      return (
+                        <>
+                          <div className="rows" style={{ marginTop: rows.length ? 6 : 0, fontSize: 13 }} id="dPayRows">
+                            <div>
+                              <span>You pay</span>
+                              <b className="num">
+                                {amount(paySol)} SOL · {usd(paySol * solPrice, 2)}
+                              </b>
+                            </div>
+                            <div>
+                              <span>Into the LP</span>
+                              <b className="num up">≈ {usd(payLpUsd, 2)}</b>
+                            </div>
+                            <div>
+                              <span>Stays in your vault</span>
+                              <b className="num">≈ {usd(keptUsd, 2)}</b>
+                            </div>
+                          </div>
+                          <p className="muted" style={{ fontSize: 12, lineHeight: 1.55, marginTop: 8 }}>
+                            {reserveSol > 0 &&
+                              `${amount(reserveSol)} SOL (≈ ${usd(reserveSol * solPrice, 2)}) is the vault's reserve: Solana needs it for the position's rent deposit and network fees. The rent comes back when the position closes, and the reserve stays in the vault, so later deposits go in fully. `}
+                            {bufferUsd >= 0.5 && `${usd(bufferUsd, 2)} (2%) is a buffer for swap fees and price moves. `}
+                            {capped && 'This pool takes no more from you (2% of its liquidity, your max per position or the live limits). '}
+                            What stays in the vault is yours: withdraw it or use it for the next LP.
+                          </p>
+                        </>
+                      );
+                    })()}
                   <p className="muted" style={{ fontSize: 12, lineHeight: 1.5, marginTop: rows.length ? 6 : 2 }}>
                     {payMode
                       ? paySol > 0
