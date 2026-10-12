@@ -44,8 +44,11 @@ export interface SignInApi {
  */
 export class SignInError extends Error {
   constructor(
-    /** account: the wallet is on another account than the one signed in */
-    readonly kind: 'rejected' | 'pending' | 'impostor' | 'binwise' | 'wallet' | 'account',
+    /**
+     * account: the wallet is on another account than the one signed in. expired: approved too late, Solana no
+     * longer takes the transaction. stopped: the page stopped waiting, so nothing more goes to the wallet.
+     */
+    readonly kind: 'rejected' | 'pending' | 'impostor' | 'binwise' | 'wallet' | 'account' | 'expired' | 'stopped',
     message: string,
     readonly tried: string[] = [],
     readonly code?: string,
@@ -242,6 +245,15 @@ export async function findWalletFor(wallets: Wallet[], owner: string): Promise<W
 /** Broadcasts a transaction the wallet signed but didn't send (base64 → Binwise → Solana); returns its signature. */
 export type Relay = (signed: Uint8Array) => Promise<string>;
 
+/** A wallet or Solana saying the transaction's blockhash is unknown or expired. */
+const isExpired = (e: unknown) => /blockhash ?not ?found|block height exceeded|transaction (has )?expired/i.test(describe(e));
+/** A blockhash lives about a minute; younger than this, "blockhash not found" is a wallet's lagging node, worth another way. */
+const EXPIRES_AFTER_MS = 45_000;
+
+/** The account's Solana mainnet chain as the wallet names it ('solana:mainnet' in the standard). */
+const mainnetOf = (a: WalletAccount) =>
+  a.chains.find((c) => c === 'solana:mainnet') ?? a.chains.find((c) => c.startsWith('solana:') && !/devnet|testnet|localnet/.test(c)) ?? 'solana:mainnet';
+
 /**
  * Asks the wallet to sign and send `tx` (a serialized transaction) from `owner`, the signed-in address,
  * one way at a time, each only when the one before failed by itself:
@@ -251,13 +263,17 @@ export type Relay = (signed: Uint8Array) => Promise<string>;
  * 3. and 4. The same two through the wallet's classic API.
  *
  * Each API connects first (it must show the signed-in account); if that fails, its two ways are skipped.
- * Returns the signature (base58). A "no", an open request, the wallet being on another account or a
- * Binwise error (the relay refusing) stops right there.
+ * Wallet Standard connects silently first, so a wallet that already trusts this site asks only once.
+ * Returns the signature (base58). A "no", an open request, the wallet being on another account, an
+ * approval that came too late (expired) or a Binwise error (the relay refusing) stops right there; so
+ * does `stopped()` turning true (the page stopped waiting) before the next request.
  */
-export async function sendWithWallet(w: Wallet, owner: string, tx: Uint8Array, relay?: Relay): Promise<string> {
+export async function sendWithWallet(w: Wallet, owner: string, tx: Uint8Array, relay?: Relay, stopped?: () => boolean): Promise<string> {
   const tried: string[] = [];
+  const built = Date.now();
   const wrongAccount = () => new SignInError('account', `Switch ${w.name} to the account you signed in with (${owner.slice(0, 4)}…${owner.slice(-4)}), then try again.`);
   const attempt = async <T,>(label: string, run: () => Promise<T>): Promise<T | null> => {
+    if (stopped?.()) throw new SignInError('stopped', 'Stopped waiting for the wallet.', tried);
     try {
       return await run();
     } catch (e) {
@@ -265,6 +281,8 @@ export async function sendWithWallet(w: Wallet, owner: string, tx: Uint8Array, r
       console.error(`[binwise] ${w.name}: ${label} failed`, e);
       const stop = walletFailure(e);
       if (stop) throw stop;
+      // Approved too late: the same transaction can't go through another way, Solana no longer takes it.
+      if (isExpired(e) && Date.now() - built > EXPIRES_AFTER_MS) throw new SignInError('expired', 'You approved after about a minute, so Solana no longer takes this transfer. Nothing was sent: try again and approve right away.');
       tried.push(`${label}: ${describe(e)}`);
       return null;
     }
@@ -273,18 +291,25 @@ export async function sendWithWallet(w: Wallet, owner: string, tx: Uint8Array, r
 
   const send = SolanaSignAndSendTransaction in w.features;
   const signOnly = !!relay && SolanaSignTransaction in w.features;
+  // Called on the feature object: a wallet's connect can rely on `this`.
+  const connector = (w.features as StandardConnectFeature)[StandardConnect];
   const account =
     send || signOnly
       ? await attempt('Connect', async () => {
-          const accounts = w.accounts.some((a) => a.address === owner) ? w.accounts : (await (w.features as StandardConnectFeature)[StandardConnect].connect()).accounts;
-          const found = accounts.find((a) => a.address === owner);
+          const mine = (accounts: readonly WalletAccount[]) => accounts.find((a) => a.address === owner);
+          // Already connected on this page, or without a popup (a site the wallet trusts), else the wallet asks.
+          // A silent connect that fails or never answers just means "not trusted yet" (Phantom answers 4001).
+          const found =
+            mine(w.accounts) ??
+            mine(await quietly(connector.connect({ silent: true })).then((r) => r.accounts, () => [])) ??
+            mine((await connector.connect()).accounts);
           if (!found) throw wrongAccount();
           return found;
         })
       : null;
   if (account && send) {
     const sig = await attempt('Send', async () => {
-      const [out] = await (w.features as SolanaSignAndSendTransactionFeature)[SolanaSignAndSendTransaction].signAndSendTransaction({ account, chain: 'solana:mainnet', transaction: tx });
+      const [out] = await (w.features as SolanaSignAndSendTransactionFeature)[SolanaSignAndSendTransaction].signAndSendTransaction({ account, chain: mainnetOf(account), transaction: tx });
       if (!out) throw new Error('The wallet returned no signature.');
       return bs58.encode(out.signature);
     });
@@ -292,7 +317,7 @@ export async function sendWithWallet(w: Wallet, owner: string, tx: Uint8Array, r
   }
   if (account && signOnly) {
     const sig = await attempt('Sign', async () => {
-      const [out] = await (w.features as SolanaSignTransactionFeature)[SolanaSignTransaction].signTransaction({ account, chain: 'solana:mainnet', transaction: tx });
+      const [out] = await (w.features as SolanaSignTransactionFeature)[SolanaSignTransaction].signTransaction({ account, chain: mainnetOf(account), transaction: tx });
       if (!out) throw new Error('The wallet returned no signed transaction.');
       return relayed(out.signedTransaction);
     });

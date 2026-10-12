@@ -596,6 +596,8 @@ describe('add LP by hand: options and funding from the wallet', () => {
       const bal = (await liveApp.inject({ url: `/vaults/${v.id}/balance`, headers })).json();
       expect(bal.wallet).toMatchObject({ address: owner.address, sol: 3, solPriceUsd: 150 });
       expect(bal.vaultSol).toBe(0.4);
+      // Where the owner can send SOL by hand when the wallet can't approve on the page.
+      expect(bal.vaultWallet).toBe(agent);
 
       const r = await liveApp.inject({ method: 'POST', url: `/vaults/${v.id}/deposit/tx`, headers, payload: { sol: 1.5 } });
       expect(r.statusCode).toBe(200);
@@ -693,6 +695,52 @@ describe('add LP by hand: options and funding from the wallet', () => {
       expect(rent.message).toMatch(/0\.001 SOL/);
       simErr = { InsufficientFundsForRent: { account_index: 1 } };
       expect((await liveApp.inject({ method: 'POST', url: `/vaults/${v.id}/deposit/tx`, headers, payload: { sol: 0.0005 } })).json().error).toBe('too_small');
+    } finally {
+      await liveApp.close(); // also closes sub2
+    }
+  });
+
+  it('records SOL the owner sent to the vault address by hand, once, and nothing from anyone else', async () => {
+    const owner = wallet();
+    const agent = wallet().address;
+    const now = Math.floor(Date.now() / 1000);
+    const parsed = (source: string, lamports: number) => ({
+      meta: { err: null },
+      transaction: { message: { instructions: [{ program: 'system', parsed: { type: 'transfer', info: { source, destination: agent, lamports } } }], accountKeys: [] } },
+    });
+    const onChain: Record<string, { blockTime: number; parsed: object }> = {
+      BYHAND: { blockTime: now - 20, parsed: parsed(owner.address, 1_500_000_000) },
+      STRANGER: { blockTime: now - 30, parsed: parsed(wallet().address, 2_000_000_000) },
+      LASTWEEK: { blockTime: now - 7 * 86_400, parsed: parsed(owner.address, 9_000_000_000) },
+    };
+    const conn = {
+      getSignaturesForAddress: async () => Object.entries(onChain).map(([signature, t]) => ({ signature, err: null, blockTime: t.blockTime })),
+      getParsedTransaction: async (sig: string) => onChain[sig]?.parsed ?? null,
+    };
+    const sub2 = new Redis(process.env.REDIS_URL!);
+    const liveApp = await buildDbApp({ db, redis, sub: sub2, domain: 'test.binwise', rpc: () => conn as never });
+    try {
+      const user = await ensureUser(db, owner.address);
+      const v = await createVault(db, user.id, { live: { agentPubkey: agent, encSecret: new Uint8Array(8) } });
+      const ip = { remoteAddress: '10.9.9.5' };
+      const nonce = (await liveApp.inject({ url: `/auth/nonce?wallet=${owner.address}`, ...ip })).json();
+      const login = await liveApp.inject({ method: 'POST', url: '/auth/verify', ...ip, payload: { wallet: owner.address, message: nonce.message, signature: owner.signMsg(nonce.message) } });
+      const headers = { cookie: `bw_session=${login.cookies.find((c) => c.name === 'bw_session')!.value}` };
+      const scan = () => liveApp.inject({ method: 'POST', url: `/vaults/${v.id}/deposit/scan`, headers });
+
+      // Only the owner's recent transfer counts: not a stranger's, not one from last week.
+      const first = await scan();
+      expect(first.statusCode).toBe(200);
+      expect(first.json()).toEqual({ recorded: { [SOL]: 1.5 } });
+      expect((await db.vault.findUniqueOrThrow({ where: { id: v.id } })).deposits).toEqual({ [SOL]: 1.5 });
+      expect(await db.decision.findUnique({ where: { idempotencyKey: 'deposit:BYHAND' } })).toMatchObject({ title: 'Deposited 1.5 SOL', txSig: 'BYHAND' });
+      // Asked again: nothing new, nothing counted twice.
+      expect((await scan()).json()).toEqual({ recorded: {} });
+      // A second transfer adds to the first.
+      onChain.AGAIN = { blockTime: now - 5, parsed: parsed(owner.address, 250_000_000) };
+      expect((await scan()).json()).toEqual({ recorded: { [SOL]: 0.25 } });
+      expect((await db.vault.findUniqueOrThrow({ where: { id: v.id } })).deposits).toEqual({ [SOL]: 1.75 });
+      expect((await liveApp.inject({ method: 'POST', url: `/vaults/${v.id}/deposit/scan` })).statusCode).toBe(401);
     } finally {
       await liveApp.close(); // also closes sub2
     }

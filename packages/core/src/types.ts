@@ -143,6 +143,8 @@ export interface VaultBalance {
   };
   /** Live: SOL in the owner's own wallet, which Add LP can move into the vault first (the owner approves in the wallet) */
   wallet?: { address: string; sol: number; solPriceUsd: number };
+  /** Live, beside `wallet`: the vault wallet's address, where the owner can also send SOL by hand */
+  vaultWallet?: string;
   /** Live: SOL the vault wallet itself holds right now (the reserve for fees and rent comes out of this) */
   vaultSol?: number;
 }

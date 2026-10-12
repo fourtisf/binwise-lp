@@ -12,7 +12,7 @@ You need: SSH access as root to the VPS (Ubuntu 22.04/24.04), and a domain whose
 ## 1. Install (one command)
 
 ```bash
-curl -fsSL -o install.sh https://raw.githubusercontent.com/fourtisf/binwise-lp/refs/heads/claude/new-session-ll75nf/deploy/install.sh
+curl -fsSL -o install.sh https://raw.githubusercontent.com/fourtisf/binwise-lp/refs/heads/main/deploy/install.sh
 bash install.sh binwise.org
 ```
 

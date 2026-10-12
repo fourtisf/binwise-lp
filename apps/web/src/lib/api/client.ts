@@ -82,6 +82,8 @@ export interface BinwiseClient {
   depositSend(tx: string): Promise<{ signature: string }>;
   /** Live: record a transfer the owner's wallet sent to the vault (checked on-chain) */
   depositLive(signature: string): Promise<VaultOverview>;
+  /** Live: record transfers the owner sent to the vault address by hand (found on-chain); what it recorded now, by mint */
+  depositScan(): Promise<{ recorded: Record<string, number> }>;
   telegramLink(): Promise<{ url: string | null; code: string }>;
   /** Manual mode: trades waiting for the owner's approval */
   proposals(): Promise<Proposal[]>;

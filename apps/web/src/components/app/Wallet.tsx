@@ -186,7 +186,9 @@ export function ConnectModal() {
       </div>
       {busy && (
         <p className="muted" style={{ fontSize: 12.5, marginTop: 10, display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-          <span>Approve the request in {busy}. Its window can open behind this one.</span>
+          <span>
+            Approve the request in {busy}. Its window can open behind this one{mobile ? '' : `, or wait under the ${busy} icon in your browser's toolbar`}.
+          </span>
           <button
             className="dim"
             style={{ textDecoration: 'underline', flex: 'none' }}

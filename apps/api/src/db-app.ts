@@ -538,7 +538,10 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
           .then(() => rpc().getBalance(new PublicKey(owner.wallet)))
           .catch(() => null);
         const sol = await db.token.findUnique({ where: { mint: SOL_MINT } });
-        if (lamports != null) out.wallet = { address: owner.wallet, sol: lamports / 1e9, solPriceUsd: sol?.priceUsd ?? 0 };
+        if (lamports != null) {
+          out.wallet = { address: owner.wallet, sol: lamports / 1e9, solPriceUsd: sol?.priceUsd ?? 0 };
+          out.vaultWallet = vault.agentPubkey;
+        }
       }
     }
     const poolId = req.query.pool;
@@ -845,6 +848,44 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     return { signature };
   });
 
+  /**
+   * Live: records transfers from the owner's wallet that reached the vault wallet in the last half hour but
+   * aren't recorded yet: SOL the owner sent by hand to the vault address, when their wallet couldn't approve
+   * on this page. The agent finds those too, but only every few cycles. Same checks as POST
+   * /vaults/:id/deposit. Returns what it recorded now, by mint.
+   */
+  app.post<VP>('/vaults/:id/deposit/scan', moneyLimit, async (req) => {
+    const id = (await writable(req, req.params.id)).id;
+    return withVaultLock(id, 30_000, async () => {
+      const v = await writable(req, req.params.id);
+      if (v.mode !== 'live' || !v.agentPubkey) throw new ApiError(400, 'not_live', 'Only a live vault has a vault wallet to send to.');
+      const since = Date.now() / 1000 - 1800;
+      const recent = await chain()
+        .getSignaturesForAddress(new PublicKey(v.agentPubkey), { limit: 15 }, 'confirmed')
+        .catch(() => {
+          throw new ApiError(502, 'rpc_unavailable', 'Could not reach Solana right now. Try again in a moment.');
+        });
+      const sigs = recent.filter((s) => !s.err && (s.blockTime == null || s.blockTime >= since)).map((s) => s.signature);
+      const seen = new Set([
+        ...(await db.decision.findMany({ where: { idempotencyKey: { in: sigs.map((s) => `deposit:${s}`) } }, select: { idempotencyKey: true } })).map((d) => d.idempotencyKey!.slice(8)),
+        // The agent's own transactions are never deposits.
+        ...(await db.tx.findMany({ where: { sig: { in: sigs } }, select: { sig: true } })).map((t) => t.sig!),
+      ]);
+      const recorded: Record<string, number> = {};
+      for (const sig of sigs.filter((s) => !seen.has(s))) {
+        let credited: Record<string, number> | null;
+        try {
+          credited = await recordLiveDeposit(v, sig, v.user.wallet);
+        } catch (e) {
+          if (e instanceof ApiError) continue; // not a transfer from the owner's wallet
+          throw e;
+        }
+        for (const [m, a] of Object.entries(credited ?? {})) recorded[m] = (recorded[m] ?? 0) + a;
+      }
+      return { recorded };
+    });
+  });
+
   /** Why Solana would refuse a SOL transfer from the owner's wallet, in plain words. */
   function transferRefusal(err: unknown, logs: string[] | null | undefined): ApiError {
     const text = `${JSON.stringify(err)} ${(logs ?? []).join(' ')}`;
@@ -896,16 +937,26 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
 
   /** Live: the user's wallet already sent the transfer; verify it on-chain, then record it. */
   async function liveDeposit(v: Vault, signature: string, ownerWallet: string) {
+    await recordLiveDeposit(v, signature, ownerWallet);
+    return overview(db, v.id, { readOnly: false });
+  }
+
+  /**
+   * Records one transfer from the owner's wallet into the vault wallet, checked on-chain; once per signature.
+   * Returns what it credited by mint, or null when that signature was already recorded.
+   */
+  async function recordLiveDeposit(v: Vault, signature: string, ownerWallet: string) {
     if (!v.agentPubkey) throw new ApiError(400, 'no_agent', 'This vault has no agent wallet yet.');
     if (!signature) throw new ApiError(400, 'missing_signature', 'Send the deposit from your wallet first.');
     const key = `deposit:${signature}`;
-    if (await db.decision.findUnique({ where: { idempotencyKey: key } })) return overview(db, v.id, { readOnly: false });
+    if (await db.decision.findUnique({ where: { idempotencyKey: key } })) return null;
     const tx = await rpc().getParsedTransaction(signature, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' });
     if (!tx || !tx.meta) throw new ApiError(400, 'tx_not_found', 'That transaction is not confirmed yet. Try again in a moment.');
     if (tx.meta.err) throw new ApiError(400, 'tx_failed', 'That transaction failed on-chain, so nothing was deposited.');
     const credited = parseDeposit(tx, ownerWallet, v.agentPubkey);
     if (!Object.keys(credited).length) throw new ApiError(400, 'no_transfer', 'No transfer from your wallet to the vault was found in that transaction.');
-    const deposits = { ...(v.deposits as Record<string, number>) };
+    // Read now, under the vault lock: an earlier deposit recorded in the same request is already in.
+    const deposits = { ...((await db.vault.findUniqueOrThrow({ where: { id: v.id }, select: { deposits: true } })).deposits as Record<string, number>) };
     for (const [m, a] of Object.entries(credited)) deposits[m] = (deposits[m] ?? 0) + a;
     const tokens = await db.token.findMany({ where: { mint: { in: Object.keys(credited) } } });
     // Small amounts keep their digits (0.784 SOL, not 0.78), like the agent's own deposit records.
@@ -924,8 +975,9 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
       await publish(v.id, { type: 'decision', decision: decisionView(d) });
     } catch (e) {
       if ((e as { code?: string }).code !== 'P2002') throw e; // already credited
+      return null;
     }
-    return overview(db, v.id, { readOnly: false });
+    return credited;
   }
 
   app.post<VP & { Body: { token?: string; mint?: string; amount?: number } }>('/vaults/:id/withdraw', moneyLimit, async (req) => {

@@ -9,7 +9,7 @@ set -Eeuo pipefail
 {
 APP_USER="binwise"
 APP_DIR="/home/${APP_USER}/binwise"
-BRANCH="${BRANCH:-claude/new-session-ll75nf}"
+BRANCH="${BRANCH:-main}"
 
 step() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 ok() { printf '\033[1;32m    ✓ %s\033[0m\n' "$*"; }

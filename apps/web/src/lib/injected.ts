@@ -5,6 +5,8 @@
 export interface InjectedSolana {
   connect(opts?: { onlyIfTrusted?: boolean }): Promise<{ publicKey: { toBase58(): string } } | void>;
   publicKey?: { toBase58(): string } | null;
+  /** Bitget: the connected address (its connect() returns nothing; @solana/wallet-adapter-bitkeep reads this) */
+  getAccount?(): Promise<string>;
   signMessage(message: Uint8Array, display?: 'utf8' | 'hex'): Promise<{ signature: Uint8Array } | Uint8Array>;
   /** Takes a @solana/web3.js Transaction */
   signAndSendTransaction?(tx: unknown): Promise<{ signature: string } | string>;
@@ -38,8 +40,9 @@ export function injectedFor(walletName: string): InjectedSolana | null {
 export async function connectInjected(p: InjectedSolana): Promise<string> {
   const r = await p.connect();
   const pk = (r && 'publicKey' in r ? r.publicKey : null) ?? p.publicKey;
-  if (!pk) throw new Error('The wallet returned no account.');
-  return pk.toBase58();
+  const address = pk?.toBase58() ?? (await p.getAccount?.());
+  if (!address) throw new Error('The wallet returned no account.');
+  return address;
 }
 
 export async function signMessageInjected(p: InjectedSolana, message: Uint8Array): Promise<Uint8Array> {

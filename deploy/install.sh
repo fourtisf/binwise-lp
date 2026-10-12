@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 # Binwise one-command install / update for a fresh Ubuntu 22.04 or 24.04 VPS. Run as root:
 #
-#   curl -fsSL -o install.sh https://raw.githubusercontent.com/fourtisf/binwise-lp/refs/heads/claude/new-session-ll75nf/deploy/install.sh
+#   curl -fsSL -o install.sh https://raw.githubusercontent.com/fourtisf/binwise-lp/refs/heads/main/deploy/install.sh
 #   bash install.sh binwise.org
 #
 # Safe to run again: it keeps the existing .env (secrets, database password), pulls the latest
 # code, migrates, rebuilds and restarts. Paper mode only: LIVE_TRADING_ENABLED stays false.
 #
 # Optional environment variables:
-#   BRANCH=<git branch>        default: claude/new-session-ll75nf
+#   BRANCH=<git branch>        default: main
 #   CERTBOT_EMAIL=<email>      for certificate expiry notices (otherwise registered without email)
 #   SKIP_HTTPS=1               skip certbot (e.g. while DNS is still propagating)
 set -Eeuo pipefail
 
 DOMAIN="${1:-}"
-BRANCH="${BRANCH:-claude/new-session-ll75nf}"
+BRANCH="${BRANCH:-main}"
 REPO="${REPO:-https://github.com/fourtisf/binwise-lp.git}"
 APP_USER="binwise"
 APP_HOME="/home/${APP_USER}"

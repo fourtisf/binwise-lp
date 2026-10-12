@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   binIdForPrice,
   binPrice,
@@ -24,6 +24,7 @@ import { Tok } from '../Tokens';
 import { LpRecommend, RecDot } from './LpRecommend';
 import { LpShape } from './LpShape';
 import { useSolanaWallets } from './Wallet';
+import { SendYourself, WalletWaiting } from './WalletWait';
 
 /** Why Add LP can't put more into this pool (VaultBalance.pool.limit), in plain words. */
 const LIMIT_TEXT: Record<NonNullable<VaultBalance['pool']>['limit'], string> = {
@@ -43,6 +44,8 @@ const VAULT_RESERVE_SOL = 0.25;
 const WALLET_FEE_SOL = 0.005;
 
 type Side = 'both' | 'x' | 'y';
+/** What SOL from the owner's wallet is for: just moving it into the vault, or paying for this LP */
+type Flow = 'move' | 'add';
 /** One Jupiter swap the vault makes before adding liquidity */
 type Swap = { from: string; fromMint: string; to: string; toMint: string; usd: number };
 /** 'agent': the agent's own width; a number: ±% around the price; 'max': the widest one position holds. */
@@ -90,8 +93,12 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
   /** Only when the wallet the owner signed in with can't be found or fails: they pick it among those installed */
   const [picking, setPicking] = useState(false);
   const [walletPick, setWalletPick] = useState<string | null>(null);
-  /** The wallet asked to approve right now */
-  const [asking, setAsking] = useState<string | null>(null);
+  /** The wallet asked to approve right now, and for what */
+  const [asking, setAsking] = useState<{ wallet: Wallet; flow: Flow; sol: number } | null>(null);
+  /** Bumped by "Stop waiting": a wallet answer that comes later no longer continues the Add LP. */
+  const run = useRef(0);
+  /** Sending the SOL by hand to the vault address (the wallet won't approve here); lpUsd: the LP planned with it */
+  const [manual, setManual] = useState<{ sol: number; flow: Flow; lpUsd: number } | null>(null);
   const [tick, setTick] = useState(0);
 
   // A new pool starts on the recommendation; the side is set once its Add LP data arrives.
@@ -107,6 +114,7 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
     setMoveS('');
     setPayS('');
     setMoveErr(null);
+    setManual(null);
     // Not on every refresh of the recommended side: that would undo the user's own choice mid-edit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [x.id, hasLp]);
@@ -316,11 +324,21 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
   const neededIdle = target / 0.98;
   const neededUsd = want > 0 && bal ? Math.max(0, neededIdle - bal.availableUsd) : 0;
   const suggestSol = wallet && wallet.solPriceUsd > 0 && neededUsd > 0 ? Math.min(movable, Math.ceil((neededUsd / wallet.solPriceUsd + reserveShort) * 1000) / 1000) : 0;
-  /** Sends `sol` from the owner's wallet to the vault and waits until the API has checked it on-chain. */
-  const sendSol = async (sol: number, w: Wallet): Promise<boolean> => {
+  /**
+   * Sends `sol` from the owner's wallet to the vault and waits until the API has checked it on-chain. After
+   * "Stop waiting" (`live` false) the wallet gets no new request, but one approved anyway is still recorded.
+   */
+  const sendSol = async (sol: number, w: Wallet, live: () => boolean): Promise<boolean> => {
     const { tx } = await client!.depositTx(sol);
+    if (!live()) throw new SignInError('stopped', 'Stopped waiting for the wallet.');
     // If the wallet can sign but not send (Phantom's "Unexpected error"), Binwise sends it: only this transfer to the vault.
-    const signature = await sendWithWallet(w, me!.wallet, fromBase64(tx), async (signed) => (await client!.depositSend(toBase64(signed))).signature);
+    const signature = await sendWithWallet(
+      w,
+      me!.wallet,
+      fromBase64(tx),
+      async (signed) => (await client!.depositSend(toBase64(signed))).signature,
+      () => !live(),
+    );
     // Solana confirms in a few seconds; the API checks the transfer on-chain before counting it.
     for (let i = 0; i < 15; i++) {
       try {
@@ -338,7 +356,7 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
       ? e.kind === 'rejected'
         ? `Cancelled in ${name}. Nothing was sent.`
         : e.kind === 'pending'
-          ? `${name} already has a request open. Finish or close it, then try again.`
+          ? `${name} already has a request open. Click the ${name} icon in your browser's toolbar, approve or reject it there, then try again.`
           : e.kind === 'wallet' && wallets.length > 1
             ? `Signed in with another wallet? Pick it under “Approve in”.\n${e.message}`
             : e.message
@@ -354,25 +372,52 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
     setPicking(true);
     return 'Pick the wallet you signed in with under “Approve in”.';
   };
-  /** Runs `fn` with the owner's wallet; a failure shows under the amount, and offers the other wallets if it was the wallet. */
-  const withWallet = async (sol: number, fn: (w: Wallet) => Promise<unknown>) => {
+  /**
+   * Runs `fn` with the owner's wallet; a failure shows under the amount, and offers the other wallets if it was
+   * the wallet. `live()` turns false once the owner stops waiting: from then on this run stays quiet.
+   */
+  const withWallet = async (sol: number, flow: Flow, fn: (w: Wallet, live: () => boolean) => Promise<unknown>) => {
     setMoveErr(null);
+    setManual(null);
     if (!client || !me || !wallet) return;
+    const id = ++run.current;
+    const live = () => run.current === id;
     setMoving(true);
     let name = 'your wallet';
     try {
       const w = await pickWallet(sol);
+      if (!live()) return;
       if (typeof w === 'string') return setMoveErr(w);
       name = w.name;
-      setAsking(w.name);
-      await fn(w);
+      setAsking({ wallet: w, flow, sol });
+      await fn(w, live);
     } catch (e) {
+      if (!live() || (e instanceof SignInError && e.kind === 'stopped')) return;
       if (e instanceof SignInError && e.kind === 'wallet' && wallets.length > 1) setPicking(true);
       setMoveErr(walletError(e, name));
     } finally {
-      setMoving(false);
-      setAsking(null);
+      if (live()) {
+        setMoving(false);
+        setAsking(null);
+      }
     }
+  };
+  /** The vault wallet's address, for sending SOL to it by hand */
+  const vaultAddress = bal?.vaultWallet;
+  /** Stops waiting for the wallet; with `lpUsd`, opens "Send it yourself" for the same SOL instead. */
+  const stopWaiting = (lpUsd?: number) => {
+    const a = asking;
+    run.current++;
+    setMoving(false);
+    setAsking(null);
+    if (a && lpUsd != null && vaultAddress) return setManual({ sol: a.sol, flow: a.flow, lpUsd });
+    setMoveErr(`Stopped waiting. If ${a?.wallet.name ?? 'your wallet'} still shows the request, reject it there: nothing is sent unless you approve it.`);
+  };
+  /** Opens "Send it yourself" for the SOL typed in, without asking the wallet. */
+  const sendYourself = (sol: number, flow: Flow, lpUsd: number) => {
+    setMoveErr(null);
+    if (!(sol > 0)) return setMoveErr('Enter how much SOL first.');
+    setManual({ sol, flow, lpUsd });
   };
   /** Shown only when the signed-in wallet wasn't found or failed and several are installed. */
   const approveIn = picking && wallets.length > 1 && me && (
@@ -403,11 +448,11 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
     </>
   );
   const move = () =>
-    withWallet(Number(moveS), async (w) => {
+    withWallet(Number(moveS), 'move', async (w, live) => {
       const sol = Number(moveS);
-      const recorded = await sendSol(sol, w);
+      const recorded = await sendSol(sol, w, live);
       toast(recorded ? `Moved ${amount(sol)} SOL to your vault` : 'Sent. It shows in the vault once Solana confirms it.');
-      setMoveS('');
+      if (live()) setMoveS('');
       reload();
     });
 
@@ -431,27 +476,48 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
           .map(([m, sym, u]) => ({ from: 'SOL', fromMint: SOL_MINT, to: sym, toMint: m, usd: u }))
       : [];
   const payTooSmall = paySol > 0 && !!lim && payLpUsd < lim.minUsd;
+  /** Once `sol` paid with is in the vault: adds the LP planned with it (`lpUsd`), sized from the vault as it is now. */
+  const addFromVault = async (sol: number, lpUsd: number) => {
+    const fresh = await client!.balance(x.id);
+    const size = Math.min(lpUsd, fresh.pool?.maxUsd ?? 0);
+    if (!fresh.pool || size < fresh.pool.minUsd) {
+      setMoveErr(`Moved ${amount(sol)} SOL to your vault, but this pool can't take enough of it right now. Try a smaller amount or another pool.`);
+      return reload();
+    }
+    deploy(x.id, size, x.call !== 'in', opts);
+    setPayS('');
+    reload();
+  };
   const payAndAdd = () =>
-    withWallet(paySol, async (w) => {
-      if (!(await sendSol(paySol, w))) {
+    withWallet(paySol, 'add', async (w, live) => {
+      const sol = paySol;
+      if (!(await sendSol(sol, w, live))) {
         toast('Sent. Add LP once Solana confirms the transfer.');
         return reload();
       }
-      // Size it from the vault as it is now that the SOL is in.
-      const fresh = await client!.balance(x.id);
-      const size = Math.min(payLpUsd, fresh.pool?.maxUsd ?? 0);
-      if (!fresh.pool || size < fresh.pool.minUsd) {
-        setMoveErr(`Moved ${amount(paySol)} SOL to your vault, but this pool can't take enough of it right now. Try a smaller amount or another pool.`);
+      // Approved after "Stop waiting": the SOL is in, but the owner may have moved on, so no LP by itself.
+      if (!live()) {
+        toast(`Moved ${amount(sol)} SOL to your vault. Add LP when you're ready.`);
         return reload();
       }
-      deploy(x.id, size, x.call !== 'in', opts);
-      setPayS('');
-      reload();
+      await addFromVault(sol, payLpUsd);
     });
+  /** "Send it yourself": the SOL arrived in the vault. */
+  const manualArrived = (m: { sol: number; flow: Flow; lpUsd: number }, received: number) => {
+    setManual(null);
+    if (m.flow === 'move') {
+      toast(`Received ${amount(received)} SOL in your vault`);
+      setMoveS('');
+      return reload();
+    }
+    // Against the agent's call only while the owner still accepts the risk.
+    if (x.call !== 'in' && !risk) return setMoveErr(`Received ${amount(received)} SOL in your vault. Tick the risk box and click Add LP to use it.`);
+    addFromVault(received, m.lpUsd).catch(() => setMoveErr(`The SOL is in your vault, but the LP didn't start. Click Add LP to try again.`));
+  };
 
-  const disabled = payMode
-    ? (x.call !== 'in' && !risk) || moving || !(paySol > 0) || payTooSmall || (custom && !!rangeErr)
-    : (x.call !== 'in' && !risk) || blocked || tooSmall || (custom && !!rangeErr);
+  /** Paying with SOL can't start yet: risk not accepted, no amount, too small, or a broken range */
+  const payBlocked = (x.call !== 'in' && !risk) || !(paySol > 0) || payTooSmall || (custom && !!rangeErr);
+  const disabled = payMode ? payBlocked || moving : (x.call !== 'in' && !risk) || blocked || tooSmall || (custom && !!rangeErr);
 
   return (
     <>
@@ -559,15 +625,38 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
             You approve the transfer in your wallet. The vault keeps {VAULT_RESERVE_SOL} SOL for network fees{reserveShort > 0 ? ' (not there yet)' : ''}; the rest can go into LP.
           </p>
           {approveIn}
+          {asking?.flow === 'move' && (
+            <WalletWaiting
+              wallet={asking.wallet}
+              what={`It asks you to send ${amount(asking.sol)} SOL from your wallet to your vault.`}
+              onStop={() => stopWaiting()}
+              onSendYourself={vaultAddress ? () => stopWaiting(0) : undefined}
+            />
+          )}
           {moveErr && (
             <p className="down" style={{ fontSize: 12.5, lineHeight: 1.5, marginTop: 8, whiteSpace: 'pre-line' }}>
               {moveErr}
             </p>
           )}
           <button className="btn btn-dark btn-sm" style={{ width: '100%', marginTop: 10 }} disabled={moving || !(Number(moveS) > 0)} onClick={move}>
-            {moving ? `Approve in ${asking ?? 'your wallet'}…` : `Move ${Number(moveS) > 0 ? amount(Number(moveS)) + ' ' : ''}SOL to the vault`}
+            {moving ? (asking ? `Approve in ${asking.wallet.name}…` : 'Finding your wallet…') : `Move ${Number(moveS) > 0 ? amount(Number(moveS)) + ' ' : ''}SOL to the vault`}
           </button>
+          {!moving && !manual && vaultAddress && (
+            <button className="muted" style={{ fontSize: 12.5, marginTop: 8, textDecoration: 'underline', textAlign: 'left' }} onClick={() => sendYourself(Number(moveS), 'move', 0)}>
+              Wallet won&apos;t open? Send the SOL yourself
+            </button>
+          )}
         </div>
+      )}
+      {manual?.flow === 'move' && vaultAddress && me && (
+        <SendYourself
+          sol={manual.sol}
+          vault={vaultAddress}
+          owner={me.wallet}
+          then="It shows in your vault as soon as it arrives."
+          onArrived={(got) => manualArrived(manual, got)}
+          onClose={() => setManual(null)}
+        />
       )}
 
       {lp && !hardBlocked && (
@@ -865,12 +954,37 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
         <Icon id="i-plus" />
         {payMode
           ? moving
-            ? `Approve in ${asking ?? 'your wallet'}…`
+            ? asking
+              ? `Approve in ${asking.wallet.name}…`
+              : 'Finding your wallet…'
             : `Swap & add LP${paySol > 0 ? ` with ${amount(paySol)} SOL` : ''}`
           : swaps && !blocked && swaps.out.length
             ? `Swap & add LP to ${x.pair}`
             : `Add LP to ${x.pair}`}
       </button>
+      {asking?.flow === 'add' && (
+        <WalletWaiting
+          wallet={asking.wallet}
+          what={`It asks you to send ${amount(asking.sol)} SOL from your wallet to your vault. Then the vault swaps it and adds the LP by itself: nothing more to approve.`}
+          onStop={() => stopWaiting()}
+          onSendYourself={vaultAddress ? () => stopWaiting(payLpUsd) : undefined}
+        />
+      )}
+      {payMode && !moving && !manual && !payBlocked && vaultAddress && (
+        <button className="muted" style={{ fontSize: 12.5, marginTop: 10, textDecoration: 'underline', textAlign: 'left' }} onClick={() => sendYourself(paySol, 'add', payLpUsd)}>
+          Wallet won&apos;t open? Send the SOL yourself
+        </button>
+      )}
+      {manual?.flow === 'add' && vaultAddress && me && (
+        <SendYourself
+          sol={manual.sol}
+          vault={vaultAddress}
+          owner={me.wallet}
+          then="Then the vault swaps it and adds the LP by itself."
+          onArrived={(got) => manualArrived(manual, got)}
+          onClose={() => setManual(null)}
+        />
+      )}
     </>
   );
 }
