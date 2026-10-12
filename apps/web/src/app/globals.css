@@ -571,3 +571,9 @@ button.avatar:focus-visible{outline:2px solid var(--aqua);outline-offset:3px}
   .search{min-width:0;width:100%}
 }
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}.window{--tilt:0deg!important;--sc:1!important}}
+/* Self-custody: an action running in the owner's own wallet (approve once, then each step lands) */
+.wtask{position:fixed;right:24px;bottom:24px;width:380px;max-width:calc(100vw - 32px);max-height:calc(100vh - 48px);overflow:auto;z-index:79;padding:16px;border-radius:14px;background:var(--raise);border:1px solid var(--line2);box-shadow:0 20px 50px -10px rgba(0,0,0,.7)}
+.wtask > div[role=status]{margin-top:10px}
+@media (max-width:900px){
+  .wtask{right:16px;left:16px;width:auto;max-width:none;bottom:88px;max-height:calc(100vh - 120px)}
+}

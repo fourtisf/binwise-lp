@@ -2,9 +2,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { StreamEvent } from '@binwise/core';
 import { approveProposal, createVault, ensureUser, getDb, rejectProposal } from '@binwise/db';
 import { collectOnce, DEFAULT_COLLECTOR } from './collector';
-import { runApprovedProposal, runVaultCycle, type AgentDeps, type VaultWithStrategy } from './agent';
+import { runApprovedProposal, runManualDeploy, runVaultCycle, type AgentDeps, type VaultWithStrategy } from './agent';
 import { FakeMeteora, JUP, POOL, USDC, asMeteora, resetDb } from './test-helpers';
-import { PaperExecutor, SetupTooCostly, type Holdings } from '@binwise/chain';
+import { PaperExecutor, SetupTooCostly, type Executor, type Holdings } from '@binwise/chain';
 
 const db = getDb();
 let meteora: FakeMeteora;
@@ -235,6 +235,16 @@ describe('agent cycle (paper)', () => {
     await collect();
     await runVaultCycle(d(), await vault());
     expect(opens).toBe(2);
+  });
+
+  it('puts no new money to work in a vault Binwise holds the key for', async () => {
+    await db.vault.updateMany({ data: { mode: 'live', custody: 'agent', agentPubkey: 'Agent11111111111111111111111111111111111111', encSecret: new Uint8Array(8) } });
+    const d = (): AgentDeps => ({ ...deps(), executorFor: async (v) => Object.defineProperty(new PaperExecutor({ ...(v.cash as Holdings) }), 'mode', { value: 'live' }) });
+    await collect();
+    const c = await runVaultCycle(d(), await vault());
+    expect(await db.position.count()).toBe(0);
+    expect(c.text).toMatch(/Withdraw them to your own wallet/);
+    await expect(runManualDeploy(d(), await vault(), POOL, 500, 'r1', 'Requested from the app')).rejects.toThrow(/no longer keeps funds/);
   });
 
   it('never deploys more than LIVE_MAX_USD in a live vault', async () => {
@@ -486,5 +496,74 @@ describe('agent cycle (paper)', () => {
     usedKeys.add(`${v.id}:${v.cycle + 1}:0:deploy`);
     await cycle();
     expect(await db.position.count()).toBe(0);
+  });
+});
+
+describe('agent cycle (self-custody: the owner\'s wallet signs)', () => {
+  /** Reads like WalletReader: nothing to spend, positions valued, every transaction refused. */
+  const reader = (gone = false): Executor => {
+    const paper = new PaperExecutor({});
+    const refuse = () => Promise.reject(new Error('signing attempted'));
+    return {
+      mode: 'live',
+      holdings: async () => ({}),
+      mark: async (p, pool, m) => (gone ? { valueUsd: 0, feesUsd: 0, inRange: false, amountX: 0, amountY: 0, gone: true } : paper.mark(p, pool, m)),
+      txCostUsd: (n) => paper.txCostUsd(n),
+      open: refuse,
+      close: refuse,
+      claim: refuse,
+      compound: refuse,
+      swap: refuse,
+    };
+  };
+  /** A paper position opened first, then the vault turned self-custody (the position is in the owner's wallet). */
+  const selfCustodyWithPosition = async () => {
+    await collect();
+    await cycle();
+    expect(await db.position.count({ where: { status: 'open' } })).toBe(1);
+    await db.vault.updateMany({ data: { mode: 'live', custody: 'wallet', cash: {} } });
+  };
+
+  it('proposes an exit instead of closing, and never deploys by itself', async () => {
+    await selfCustodyWithPosition();
+    meteora.drift = -0.002;
+    meteora.price *= 0.7;
+    await db.candle.deleteMany();
+    advance(5);
+    await collect();
+    const d = await runVaultCycle({ ...deps(), executorFor: async () => reader() }, await vault());
+    expect(d.short).toBe('Waiting for approval');
+    expect(await db.position.count({ where: { status: 'open' } })).toBe(1);
+    const proposals = await db.proposal.findMany({ where: { status: 'pending' } });
+    expect(proposals.map((p) => p.kind)).toEqual(['exit']);
+    expect(proposals[0].positionId).toBe((await db.position.findFirstOrThrow()).id);
+  });
+
+  it('turns the daily loss stop into exit proposals, without pausing', async () => {
+    await selfCustodyWithPosition();
+    const v = await vault();
+    await db.vaultSnapshot.create({ data: { vaultId: v.id, ts: new Date(now - 24 * 3600_000), value: 20_000, holdValue: 20_000, feesTotal: 0, netVsHold: 0 } });
+    advance(1);
+    await collect();
+    const d = await runVaultCycle({ ...deps(), executorFor: async () => reader() }, await vault());
+    expect(d.text).toMatch(/approve closing your positions in your wallet/);
+    expect((await vault()).status).toBe('running');
+    expect(await db.position.count({ where: { status: 'open' } })).toBe(1);
+    expect(await db.proposal.count({ where: { status: 'pending', kind: 'exit' } })).toBe(1);
+  });
+
+  it('records a position closed from the wallet outside Binwise as money leaving the vault', async () => {
+    await selfCustodyWithPosition();
+    const pos = await db.position.findFirstOrThrow();
+    const before = (await vault()).deposits as Record<string, number>;
+    advance(1);
+    await collect();
+    await runVaultCycle({ ...deps(), executorFor: async () => reader(true) }, await vault());
+    expect((await db.position.findUniqueOrThrow({ where: { id: pos.id } })).status).toBe('closed');
+    const exit = await db.decision.findFirstOrThrow({ where: { type: 'exit' }, orderBy: { ts: 'desc' } });
+    expect(exit.reason).toMatch(/closed from your wallet/);
+    expect((exit.inputs as { flowUsd: number }).flowUsd).toBeCloseTo(-(pos.valueUsd + pos.feesUnclaimedUsd), 6);
+    const after = (await vault()).deposits as Record<string, number>;
+    expect(after[USDC] ?? 0).toBeLessThan(before[USDC]);
   });
 });

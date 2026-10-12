@@ -46,11 +46,11 @@ export class TradingHalted extends Error {}
 export class SetupTooCostly extends Error {}
 export class DuplicateAction extends Error {}
 
-import { DLMM, sdk } from './sdk';
+import { DLMM, dlmmClass, sdk } from './sdk';
 type DLMM = DLMMClass;
 
 // StrategyType values from the SDK: Spot = 0, Curve = 1, BidAsk = 2.
-const STRATEGY: Record<LiquidityShape, StrategyTypeEnum> = {
+export const STRATEGY: Record<LiquidityShape, StrategyTypeEnum> = {
   spot: 0 as StrategyTypeEnum,
   curve: 1 as StrategyTypeEnum,
   bidask: 2 as StrategyTypeEnum,
@@ -59,20 +59,55 @@ const STRATEGY: Record<LiquidityShape, StrategyTypeEnum> = {
 /** SOL kept aside for fees and rent; never deployed. Covers a worst-case open (position + 2 bin arrays + bitmap + token accounts). */
 export const SOL_RESERVE = 0.25;
 /** Worst acceptable swap result vs. fair value (route fees + price impact + stale prices). */
-const MAX_SWAP_LOSS = 0.03;
+export const MAX_SWAP_LOSS = 0.03;
 /** Lamports a swap may spend besides its input: network fee, tip, new token accounts. */
 const SWAP_SOL_TOLERANCE = 10_000_000;
 /** DLMM: max bins one add-liquidity transaction handles (SDK MAX_BIN_LENGTH_ALLOWED_IN_ONE_TX). */
-const SINGLE_TX_BINS = 26;
+export const SINGLE_TX_BINS = 26;
 
 /** UI amount → raw base units, rounded down, exact for large integer parts (no float overflow into "1e+21"). */
-const raw = (ui: number, decimals: number) => {
+export const raw = (ui: number, decimals: number) => {
   if (!Number.isFinite(ui) || ui <= 0) return new BN(0);
   const whole = Math.trunc(ui);
   const frac = Math.floor((ui - whole) * 10 ** decimals);
   return new BN((BigInt(whole) * 10n ** BigInt(decimals) + BigInt(frac)).toString());
 };
-const ui = (r: BN | string, decimals: number) => Number(r.toString()) / 10 ** decimals;
+export const ui = (r: BN | string, decimals: number) => Number(r.toString()) / 10 ** decimals;
+
+/** A position's amounts, value, unclaimed fees and whether it is in range, read from chain (no key needed). */
+export async function markPosition(conn: Connection, p: PositionRef, pool: PoolCtx): Promise<MarkResult> {
+  if (!p.address) throw new Error('Live position has no address');
+  // A position closed on-chain (e.g. by an action that stopped halfway) must not wedge every cycle.
+  if (!(await withRetry(() => conn.getAccountInfo(new PublicKey(p.address!)), 3, 'getAccountInfo')))
+    return { amountX: 0, amountY: 0, valueUsd: 0, feesUsd: 0, inRange: false, gone: true };
+  const dlmm = await DLMM.create(conn, new PublicKey(pool.address));
+  const [pos, active] = await Promise.all([withRetry(() => dlmm.getPosition(new PublicKey(p.address!)), 3, 'getPosition'), dlmm.getActiveBin()]);
+  const d = pos.positionData;
+  const x = ui(d.totalXAmount, pool.decimalsX);
+  const y = ui(d.totalYAmount, pool.decimalsY);
+  const fx = ui(d.feeX, pool.decimalsX);
+  const fy = ui(d.feeY, pool.decimalsY);
+  return {
+    amountX: x,
+    amountY: y,
+    valueUsd: x * pool.usdX + y * pool.usdY,
+    feesUsd: fx * pool.usdX + fy * pool.usdY,
+    inRange: active.binId >= d.lowerBinId && active.binId <= d.upperBinId,
+  };
+}
+
+/** Bin arrays a range needs that don't exist yet, and their rent (plus the bitmap extension if needed), in SOL. */
+export async function setupRent(conn: Connection, dlmm: DLMM, minBinId: number, maxBinId: number): Promise<{ arrays: number; sol: number }> {
+  const m = sdk();
+  const lo = m.binIdToBinArrayIndex(new BN(minBinId));
+  const hi = m.binIdToBinArrayIndex(new BN(maxBinId));
+  const keys: PublicKey[] = [];
+  for (let i = lo.clone(); i.lte(hi); i = i.addn(1)) keys.push(m.deriveBinArray(dlmm.pubkey, i, dlmm.program.programId)[0]);
+  const infos = await withRetry(() => conn.getMultipleAccountsInfo(keys), 2, 'getMultipleAccountsInfo');
+  const arrays = infos.filter((a) => !a).length;
+  const needsBitmap = (m.isOverflowDefaultBinArrayBitmap(lo) || m.isOverflowDefaultBinArrayBitmap(hi)) && !dlmm.binArrayBitmapExtension;
+  return { arrays, sol: arrays * m.BIN_ARRAY_FEE + (needsBitmap ? m.BIN_ARRAY_BITMAP_FEE : 0) };
+}
 
 export interface LiveExecutorDeps {
   conn: Connection;
@@ -133,7 +168,7 @@ export class LiveExecutor implements Executor {
    * never recorded (e.g. the process stopped between sending and saving).
    */
   async listPositions(): Promise<{ address: string; pool: string; lowerBin: number; upperBin: number; amountX: string; amountY: string }[]> {
-    const all = await withRetry(() => sdk().default.getAllLbPairPositionsByUser(this.d.conn, this.me), 2, 'getAllLbPairPositionsByUser');
+    const all = await withRetry(() => dlmmClass().getAllLbPairPositionsByUser(this.d.conn, this.me), 2, 'getAllLbPairPositionsByUser');
     const out: { address: string; pool: string; lowerBin: number; upperBin: number; amountX: string; amountY: string }[] = [];
     for (const [pool, info] of all)
       for (const p of info.lbPairPositionsData)
@@ -164,25 +199,8 @@ export class LiveExecutor implements Executor {
     return withRetry(() => dlmm.getPosition(new PublicKey(address)), 3, 'getPosition');
   }
 
-  async mark(p: PositionRef, pool: PoolCtx): Promise<MarkResult> {
-    if (!p.address) throw new Error('Live position has no address');
-    // A position closed on-chain (e.g. by an action that stopped halfway) must not wedge every cycle.
-    if (!(await withRetry(() => this.d.conn.getAccountInfo(new PublicKey(p.address!)), 3, 'getAccountInfo')))
-      return { amountX: 0, amountY: 0, valueUsd: 0, feesUsd: 0, inRange: false, gone: true };
-    const dlmm = await DLMM.create(this.d.conn, new PublicKey(pool.address));
-    const [pos, active] = await Promise.all([this.lbPosition(dlmm, p.address), dlmm.getActiveBin()]);
-    const d = pos.positionData;
-    const x = ui(d.totalXAmount, pool.decimalsX);
-    const y = ui(d.totalYAmount, pool.decimalsY);
-    const fx = ui(d.feeX, pool.decimalsX);
-    const fy = ui(d.feeY, pool.decimalsY);
-    return {
-      amountX: x,
-      amountY: y,
-      valueUsd: x * pool.usdX + y * pool.usdY,
-      feesUsd: fx * pool.usdX + fy * pool.usdY,
-      inRange: active.binId >= d.lowerBinId && active.binId <= d.upperBinId,
-    };
+  mark(p: PositionRef, pool: PoolCtx): Promise<MarkResult> {
+    return markPosition(this.d.conn, p, pool);
   }
 
   // ---------- sending ----------
@@ -377,17 +395,8 @@ export class LiveExecutor implements Executor {
     };
   }
 
-  /** Bin arrays the range needs that don't exist yet, and their rent (plus the bitmap extension if needed), in SOL. */
-  private async setupRentSol(dlmm: DLMM, minBinId: number, maxBinId: number): Promise<{ arrays: number; sol: number }> {
-    const m = sdk();
-    const lo = m.binIdToBinArrayIndex(new BN(minBinId));
-    const hi = m.binIdToBinArrayIndex(new BN(maxBinId));
-    const keys: PublicKey[] = [];
-    for (let i = lo.clone(); i.lte(hi); i = i.addn(1)) keys.push(m.deriveBinArray(dlmm.pubkey, i, dlmm.program.programId)[0]);
-    const infos = await withRetry(() => this.d.conn.getMultipleAccountsInfo(keys), 2, 'getMultipleAccountsInfo');
-    const arrays = infos.filter((a) => !a).length;
-    const needsBitmap = (m.isOverflowDefaultBinArrayBitmap(lo) || m.isOverflowDefaultBinArrayBitmap(hi)) && !dlmm.binArrayBitmapExtension;
-    return { arrays, sol: arrays * m.BIN_ARRAY_FEE + (needsBitmap ? m.BIN_ARRAY_BITMAP_FEE : 0) };
+  private setupRentSol(dlmm: DLMM, minBinId: number, maxBinId: number) {
+    return setupRent(this.d.conn, dlmm, minBinId, maxBinId);
   }
 
   async close(p: PositionRef, pool: PoolCtx, key: string): Promise<ActionResult> {

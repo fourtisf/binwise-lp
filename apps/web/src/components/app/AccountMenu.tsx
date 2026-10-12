@@ -100,7 +100,7 @@ export function AccountMenu() {
           <Icon id="i-wallet" />
           Portfolio
         </Link>
-        {overview?.mode === 'live' && !overview.readOnly && (
+        {overview?.mode === 'live' && overview.custody !== 'wallet' && !overview.readOnly && (
           <button
             role="menuitem"
             tabIndex={open ? 0 : -1}

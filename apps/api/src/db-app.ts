@@ -5,7 +5,7 @@ import websocket from '@fastify/websocket';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import type { Redis } from 'ioredis';
 import { randomUUID } from 'node:crypto';
-import { Connection, PublicKey, SystemProgram, Transaction, VersionedTransaction } from '@solana/web3.js';
+import { Connection, PublicKey } from '@solana/web3.js';
 import {
   DEFAULT_STRATEGY,
   MAX_BINS_EACH_SIDE,
@@ -49,9 +49,8 @@ import {
   minPositionUsd,
   walletBalances,
   walletTokens,
+  WalletReader,
   parseDeposit,
-  depositTransferLamports,
-  NotADeposit,
   createAgentKey,
   loadAgentKey,
   makeConnection,
@@ -71,26 +70,24 @@ import {
   shrinkDeposits as shrinkDepositsOf,
   strategySettings as strategySettingsOf,
   strategyData,
+  isSelfCustody,
   type PrismaClient,
+  type Strategy,
   type Vault,
 } from '@binwise/db';
 import { SESSION_COOKIE, SIGN_IN_STATEMENT, SESSION_DAYS, makeSession, newNonce, readSession, signInMessage, verifyWalletSignature } from './auth';
+import { ApiError } from './errors';
 import { EventHub } from './events';
+import { WALLET_KEEP_SOL, registerSelfCustody, type Planner } from './self-custody';
 import { decisionView, overview, performance, poolRows, positionViews, tokenMap, tokenRef } from './views';
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 const TYPES: DecisionType[] = ['scan', 'deploy', 'rebalance', 'exit', 'compound', 'hold', 'skip'];
 const CYCLE_MS = 60_000;
+/** SOL a vault wallet may still hold when its key is deleted: what a withdrawal leaves behind */
+const RELEASE_DUST_SOL = 0.003;
 
-export class ApiError extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
-  }
-}
+export { ApiError };
 
 export interface DbAppOptions {
   db: PrismaClient;
@@ -105,6 +102,12 @@ export interface DbAppOptions {
   rpc?: () => Connection;
   /** Token names, logos and prices for mints the collector doesn't track (Jupiter) */
   jupiter?: Pick<JupiterClient, 'tokens'>;
+  /** Self-custody: Jupiter quotes and swap transactions for the owner's wallet */
+  swaps?: Pick<JupiterClient, 'quote' | 'swap'>;
+  /** Self-custody transaction builders (tests swap them for stand-ins) */
+  planner?: Planner;
+  /** DLMM positions a wallet holds on Solana (tests swap it for a stand-in) */
+  positionsOf?: (conn: Connection, owner: string) => Promise<unknown[]>;
 }
 
 /**
@@ -170,6 +173,23 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     if (v.isDemo) throw new ApiError(403, 'read_only', 'The demo vault is read-only.');
     return v;
   }
+
+  /** Self-custody: the funds are in the owner's own wallet, so vault deposits and withdrawals don't apply. */
+  const notSelfCustody = (v: { mode: string; custody: string }) => {
+    if (isSelfCustody(v)) throw new ApiError(400, 'self_custody', 'Your funds stay in your own wallet: nothing to deposit to or withdraw from Binwise.');
+  };
+  /**
+   * Vault wallets Binwise holds the key of are winding down: no new money goes in and no new positions open.
+   * Owners withdraw to their own wallet; open positions are still looked after until they close them.
+   */
+  const noNewCustody = (v: { mode: string; custody: string; encSecret: unknown }) => {
+    if (v.mode === 'live' && v.custody === 'agent' && v.encSecret)
+      throw new ApiError(
+        409,
+        'custody_closing',
+        "Binwise no longer keeps funds for you: your money stays in your own wallet. Withdraw this vault's funds to your wallet (Portfolio → Withdraw); then add LP straight from your wallet.",
+      );
+  };
 
   async function walletAssets(wallet: string): Promise<DepositAsset[]> {
     if (!o.rpc && !process.env.RPC_URL) return [];
@@ -366,10 +386,9 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     const user = await ensureUser(db, wallet);
     if (!(await db.vault.count({ where: { userId: user.id } }))) {
       if (liveByDefault(wallet)) {
-        // Mainnet by default: the vault gets its own agent wallet now; nothing trades until the owner deposits.
-        const key = createAgentKey();
-        const v = await createVault(db, user.id, { live: { agentPubkey: key.pubkey, encSecret: new Uint8Array(key.encSecret) } });
-        await logDecision(v.id, 'scan', 'Live vault created', 'Runs on Solana mainnet with real funds. Deposit a small amount to start; withdrawals only go back to your wallet.');
+        // Mainnet by default, self-custody: the funds stay in the owner's own wallet and Binwise holds no key.
+        const v = await createVault(db, user.id, { selfCustody: true });
+        await logDecision(v.id, 'scan', 'Vault created', 'Your funds stay in your own wallet: Binwise holds no key. Add LP from a pool and approve it in your wallet; the agent watches your positions and asks before any change.');
       } else {
         const usdc = await db.token.findFirst({ where: { symbol: 'USDC', isVerified: true }, orderBy: { mcapUsd: 'desc' } });
         const v = await createVault(db, user.id);
@@ -402,18 +421,23 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
       await withVaultLock(id, 60_000, async () => {
         const v = await db.vault.findUnique({ where: { id } });
         if (!v || v.mode !== 'paper') return;
-        const key = v.agentPubkey && v.encSecret ? null : createAgentKey();
+        // A vault that already has a vault wallet keeps it (its funds must stay reachable); any other goes self-custody.
+        const hasKey = !!(v.agentPubkey && v.encSecret);
         await db.$transaction([
           db.position.updateMany({ where: { vaultId: id, status: 'open' }, data: { status: 'closed', closedAt: new Date() } }),
           db.vaultSnapshot.deleteMany({ where: { vaultId: id } }),
           db.proposal.updateMany({ where: { vaultId: id, status: 'pending' }, data: { status: 'expired' } }),
-          db.vault.update({
-            where: { id },
-            data: { mode: 'live', cash: {}, deposits: {}, paperWallet: {}, ...(key ? { agentPubkey: key.pubkey, encSecret: new Uint8Array(key.encSecret) } : {}) },
-          }),
+          db.vault.update({ where: { id }, data: { mode: 'live', cash: {}, deposits: {}, paperWallet: {}, ...(hasKey ? {} : { custody: 'wallet' as const }) } }),
         ]);
         await redis.del(REDIS_KEYS.actions(id));
-        await logDecision(id, 'scan', 'Moved to mainnet', 'This vault now uses real funds on Solana mainnet. The simulated balance was removed; deposit to the vault wallet to start.');
+        await logDecision(
+          id,
+          'scan',
+          'Moved to mainnet',
+          hasKey
+            ? 'This vault now uses real funds on Solana mainnet. The simulated balance was removed.'
+            : 'This vault now uses real funds on Solana mainnet, kept in your own wallet: Binwise holds no key. Add LP from a pool and approve it in your wallet.',
+        );
       }).catch(() => {}); // busy right now: tried again on the next page load
     }
   }
@@ -468,13 +492,15 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     return bestPerPair(rows, (r) => pairKey(side(r.tokenA), side(r.tokenB)), better).map(({ breakdown: _b, reason: _r, ...row }) => row);
   });
 
-  app.get<{ Params: { id: string }; Querystring: { vault?: string } }>('/pools/:id', async (req) => {
-    const strategy = req.query.vault ? (await readable(req, req.query.vault)).vault.strategy : null;
-    const row = (await poolRows(db, strategy)).find((r) => r.id === req.params.id);
-    if (!row) throw new ApiError(404, 'not_found', 'No recent data for that pool.');
-    // For Add LP by hand: the price and bins, and the shape and width the agent itself would use here.
+  /**
+   * For Add LP by hand: the pool row (the agent's call with this strategy), and the price, bins, shape, width
+   * and side the agent itself would use here. Null without recent data.
+   */
+  async function poolDetail(poolId: string, strategy: Strategy | null) {
+    const row = (await poolRows(db, strategy)).find((r) => r.id === poolId);
+    if (!row) return null;
     const snap = await db.poolSnapshot.findFirst({ where: { poolId: row.id }, orderBy: { ts: 'desc' }, include: { pool: true } });
-    if (!snap) return row;
+    if (!snap) return { row, lp: null, stableMints: [] as string[] };
     const toks = await tokenMap(db, [snap.pool.mintA, snap.pool.mintB]);
     const a = toks.get(snap.pool.mintA);
     const b = toks.get(snap.pool.mintB);
@@ -485,7 +511,8 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     const { regime } = await assessmentInput(snap, a, b, params);
     const riskyIsY = !!a && !!b && isStable(a) && !isStable(b);
     return {
-      ...row,
+      row,
+      stableMints: [a, b].filter((t): t is NonNullable<typeof t> => !!t && isStable(t)).map((t) => t.mint),
       lp: {
         price: snap.price,
         binStep: snap.pool.binStep,
@@ -499,6 +526,13 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
         stable: stablePair,
       },
     };
+  }
+
+  app.get<{ Params: { id: string }; Querystring: { vault?: string } }>('/pools/:id', async (req) => {
+    const strategy = req.query.vault ? (await readable(req, req.query.vault)).vault.strategy : null;
+    const d = await poolDetail(req.params.id, strategy);
+    if (!d) throw new ApiError(404, 'not_found', 'No recent data for that pool.');
+    return d.lp ? { ...d.row, lp: d.lp } : d.row;
   });
 
   // ---------- vault reads ----------
@@ -519,6 +553,7 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
    */
   app.get<VP & { Querystring: { pool?: string } }>('/vaults/:id/balance', async (req): Promise<VaultBalance> => {
     const { vault, readOnly } = await readable(req, req.params.id);
+    if (isSelfCustody(vault)) return selfCustodyBalance(vault, readOnly, req.query.pool);
     const live = vault.mode === 'live';
     let held = vault.cash as Record<string, number>;
     let source: VaultBalance['source'] = 'agent';
@@ -551,30 +586,56 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
       }
     }
     const poolId = req.query.pool;
-    const snap = poolId && vault.strategy ? await db.poolSnapshot.findFirst({ where: { poolId }, orderBy: { ts: 'desc' } }) : null;
-    if (snap && vault.strategy) {
-      const open = await db.position.findMany({ where: { vaultId: vault.id, status: 'open' }, select: { poolId: true, valueUsd: true } });
-      const s = strategySettingsOf(vault.strategy);
-      const limits = live ? liveLimits() : null;
-      const params = await activeParams(db);
-      const positionsUsd = open.reduce((sum, p) => sum + p.valueUsd, 0);
-      const room = limits ? Math.min(limits.maxUsd - positionsUsd, limits.maxTotalUsd - (await liveTotalUsd(db))) : Infinity;
-      const ceiling = Math.max(0, Math.min(snap.tvl * params.maxPoolShare, positionCapUsd(s), room));
-      const lim = open.some((p) => p.poolId === poolId)
-        ? { maxUsd: 0, limit: 'held' as const }
-        : manualDeployLimit({
-            idleUsd: availableUsd,
-            positionsUsd,
-            openPositions: open.length,
-            poolTvlUsd: snap.tvl,
-            capUsd: positionCapUsd(s),
-            params,
-            live: limits ? { maxUsd: limits.maxUsd, maxPositions: limits.maxPositions, roomTotalUsd: limits.maxTotalUsd - (await liveTotalUsd(db)) } : undefined,
-          });
-      out.pool = { ...lim, minUsd: minPositionUsd(), ceilingUsd: Number.isFinite(ceiling) ? ceiling : null };
-    }
+    if (poolId) out.pool = (await addLimit(vault, poolId, availableUsd)) ?? undefined;
     return out;
   });
+
+  /**
+   * Self-custody: nothing idle in a vault; Add LP pays with SOL from the owner's own wallet, keeping a little
+   * for the position's rent and the network fees. The most it puts into the pool is sized from that SOL.
+   */
+  async function selfCustodyBalance(vault: Vault & { strategy: Strategy | null }, readOnly: boolean, poolId?: string): Promise<VaultBalance> {
+    const out: VaultBalance = { availableUsd: 0, assets: [], reserveSol: 0, source: 'chain' };
+    if (readOnly || !(o.rpc || process.env.RPC_URL)) return { ...out, source: 'agent' };
+    const owner = await db.user.findUniqueOrThrow({ where: { id: vault.userId } });
+    const lamports = await Promise.resolve()
+      .then(() => rpc().getBalance(new PublicKey(owner.wallet)))
+      .catch(() => null);
+    if (lamports == null) return { ...out, source: 'agent' };
+    const solUsd = (await db.token.findUnique({ where: { mint: SOL_MINT } }))?.priceUsd ?? 0;
+    out.wallet = { address: owner.wallet, sol: lamports / 1e9, solPriceUsd: solUsd };
+    if (poolId) out.pool = (await addLimit(vault, poolId, Math.max(0, lamports / 1e9 - WALLET_KEEP_SOL) * solUsd)) ?? undefined;
+    return out;
+  }
+
+  /**
+   * The most Add LP puts into `poolId` for this vault with `idleUsd` to spend, sized exactly as the agent
+   * will (manualDeployLimit), the limit that decides it, the minimum, and what more funds can't raise.
+   */
+  async function addLimit(vault: Vault & { strategy: Strategy | null }, poolId: string, idleUsd: number): Promise<VaultBalance['pool'] | null> {
+    const snap = vault.strategy ? await db.poolSnapshot.findFirst({ where: { poolId }, orderBy: { ts: 'desc' } }) : null;
+    if (!snap || !vault.strategy) return null;
+    const live = vault.mode === 'live';
+    const open = await db.position.findMany({ where: { vaultId: vault.id, status: 'open' }, select: { poolId: true, valueUsd: true } });
+    const s = strategySettingsOf(vault.strategy);
+    const limits = live ? liveLimits() : null;
+    const params = await activeParams(db);
+    const positionsUsd = open.reduce((sum, p) => sum + p.valueUsd, 0);
+    const room = limits ? Math.min(limits.maxUsd - positionsUsd, limits.maxTotalUsd - (await liveTotalUsd(db))) : Infinity;
+    const ceiling = Math.max(0, Math.min(snap.tvl * params.maxPoolShare, positionCapUsd(s), room));
+    const lim = open.some((p) => p.poolId === poolId)
+      ? { maxUsd: 0, limit: 'held' as const }
+      : manualDeployLimit({
+          idleUsd,
+          positionsUsd,
+          openPositions: open.length,
+          poolTvlUsd: snap.tvl,
+          capUsd: positionCapUsd(s),
+          params,
+          live: limits ? { maxUsd: limits.maxUsd, maxPositions: limits.maxPositions, roomTotalUsd: limits.maxTotalUsd - (await liveTotalUsd(db)) } : undefined,
+        });
+    return { ...lim, minUsd: minPositionUsd(), ceilingUsd: Number.isFinite(ceiling) ? ceiling : null };
+  }
 
   /**
    * The owner's portfolio: what the vault holds (idle tokens and positions), how it did against holding
@@ -769,15 +830,20 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
         const left = await usdValue(await ex.holdings());
         if (left > 1) throw new ApiError(409, 'funds_in_vault', `Withdraw the ${'$' + fmt(left, 2)} still in the vault wallet before switching to paper.`);
       }
-      const key = mode === 'live' && !v.agentPubkey ? createAgentKey() : null;
+      // Live without an existing vault wallet means self-custody: the funds stay in the owner's wallet, no key here.
       await db.vault.update({
         where: { id: v.id },
-        data: { mode, cash: {}, deposits: {}, ...(key ? { agentPubkey: key.pubkey, encSecret: new Uint8Array(key.encSecret) } : {}) },
+        data: { mode, cash: {}, deposits: {}, ...(mode === 'live' && !v.encSecret ? { custody: 'wallet' as const } : {}) },
       });
       // Nothing queued or proposed under the old mode may run under the new one.
       await db.proposal.updateMany({ where: { vaultId: v.id, status: 'pending' }, data: { status: 'expired' } });
       await redis.del(REDIS_KEYS.actions(v.id));
-      await logDecision(v.id, 'scan', mode === 'live' ? 'Live mode on' : 'Paper mode on', mode === 'live' ? 'Real funds will be used. Deposit to the vault wallet to start.' : 'Simulated funds only.');
+      await logDecision(
+        v.id,
+        'scan',
+        mode === 'live' ? 'Live mode on' : 'Paper mode on',
+        mode === 'live' ? (v.encSecret ? 'Real funds will be used.' : 'Real funds, kept in your own wallet: you approve every transaction.') : 'Simulated funds only.',
+      );
     });
     return overview(db, v0.id, { readOnly: false });
   });
@@ -786,72 +852,10 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     const id = (await writable(req, req.params.id)).id;
     return withVaultLock(id, 30_000, async () => {
       const v = await writable(req, req.params.id);
+      notSelfCustody(v);
       if (v.mode === 'paper') return paperDeposit(v, String(req.body?.token ?? ''), Number(req.body?.amount));
       return liveDeposit(v, String(req.body?.signature ?? ''), v.user.wallet);
     });
-  });
-
-  /**
-   * Live: an unsigned SOL transfer from the owner's wallet to the vault wallet, for the owner to approve
-   * in their wallet (it shows the amount and destination). Once sent, POST /vaults/:id/deposit with the
-   * signature records it after checking it on-chain.
-   */
-  app.post<VP & { Body: { sol?: number } }>('/vaults/:id/deposit/tx', moneyLimit, async (req) => {
-    const v = await writable(req, req.params.id);
-    if (v.mode !== 'live' || !v.agentPubkey) throw new ApiError(400, 'not_live', 'Only a live vault has a vault wallet to send to.');
-    if (v.user.wallet === v.agentPubkey) throw new ApiError(400, 'same_wallet', 'This vault wallet is your wallet: nothing to move.');
-    const sol = Number(req.body?.sol);
-    if (!Number.isFinite(sol) || sol <= 0) throw new ApiError(400, 'invalid_amount', 'Enter how much SOL to move.');
-    const lamports = Math.floor(sol * 1e9);
-    const conn = chain();
-    const owner = new PublicKey(v.user.wallet);
-    const [balance, { blockhash, lastValidBlockHeight }] = await Promise.all([conn.getBalance(owner), conn.getLatestBlockhash('confirmed')]).catch(() => {
-      throw new ApiError(502, 'rpc_unavailable', 'Could not reach Solana right now. Nothing was sent; try again in a moment.');
-    });
-    // The wallet pays the network fee on top (a few thousand lamports).
-    if (lamports + 10_000 > balance) throw new ApiError(400, 'insufficient_balance', `Your wallet has ${fmt(balance / 1e9, 4)} SOL; keep a little for the network fee.`);
-    const tx = new Transaction({ feePayer: owner, blockhash, lastValidBlockHeight }).add(SystemProgram.transfer({ fromPubkey: owner, toPubkey: new PublicKey(v.agentPubkey), lamports }));
-    // Solana's own verdict before the wallet asks: a plain reason here beats a wallet's "Unexpected error".
-    const sim = await conn.simulateTransaction(new VersionedTransaction(tx.compileMessage()), { sigVerify: false, commitment: 'confirmed' }).catch(() => {
-      throw new ApiError(502, 'rpc_unavailable', 'Could not reach Solana right now. Nothing was sent; try again in a moment.');
-    });
-    if (sim.value.err) throw transferRefusal(sim.value.err, sim.value.logs);
-    return { tx: tx.serialize({ requireAllSignatures: false, verifySignatures: false }).toString('base64'), lamports, to: v.agentPubkey };
-  });
-
-  /**
-   * Live: broadcasts a deposit the owner's wallet signed but could not send itself (Phantom's "Unexpected
-   * error" on sign-and-send). Only what /deposit/tx builds goes through: one SOL transfer from the owner's
-   * wallet to this vault's wallet, signed by the owner, accepted by a simulation. If that same transfer
-   * already landed (the wallet's own send got through after all), returns its signature instead of sending
-   * it twice. Then POST /vaults/:id/deposit with the signature records it, as after any deposit.
-   */
-  app.post<VP & { Body: { tx?: string } }>('/vaults/:id/deposit/send', moneyLimit, async (req) => {
-    const v = await writable(req, req.params.id);
-    if (v.mode !== 'live' || !v.agentPubkey) throw new ApiError(400, 'not_live', 'Only a live vault has a vault wallet to send to.');
-    const raw = Buffer.from(String(req.body?.tx ?? ''), 'base64');
-    let tx: Transaction;
-    let lamports: number;
-    try {
-      tx = Transaction.from(raw);
-      lamports = depositTransferLamports(tx, v.user.wallet, v.agentPubkey);
-    } catch (e) {
-      throw new ApiError(400, 'bad_tx', e instanceof NotADeposit ? e.message : 'That is not a transfer Binwise can send.');
-    }
-    if (!tx.verifySignatures()) throw new ApiError(400, 'unsigned', 'Your wallet did not sign this transfer. Nothing was sent.');
-    const conn = chain();
-    const unreachable = () => {
-      throw new ApiError(502, 'rpc_unavailable', 'Could not reach Solana right now. Nothing was sent; try again in a moment.');
-    };
-    const landed = await sameTransferLanded(conn, tx, v.user.wallet, v.agentPubkey, lamports).catch(unreachable);
-    if (landed) return { signature: landed };
-    const sim = await conn.simulateTransaction(VersionedTransaction.deserialize(raw), { sigVerify: true, commitment: 'confirmed' }).catch(unreachable);
-    if (sim.value.err) throw transferRefusal(sim.value.err, sim.value.logs);
-    // The exact bytes the wallet signed; already simulated, so no second preflight.
-    const signature = await conn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 5 }).catch(() => {
-      throw new ApiError(502, 'send_failed', 'Solana did not take the transfer. Nothing was sent; try again in a moment.');
-    });
-    return { signature };
   });
 
   /**
@@ -862,6 +866,7 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
    */
   app.post<VP>('/vaults/:id/deposit/scan', moneyLimit, async (req) => {
     const id = (await writable(req, req.params.id)).id;
+    notSelfCustody(await writable(req, req.params.id));
     return withVaultLock(id, 30_000, async () => {
       const v = await writable(req, req.params.id);
       if (v.mode !== 'live' || !v.agentPubkey) throw new ApiError(400, 'not_live', 'Only a live vault has a vault wallet to send to.');
@@ -909,33 +914,6 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     if (e instanceof TxFailed) return new ApiError(502, 'tx_failed', 'Solana did not take the withdrawal, so nothing left the vault. Try again.');
     if (/still unconfirmed/.test(m)) return new ApiError(504, 'unconfirmed', 'The withdrawal was sent but is not confirmed yet. Check Activity or your wallet in a minute before trying again.');
     return e as Error;
-  }
-
-  /** Why Solana would refuse a SOL transfer from the owner's wallet, in plain words. */
-  function transferRefusal(err: unknown, logs: string[] | null | undefined): ApiError {
-    const text = `${JSON.stringify(err)} ${(logs ?? []).join(' ')}`;
-    if (/BlockhashNotFound/.test(text)) return new ApiError(400, 'expired', 'The approval took too long, so Solana no longer accepts it. Nothing was sent; try again.');
-    // Account 0 is the owner's wallet (fee payer); otherwise it's a new vault wallet getting too little to exist.
-    const rent = (err as { InsufficientFundsForRent?: { account_index?: number } } | null)?.InsufficientFundsForRent;
-    if (rent?.account_index === 0) return new ApiError(400, 'insufficient_balance', 'Solana needs about 0.001 SOL to stay in your wallet. Move a little less.');
-    if (rent) return new ApiError(400, 'too_small', 'The first transfer to a new vault wallet must be at least 0.001 SOL.');
-    if (/insufficient lamports|InsufficientFunds/i.test(text)) return new ApiError(400, 'insufficient_balance', 'Your wallet doesn’t have enough SOL for this and the network fee. Move a little less.');
-    return new ApiError(400, 'sim_failed', `Solana would reject this transfer (${JSON.stringify(err)}). Nothing was sent.`);
-  }
-
-  /**
-   * The signature of `tx`'s transfer if it already landed: a transfer of the same amount from `owner` to
-   * the vault wallet in the last few minutes, made with the same blockhash (so the same approval, not an
-   * earlier deposit of the same size).
-   */
-  async function sameTransferLanded(conn: Connection, tx: Transaction, owner: string, agent: string, lamports: number) {
-    const since = Date.now() / 1000 - 180;
-    const recent = (await conn.getSignaturesForAddress(new PublicKey(agent), { limit: 25 }, 'confirmed')).filter((s) => !s.err && (s.blockTime == null || s.blockTime >= since));
-    const txs = await Promise.all(recent.map((s) => conn.getParsedTransaction(s.signature, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' })));
-    const i = txs.findIndex(
-      (p) => !!p && p.transaction.message.recentBlockhash === tx.recentBlockhash && Math.round((parseDeposit(p, owner, agent)[SOL_MINT] ?? 0) * 1e9) === lamports,
-    );
-    return i < 0 ? null : recent[i].signature;
   }
 
   async function symbolMint(symbol: string, wallet: Record<string, number>) {
@@ -1011,6 +989,7 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
    */
   app.get<VP>('/vaults/:id/withdrawable', async (req): Promise<Withdrawable> => {
     const v = await writable(req, req.params.id);
+    notSelfCustody(v);
     if (v.mode !== 'live' || !v.agentPubkey) throw new ApiError(400, 'not_live', 'Only a live vault holds funds on Solana.');
     if (v.user.wallet === v.agentPubkey) throw new ApiError(400, 'same_wallet', 'This vault wallet is your own wallet: use 💸 Withdraw in the Telegram bot to send funds elsewhere.');
     const conn = chain();
@@ -1035,12 +1014,52 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     return { to: v.user.wallet, openPositions, keptSol, tokens };
   });
 
+  /**
+   * Ends Binwise's custody of a vault wallet from before self-custody: deletes the vault's key, and from then on
+   * the vault works from the owner's own wallet (they approve every change there). Only once the vault wallet is
+   * empty: no position, no tokens, at most dust SOL. A key deleted with funds behind it would lose them.
+   */
+  app.post<VP & { Body: { confirm?: boolean } }>('/vaults/:id/custody/release', moneyLimit, async (req) => {
+    const id = (await writable(req, req.params.id)).id;
+    await withVaultLock(id, 60_000, async () => {
+      const v = await writable(req, req.params.id);
+      if (v.mode !== 'live' || v.custody !== 'agent' || !v.encSecret || !v.agentPubkey) throw new ApiError(400, 'no_custody', 'Binwise holds no key for this vault.');
+      // A wallet made in Telegram is the owner's only wallet: its key must be saved first (the bot does that).
+      if (v.user.wallet === v.agentPubkey)
+        throw new ApiError(400, 'same_wallet', 'This is the wallet made in Telegram. Save its private key there first (🔑 Wallet), then remove it from Binwise in the bot.');
+      if (req.body?.confirm !== true) throw new ApiError(400, 'confirm_required', "Confirm that Binwise should delete this vault's key.");
+      if (await db.position.count({ where: { vaultId: v.id, status: 'open' } }))
+        throw new ApiError(409, 'positions_open', 'Close your positions first (Positions), then withdraw everything to your wallet.');
+      const conn = chain();
+      const [held, onChain] = await Promise.all([walletTokens(conn, v.agentPubkey), (o.positionsOf ?? ((c, owner) => new WalletReader({ conn: c, owner }).listPositions()))(conn, v.agentPubkey)]).catch(() => {
+        throw new ApiError(502, 'rpc_unavailable', 'Could not reach Solana right now. Nothing changed; try again in a moment.');
+      });
+      if (onChain.length) throw new ApiError(409, 'positions_open', 'The vault wallet still has a position on Solana. Close it first (Positions).');
+      const info = await tokenInfo(held.map((t) => t.mint));
+      const left = held.filter((t) => (t.mint === SOL_MINT ? t.amount > RELEASE_DUST_SOL : t.amount > 0));
+      if (left.length) {
+        const names = left.map((t) => `${t.amount.toLocaleString('en-US', { maximumFractionDigits: 4 })} ${t.mint === SOL_MINT ? 'SOL' : (info.get(t.mint)?.ref.symbol ?? `${t.mint.slice(0, 4)}…`)}`).join(', ');
+        throw new ApiError(409, 'funds_left', `Withdraw the ${names} still in the vault wallet first (Withdraw to wallet).`);
+      }
+      const dust = held.find((t) => t.mint === SOL_MINT)?.amount ?? 0;
+      await db.vault.update({ where: { id: v.id }, data: { custody: 'wallet', agentPubkey: null, encSecret: null, cash: {} } });
+      await logDecision(
+        v.id,
+        'hold',
+        'Switched to your own wallet',
+        `Binwise deleted this vault's key. Your funds stay in your own wallet now, and you approve every change there.${dust > 0 ? ` ${dust.toLocaleString('en-US', { maximumFractionDigits: 4 })} SOL, too little to send, stays at the old vault address.` : ''}`,
+      );
+    });
+    return overview(db, id, { readOnly: false });
+  });
+
   app.post<VP & { Body: { token?: string; mint?: string; amount?: number } }>('/vaults/:id/withdraw', moneyLimit, async (req) => {
     const id = (await writable(req, req.params.id)).id;
     const amount = Number(req.body?.amount);
     if (!Number.isFinite(amount) || amount <= 0) throw new ApiError(400, 'invalid_amount', 'Enter an amount.');
     return withVaultLock(id, 120_000, async () => {
       const v = await writable(req, req.params.id);
+      notSelfCustody(v);
       const symbol = String(req.body?.token ?? '');
       const cash = v.cash as Record<string, number>;
       const deposits = v.deposits as Record<string, number>;
@@ -1118,6 +1137,8 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     const pool = await db.pool.findUnique({ where: { id: poolId } });
     if (!pool) throw new ApiError(404, 'not_found', 'No pool with that id.');
     if (v.status !== 'running') throw new ApiError(409, 'paused', 'The agent is paused. Resume it first.');
+    if (isSelfCustody(v)) throw new ApiError(409, 'approve_in_wallet', 'Add LP from your wallet: approve it there.');
+    noNewCustody(v);
     await redis.lpush(
       REDIS_KEYS.actions(v.id),
       JSON.stringify({ id: randomUUID(), action: 'deploy', poolId, usd, override: req.body?.override === true, ...(shape ? { shape: shape as LiquidityShape } : {}), ...(range ? { range } : {}) }),
@@ -1131,11 +1152,32 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     const p = await db.position.findUnique({ where: { id: req.params.id }, include: { vault: true, pool: true } });
     if (!p || p.vault.userId !== uid || p.status !== 'open') throw new ApiError(404, 'not_found', 'No open position with that id.');
     if (p.vault.isDemo) throw new ApiError(403, 'read_only', 'The demo vault is read-only.');
+    if (isSelfCustody(p.vault)) throw new ApiError(409, 'approve_in_wallet', 'This position is in your wallet: approve it there.');
     await redis.lpush(REDIS_KEYS.actions(p.vaultId), JSON.stringify({ id: randomUUID(), positionId: p.id, action }));
     return reply.status(202).send({ queued: true, pair: `${p.pool.tokenA} / ${p.pool.tokenB}` });
   };
   app.post<{ Params: { id: string } }>('/positions/:id/claim', queueAction('claim'));
   app.post<{ Params: { id: string } }>('/positions/:id/close', queueAction('close'));
+
+  // ---------- self-custody: the owner's wallet signs every transaction ----------
+
+  registerSelfCustody(app, {
+    db,
+    redis,
+    writable,
+    chain,
+    killed,
+    logDecision,
+    publish,
+    jupiter: o.swaps ?? new JupiterClient(),
+    planner: o.planner,
+    poolAdvice: async (poolId, strategy) => {
+      const d = await poolDetail(poolId, strategy);
+      if (!d?.lp) return null;
+      return { call: d.row.call, callLabel: d.row.callLabel, reason: d.row.reason, shape: d.lp.shape, binsEachSide: d.lp.binsEachSide, side: d.lp.side, stableMints: d.stableMints };
+    },
+    addLimit: async (vault, poolId, budgetUsd) => (await addLimit(vault, poolId, budgetUsd)) ?? { maxUsd: 0, minUsd: minPositionUsd(), limit: 'pool', ceilingUsd: 0 },
+  });
 
   // ---------- manual mode: proposals waiting for the owner's approval ----------
 
@@ -1148,6 +1190,8 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     const p = await db.proposal.findUnique({ where: { id: req.params.id } });
     if (!p) throw new ApiError(404, 'not_found', 'No such proposal.');
     const v = await writable(req, p.vaultId);
+    // Self-custody: approving means signing the transactions in the owner's wallet (POST /wallet/prepare).
+    if (approve && isSelfCustody(v)) throw new ApiError(409, 'approve_in_wallet', 'Approve this in your wallet.');
     try {
       if (approve) {
         await approveProposal(db, v.id, p.id);

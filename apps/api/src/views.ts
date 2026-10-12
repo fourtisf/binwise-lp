@@ -202,6 +202,7 @@ export async function overview(db: PrismaClient, vaultId: string, opts: { readOn
     spark: spark.length >= 2 ? spark : [v.value, v.value],
     depositAssets: vault.mode === 'paper' ? await paperAssets(db, vault.paperWallet as Record<string, number>) : opts.walletAssets ?? [],
     depositAddress: vault.mode === 'live' ? vault.agentPubkey : null,
+    custody: vault.custody,
     readOnly: opts.readOnly,
     pausedReason: vault.pausedReason,
   };

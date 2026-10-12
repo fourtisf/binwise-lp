@@ -29,6 +29,8 @@ const freshKey = () => {
 let deleted: number[];
 let chatState = memoryChatState();
 let liveOk = true;
+/** Production: Binwise keeps no wallets any more */
+let keysClosed = false;
 let walletBalances: Record<string, number> = {};
 const tg: TelegramApi = {
   send: async (chatId, text, o) => {
@@ -57,6 +59,7 @@ const bot = () =>
     exportKey: async () => 'SECRET-KEY-BASE58',
     deleteMessage: async (_c, id) => void deleted.push(id),
     liveAllowed: () => liveOk,
+    keysClosed,
     state: chatState,
     keyMessageMs: 5,
   });
@@ -97,6 +100,7 @@ beforeEach(async () => {
   deleted = [];
   chatState = memoryChatState();
   liveOk = true;
+  keysClosed = false;
   walletBalances = {};
   usedKeys.clear();
   now = Date.UTC(2026, 9, 10, 12);
@@ -286,6 +290,10 @@ describe('telegram bot', () => {
     const msg = proposalMessage(p, now);
     expect(msg.text).toMatch(/Approval needed/);
     expect(msg.text).toMatch(/Expires in 60 min/);
+    // Self-custody: Approve opens the website, where the owner's wallet signs.
+    const own = proposalMessage(p, now, 'https://binwise.org/app');
+    expect(own.keyboard[0][0]).toEqual({ text: '✍️ Approve in wallet', url: 'https://binwise.org/app' });
+    expect(own.text).toMatch(/your wallet signs it/);
     await press('apv');
     expect(last().text).toMatch(/Waiting for your approval/);
     await press(`ok|${p.id}`);
@@ -532,5 +540,51 @@ describe('telegram bot', () => {
     await press('sm|0');
     expect((await db.strategy.findFirstOrThrow()).maxPositionUsd).toBe(0);
     expect(await db.decision.count({ where: { title: 'Strategy updated' } })).toBe(6);
+  });
+
+  it('keeps no new wallets once funds stay in owners\' wallets, and moves a wallet made here into the owner\'s app', async () => {
+    // Made here earlier, while Binwise still kept wallets.
+    await press('cw');
+    walletBalances = { [SOL_MINT]: 1 };
+    await press('cwx');
+    const v0 = await db.vault.findFirstOrThrow({ where: { user: { telegramChatId: String(CHAT) } } });
+    expect(v0.encSecret).not.toBeNull();
+
+    keysClosed = true;
+    await press('wal');
+    expect(last().text).toMatch(/no longer keeps funds/);
+    expect(callbackOf('🔐 Move to my wallet app')).toBe('own');
+    await press('own');
+    expect(last().text).toContain(`<code>${v0.agentPubkey}</code>`);
+    // The key must be saved first: deleting it unseen would lose the wallet.
+    await press('ownx');
+    expect(last().text).toMatch(/First tap <b>Private key<\/b>/);
+    await press('ownxx');
+    expect((await db.vault.findUniqueOrThrow({ where: { id: v0.id } })).encSecret).not.toBeNull();
+    await press('keyx');
+    await press('ownx');
+    expect(last().text).toMatch(/Delete the key from Binwise\?/);
+    await press('ownxx');
+    expect(last().text).toMatch(/no longer has this wallet's key/);
+    const v1 = await db.vault.findUniqueOrThrow({ where: { id: v0.id } });
+    expect([v1.mode, v1.custody, v1.agentPubkey, v1.encSecret]).toEqual(['live', 'wallet', null, null]);
+    // From now on it is the owner's own wallet: the bot sends them to the website to approve.
+    await press('wal');
+    expect(last().text).toMatch(/Binwise holds no key/);
+
+    // A new chat: no Create / Import, and a pasted key is still deleted, never imported.
+    const other = (data: string) => bot()({ update_id: ++updateId, callback_query: { id: 'x', data, message: { message_id: 5, chat: { id: 999, type: 'private' } } } });
+    await bot()({ update_id: ++updateId, message: { message_id: updateId, chat: { id: 999, type: 'private' }, text: '/start' } } as TgUpdate);
+    expect(last().text).toMatch(/Your funds stay in your own wallet/);
+    expect(buttons().map((b) => b.text)).toEqual(['🌐 Open website']);
+    await other('cw');
+    expect(last().text).toMatch(/no longer keeps wallets/);
+    await other('cwx');
+    await other('iw');
+    expect(last().text).toMatch(/no longer keeps wallets/);
+    const kp = freshKey();
+    await bot()({ update_id: ++updateId, message: { message_id: updateId, chat: { id: 999, type: 'private' }, text: kp.b58 } } as TgUpdate);
+    expect(deleted.at(-1)).toBe(updateId);
+    expect(await db.user.count({ where: { telegramChatId: '999' } })).toBe(0);
   });
 });

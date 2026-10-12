@@ -249,12 +249,12 @@ export function ConfirmLiveModal() {
       </div>
       <div className="rows">
         <div>
-          <span>Where funds go</span>
-          <b>A vault wallet only you can withdraw from</b>
+          <span>Where funds stay</span>
+          <b>In your own wallet. Binwise never holds them</b>
         </div>
         <div>
-          <span>Withdrawals</span>
-          <b>Only to your connected wallet</b>
+          <span>Every change</span>
+          <b>You approve it in your wallet</b>
         </div>
       </div>
       <button

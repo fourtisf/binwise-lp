@@ -40,7 +40,7 @@ function Address({ address, onCopy }: { address: string; onCopy: () => void }) {
 
 /** The owner's portfolio: holdings, net vs hold since the start, fees, closed positions, money in and out. */
 export default function PortfolioPage() {
-  const { client, me, ready, overview, decisions } = useAppData();
+  const { client, me, ready, overview, decisions, selfCustody } = useAppData();
   const { openConnect, openWithdraw, toast, scrollTarget } = useUi();
   /** The newest activity: a deposit, withdrawal or trade changes what the vault holds, so it reloads. */
   const lastDecision = decisions[0]?.id;
@@ -171,8 +171,8 @@ export default function PortfolioPage() {
         <div className="panel card" id="pfOwn" style={{ marginTop: 12 }}>
           <div className="ph">
             <div>
-              <h3>In your wallet, not in the vault</h3>
-              <p>The agent only uses what is in your vault wallet.</p>
+              <h3>{selfCustody ? 'In your wallet' : 'In your wallet, not in the vault'}</h3>
+              <p>{selfCustody ? 'Your funds stay here. Add LP from Pools: you approve it in your wallet.' : 'The agent only uses what is in your vault wallet.'}</p>
             </div>
             <Address address={me.wallet} onCopy={() => copy(me.wallet, 'Wallet address')} />
           </div>
@@ -266,7 +266,7 @@ export default function PortfolioPage() {
           <div className="ph">
             <div>
               <h3>Holdings</h3>
-              <p>What your vault holds now</p>
+              <p>{selfCustody ? 'Your positions, in your own wallet' : 'What your vault holds now'}</p>
             </div>
             {p?.mode === 'live' && p.vaultWallet && (
               <button className="btn btn-dark btn-sm" id="pfWithdraw" onClick={openWithdraw}>
@@ -339,9 +339,11 @@ export default function PortfolioPage() {
                   <tr style={{ cursor: 'default' }}>
                     <td colSpan={4} className="muted" style={{ whiteSpace: 'normal', padding: '24px 16px' }}>
                       {p
-                        ? p.vaultWallet
-                          ? 'Nothing in the vault wallet yet. Send SOL or USDC to it (address above, or 💳 Wallet in the Telegram bot).'
-                          : 'Nothing in the vault yet. Deposit SOL or USDC in the Telegram bot (💳 Wallet).'
+                        ? selfCustody
+                          ? 'No positions yet. Add LP from Pools: you pay with SOL from your own wallet and approve it there.'
+                          : p.vaultWallet
+                            ? 'Nothing in the vault wallet yet. Send SOL or USDC to it (address above, or 💳 Wallet in the Telegram bot).'
+                            : 'Nothing in the vault yet. Deposit SOL or USDC in the Telegram bot (💳 Wallet).'
                         : 'Loading…'}
                     </td>
                   </tr>
@@ -471,7 +473,11 @@ export default function PortfolioPage() {
               ) : (
                 <tr style={{ cursor: 'default' }}>
                   <td className="muted" style={{ whiteSpace: 'normal', padding: '24px 16px' }}>
-                    {p ? 'No deposits yet. Deposit SOL or USDC to your vault in the Telegram bot (💳 Wallet).' : 'Loading…'}
+                    {p
+                      ? selfCustody
+                        ? 'Nothing yet. Each LP you open from your wallet, and each close, shows here.'
+                        : 'No deposits yet. Deposit SOL or USDC to your vault in the Telegram bot (💳 Wallet).'
+                      : 'Loading…'}
                   </td>
                 </tr>
               )}

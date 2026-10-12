@@ -6,6 +6,7 @@ import {
   approveProposal,
   assessmentInput,
   createVault,
+  isSelfCustody,
   pendingProposals,
   rejectProposal,
   strategyData as strategyDataOf,
@@ -86,6 +87,11 @@ export interface BotDeps {
   now?: () => number;
   /** On-chain balances of a wallet by mint (live vaults' Wallet screen). */
   balances?: (address: string) => Promise<Record<string, number>>;
+  /**
+   * Binwise no longer creates, imports or keeps wallets: funds stay in owners' own wallets. Wallets made here
+   * before can still withdraw, and move into a wallet app (Binwise then deletes the key).
+   */
+  keysClosed?: boolean;
   /** A new agent wallet: address + sealed secret (Create wallet). */
   newWallet?: () => { pubkey: string; encSecret: Uint8Array<ArrayBuffer> };
   /** A pasted private key, checked and sealed; null when it isn't a valid key (Import wallet). */
@@ -129,15 +135,20 @@ const WITHDRAW_PCTS = [25, 50, 100];
 const amt = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: n < 1 ? 6 : 4 });
 const minutesLeft = (p: Proposal, now: number) => Math.max(0, Math.round((p.expiresAt.getTime() - now) / 60_000));
 
-/** The message the owner gets for a new proposal in manual mode. */
-export function proposalMessage(p: Proposal, now = Date.now()): { text: string; keyboard: Keyboard } {
+/**
+ * The message the owner gets for a new proposal in manual mode. `approveUrl`: self-custody, where only the
+ * owner's wallet can sign: Approve opens the website, which asks the wallet.
+ */
+export function proposalMessage(p: Proposal, now = Date.now(), approveUrl?: string): { text: string; keyboard: Keyboard } {
   return {
     text:
       `🗳 <b>Approval needed</b>\n\n${KIND_ICON[p.kind] ?? '•'} <b>${esc(p.title)}</b>\n${esc(p.reason)}\n\n` +
-      `Nothing happens until you approve. Expires in ${minutesLeft(p, now)} min.`,
+      (approveUrl
+        ? `Your funds are in your own wallet: approve it on the website and your wallet signs it. Expires in ${minutesLeft(p, now)} min.`
+        : `Nothing happens until you approve. Expires in ${minutesLeft(p, now)} min.`),
     keyboard: [
       [
-        { text: '✅ Approve', callback_data: `ok|${p.id}` },
+        approveUrl ? { text: '✍️ Approve in wallet', url: approveUrl } : { text: '✅ Approve', callback_data: `ok|${p.id}` },
         { text: '❌ Reject', callback_data: `no|${p.id}` },
       ],
     ],
@@ -185,20 +196,37 @@ export function makeBot(d: BotDeps) {
     return vault ? { chatId, user, vault } : null;
   }
 
-  const notLinked: Screen = {
+  /** Wallets made or imported in this chat, whose key Binwise keeps: closed once funds stay in owners' own wallets. */
+  const keepsWallets = !d.keysClosed;
+  const notLinked: Screen = keepsWallets
+    ? {
+        text:
+          `👋 <b>Welcome to Binwise</b>\n\nAn AI agent that provides liquidity on Meteora (Solana) for you, and shows whether it beats simply holding.\n\n` +
+          `This chat isn't connected to a vault yet.\n\n` +
+          `🆕 <b>New here?</b> Tap <b>Create wallet</b>: you get your own Solana wallet in this chat, deposit SOL, and the agent does the rest. ` +
+          `Or <b>Import wallet</b> to use one you already have.\n\n` +
+          `🌐 <b>Already use the website?</b>\n1. Open ${esc(d.appUrl)}/app and connect your wallet\n2. Go to <b>Strategy</b> → turn on <b>Telegram alerts</b>\n3. Press <b>Start</b> in the chat that opens`,
+        keyboard: [
+          [
+            { text: '🆕 Create wallet', callback_data: 'cw' },
+            { text: '📥 Import wallet', callback_data: 'iw' },
+          ],
+          [{ text: '🌐 Open website', url: `${d.appUrl}/app` }],
+        ],
+      }
+    : {
+        text:
+          `👋 <b>Welcome to Binwise</b>\n\nAn AI agent that provides liquidity on Meteora (Solana) for you, and shows whether it beats simply holding.\n\n` +
+          `🔐 <b>Your funds stay in your own wallet.</b> Binwise never holds them or your keys: the agent watches your positions and asks you to approve every change in your wallet.\n\n` +
+          `<b>Start</b>\n1. Open ${esc(d.appUrl)}/app and connect your wallet (Phantom, Solflare, Backpack, Bitget…)\n2. Go to <b>Strategy</b> → turn on <b>Telegram alerts</b>\n3. Press <b>Start</b> in the chat that opens: alerts and approvals come here`,
+        keyboard: [[{ text: '🌐 Open website', url: `${d.appUrl}/app` }]],
+      };
+  /** Create / Import when Binwise no longer keeps wallets. */
+  const walletsClosed: Screen = {
     text:
-      `👋 <b>Welcome to Binwise</b>\n\nAn AI agent that provides liquidity on Meteora (Solana) for you, and shows whether it beats simply holding.\n\n` +
-      `This chat isn't connected to a vault yet.\n\n` +
-      `🆕 <b>New here?</b> Tap <b>Create wallet</b>: you get your own Solana wallet in this chat, deposit SOL, and the agent does the rest. ` +
-      `Or <b>Import wallet</b> to use one you already have.\n\n` +
-      `🌐 <b>Already use the website?</b>\n1. Open ${esc(d.appUrl)}/app and connect your wallet\n2. Go to <b>Strategy</b> → turn on <b>Telegram alerts</b>\n3. Press <b>Start</b> in the chat that opens`,
-    keyboard: [
-      [
-        { text: '🆕 Create wallet', callback_data: 'cw' },
-        { text: '📥 Import wallet', callback_data: 'iw' },
-      ],
-      [{ text: '🌐 Open website', url: `${d.appUrl}/app` }],
-    ],
+      `🔐 <b>Binwise no longer keeps wallets</b>\n\nYour funds stay in your own wallet, and you approve every change there. ` +
+      `Open ${esc(d.appUrl)}/app and connect your wallet (Phantom, Solflare, Backpack, Bitget…).`,
+    keyboard: [[{ text: '🌐 Open website', url: `${d.appUrl}/app` }], [{ text: '⬅️ Back', callback_data: 'start' }]],
   };
 
   // ---------------------------------------------------------------- screens
@@ -537,6 +565,14 @@ export function makeBot(d: BotDeps) {
   }
 
   async function wallet(c: Ctx, header = ''): Promise<Screen> {
+    if (isSelfCustody(c.vault))
+      return {
+        text:
+          header +
+          `💳 <b>Your wallet</b> · Solana mainnet\n<code>${c.user.wallet}</code>\n\n` +
+          `🔐 Your funds and positions stay in this wallet. Binwise holds no key: the agent watches and asks you to approve each change on the website, where your wallet signs it.`,
+        keyboard: [[{ text: '🌐 Open website', url: `${d.appUrl}/app` }], [{ text: '⬅️ Menu', callback_data: 'menu' }]],
+      };
     if (!live(c)) return paperWallet;
     const address = c.vault.agentPubkey!;
     const h = await holdings(address);
@@ -550,14 +586,20 @@ export function makeBot(d: BotDeps) {
         header +
         `💳 <b>Your agent wallet</b> · Solana mainnet\n<code>${address}</code>\n<i>(tap the address to copy)</i>\n\n` +
         `<b>Balance</b>\n${lines.join('\n')}\n\n` +
-        `➕ <b>Deposit</b>: send SOL (and/or USDC) to the address above, ${from}. ` +
-        `Keep at least ${MIN_SOL} SOL in it for fees and rent; the agent puts the rest to work.` +
-        (h != null && sol < MIN_SOL ? `\n\n⚠️ Needs at least ${MIN_SOL} SOL before the agent can add LP.` : ''),
+        (keepsWallets
+          ? `➕ <b>Deposit</b>: send SOL (and/or USDC) to the address above, ${from}. ` +
+            `Keep at least ${MIN_SOL} SOL in it for fees and rent; the agent puts the rest to work.` +
+            (h != null && sol < MIN_SOL ? `\n\n⚠️ Needs at least ${MIN_SOL} SOL before the agent can add LP.` : '')
+          : `🔐 <b>Binwise no longer keeps funds for you.</b> This wallet takes no new money; open positions are looked after until you close them. ` +
+            (isBotWallet(c.user, c.vault)
+              ? `Move it into a wallet app you control: tap 🔐 Move to my wallet app.`
+              : `Withdraw what's in it to your own wallet (💸 Withdraw), then switch on the website.`)),
       keyboard: [
         [
           { text: '💸 Withdraw', callback_data: 'wd' },
           { text: '🔑 Private key', callback_data: 'key' },
         ],
+        ...(isBotWallet(c.user, c.vault) && !keepsWallets ? [[{ text: '🔐 Move to my wallet app', callback_data: 'own' }]] : []),
         [
           { text: '🔄 Refresh', callback_data: 'wal' },
           { text: '⬅️ Menu', callback_data: 'menu' },
@@ -641,6 +683,7 @@ export function makeBot(d: BotDeps) {
   const capNote = () => (Number.isFinite(liveLimits().maxUsd) ? ` (up to ${usd(liveLimits().maxUsd)} in positions while live trading is new)` : '');
 
   function importIntro(chatId: string): Screen {
+    if (d.keysClosed) return walletsClosed;
     if (!liveAllowed(chatId) || !d.importWallet) return notOpen(chatId);
     return {
       text:
@@ -654,6 +697,7 @@ export function makeBot(d: BotDeps) {
   }
 
   function createWalletIntro(chatId: string): Screen {
+    if (d.keysClosed) return walletsClosed;
     if (!liveAllowed(chatId) || !d.newWallet)
       return {
         text:
@@ -702,9 +746,9 @@ export function makeBot(d: BotDeps) {
   async function importWallet(m: TgMessage, chatId: string, text: string) {
     // The message holds a private key: delete it first, whatever happens next.
     await d.deleteMessage?.(chatId, m.message_id).catch(() => {});
-    if (!liveAllowed(chatId) || !d.importWallet) {
+    if (d.keysClosed || !liveAllowed(chatId) || !d.importWallet) {
       await state.del(chatId);
-      const s = notOpen(chatId);
+      const s = d.keysClosed ? walletsClosed : notOpen(chatId);
       return tg.send(chatId, s.text, { html: true, keyboard: s.keyboard });
     }
     const key = d.importWallet(text);
@@ -724,7 +768,7 @@ export function makeBot(d: BotDeps) {
   }
 
   async function createWallet(chatId: string): Promise<Screen> {
-    if (!liveAllowed(chatId) || !d.newWallet) return createWalletIntro(chatId);
+    if (d.keysClosed || !liveAllowed(chatId) || !d.newWallet) return createWalletIntro(chatId);
     const c = await openVault(chatId, d.newWallet(), false);
     const vault = c.vault;
     const w = await wallet(c, '✅ <b>Wallet created.</b>\n\n');
@@ -844,7 +888,7 @@ export function makeBot(d: BotDeps) {
     const c = await context(chatId);
     if (!c) {
       await tg.answer(q.id);
-      if (q.data === 'iw' && liveAllowed(chatId) && d.importWallet) await state.set(chatId, 'import', 600);
+      if (q.data === 'iw' && !d.keysClosed && liveAllowed(chatId) && d.importWallet) await state.set(chatId, 'import', 600);
       const s = q.data === 'cw' ? createWalletIntro(chatId) : q.data === 'cwx' ? await createWallet(chatId) : q.data === 'iw' ? importIntro(chatId) : notLinked;
       return tg.edit(chatId, msg.message_id, s.text, { html: true, keyboard: s.keyboard });
     }
@@ -985,6 +1029,61 @@ export function makeBot(d: BotDeps) {
         return show(await wallet(c), 'Cancelled');
       case 'key':
         return show(live(c) ? keyWarning : paperWallet);
+      case 'own':
+      case 'ownx':
+      case 'ownxx': {
+        // Only a wallet made or imported here: its key is the owner's only way in, so it must be saved first.
+        if (!live(c) || !isBotWallet(c.user, c.vault)) return show(await wallet(c));
+        const backToWallet: Keyboard = [[{ text: '⬅️ Wallet', callback_data: 'wal' }]];
+        if (op === 'own')
+          return show({
+            text:
+              `🔐 <b>Move to your own wallet app</b>\n\nBinwise no longer keeps keys. Move this wallet into an app you control; the address, funds and positions stay the same.\n\n` +
+              `1. Tap 🔑 <b>Private key</b> and import it in Phantom or Solflare (Add account → Import private key).\n` +
+              `2. Check the app shows <code>${c.vault.agentPubkey}</code>.\n` +
+              `3. Tap <b>Delete key from Binwise</b>.\n\n` +
+              `Then open ${esc(d.appUrl)}/app with that wallet: the agent keeps watching your positions and asks you to approve each change there.`,
+            keyboard: [
+              [
+                { text: '🔑 Private key', callback_data: 'key' },
+                { text: '🗑 Delete key from Binwise', callback_data: 'ownx' },
+              ],
+              ...backToWallet,
+            ],
+          });
+        const shown = await db.decision.findFirst({ where: { vaultId: c.vault.id, title: 'Private key shown' } });
+        if (!shown) return show({ text: '🔑 First tap <b>Private key</b>, save it in your wallet app, and check the address there. Then delete it from Binwise.', keyboard: [[{ text: '🔑 Private key', callback_data: 'key' }], ...backToWallet] });
+        if (op === 'ownx')
+          return show({
+            text:
+              `⚠️ <b>Delete the key from Binwise?</b>\n\nBinwise can never show it again. If it isn't saved in your wallet app, everything in <code>${c.vault.agentPubkey}</code> is lost for good.\n\n` +
+              `Only continue if your wallet app shows this address.`,
+            keyboard: [
+              [
+                { text: '🗑 Yes, delete it', callback_data: 'ownxx' },
+                { text: '✖️ Cancel', callback_data: 'wal' },
+              ],
+            ],
+          });
+        await db.vault.update({ where: { id: c.vault.id }, data: { custody: 'wallet', agentPubkey: null, encSecret: null, cash: {} } });
+        await db.decision.create({
+          data: {
+            vaultId: c.vault.id,
+            ts: new Date(now()),
+            type: 'hold',
+            title: 'Switched to your own wallet',
+            reason: "Binwise deleted this wallet's key at the owner's request in Telegram. Funds and positions stay in the owner's wallet; every change is approved there.",
+            inputs: { manual: true },
+          },
+        });
+        return show(
+          {
+            text: `✅ <b>Done.</b> Binwise no longer has this wallet's key.\n\nOpen ${esc(d.appUrl)}/app and connect the wallet from your app: your funds and positions are there, and you approve every change.`,
+            keyboard: [[{ text: '🌐 Open website', url: `${d.appUrl}/app` }], [{ text: '⬅️ Menu', callback_data: 'menu' }]],
+          },
+          'Key deleted',
+        );
+      }
       case 'keyx': {
         if (!live(c) || !d.exportKey) return show(paperWallet);
         const secret = await d.exportKey(c.vault);
@@ -1006,6 +1105,11 @@ export function makeBot(d: BotDeps) {
       case 'ok':
       case 'no': {
         try {
+          if (op === 'ok' && isSelfCustody(c.vault))
+            return show(
+              { text: `✍️ Your funds are in your own wallet, so you approve this on the website: your wallet signs it there.`, keyboard: [[{ text: '🌐 Approve in wallet', url: `${d.appUrl}/app` }], ...back] },
+              'Approve it on the website',
+            );
           const p = op === 'ok' ? await approveProposal(db, c.vault.id, a, now()) : await rejectProposal(db, c.vault.id, a, now());
           if (op === 'ok') {
             await d.enqueue(c.vault.id, { id: `approve-${p.id}`, action: 'proposal', proposalId: p.id, chatId });

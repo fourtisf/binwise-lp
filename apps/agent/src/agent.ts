@@ -38,6 +38,7 @@ import { SetupTooCostly, TX_COUNT, liveLimits, minPositionUsd, type Executor, ty
 import {
   activeParams,
   assessmentInput,
+  isSelfCustody,
   isStable,
   latestSnapshots,
   liveTotalUsd,
@@ -47,6 +48,7 @@ import {
   strategyWeights,
   REJECT_QUIET_HOURS,
   PROPOSAL_TTL_MIN,
+  shrinkDeposits,
   type Position,
   type PrismaClient,
   type Proposal as ProposalRow,
@@ -191,6 +193,9 @@ const holdingsUsd = (h: Holdings, tokens: Map<string, Token>) =>
   Object.entries(h).reduce((sum, [mint, amt]) => sum + amt * (tokens.get(mint)?.priceUsd ?? 0), 0);
 
 /** Runs one full cycle for a vault. Returns the decision shown in the UI. */
+/** A live vault whose key Binwise still holds (from before self-custody): it takes no new money. */
+const keyHeldHere = (v: Vault) => v.mode === 'live' && v.custody === 'agent' && !!v.encSecret;
+
 export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): Promise<CycleDecision> {
   const { db } = deps;
   const now = (deps.now ?? Date.now)();
@@ -270,6 +275,9 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
 
   // ---- Check positions
   emitStep(2);
+  // Self-custody: the funds and positions are in the owner's wallet. The agent only reads them and proposes.
+  const selfCustody = isSelfCustody(vault);
+  const custodyClosing = keyHeldHere(vault);
   const executor = await deps.executorFor(vault);
   if (executor.mode === 'live' && cycle % 5 === 0)
     await reconcileLive(deps, vault, executor, now).catch((e) => log(`[agent] vault ${vault.id} reconcile: ${(e as Error).message}`));
@@ -295,7 +303,16 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
     if (m.gone) {
       // Closed on-chain already (e.g. an earlier action stopped halfway): its funds are back in the wallet.
       await db.position.update({ where: { id: p.id }, data: { status: 'closed', closedAt: new Date(now), feesUnclaimedUsd: 0 } });
-      await record('exit', `Closed ${pairOf(view)}`, 'This position no longer exists on-chain, so it is marked closed. Its funds are back in the vault wallet.', { poolId: p.poolId });
+      if (selfCustody) {
+        // Closed from the owner's wallet outside Binwise: what came out left the vault's view, like a withdrawal.
+        const outUsd = p.valueUsd + p.feesUnclaimedUsd;
+        const v = await db.vault.findUniqueOrThrow({ where: { id: vault.id } });
+        await db.vault.update({ where: { id: vault.id }, data: { deposits: await shrinkDeposits(db, v.deposits as Holdings, outUsd) } });
+        await record('exit', `Closed ${pairOf(view)}`, `This position was closed from your wallet. About ${usd(outUsd)} is back in your wallet.`, {
+          poolId: p.poolId,
+          inputs: { flowUsd: -outUsd },
+        });
+      } else await record('exit', `Closed ${pairOf(view)}`, 'This position no longer exists on-chain, so it is marked closed. Its funds are back in the vault wallet.', { poolId: p.poolId });
       continue;
     }
     const holdUsd = p.entryAmountA * view.ctx.usdX + p.entryAmountB * view.ctx.usdY;
@@ -499,7 +516,8 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
     const live = executor.mode === 'live' ? liveLimits() : null;
     const maxPositions = Math.min(Math.max(1, Math.floor(100 / s.maxAllocPct)), live?.maxPositions ?? Infinity);
     let openCount = marked.length;
-    let idleUsd = holdingsUsd(cash, tokens);
+    // A vault whose key Binwise holds takes no new LP: its owner moves the idle funds to their own wallet.
+    let idleUsd = custodyClosing ? 0 : holdingsUsd(cash, tokens);
     let liveRoomUsd = live
       ? Math.min(live.maxUsd - marked.reduce((sum, x) => sum + x.pos.valueUsd, 0), live.maxTotalUsd - (await liveTotalUsd(db)))
       : Infinity;
@@ -539,6 +557,9 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
     }
     if (!plans.length) {
       if (!marked.length && !eligible.length) holds.push(`No pool clears your filters right now. Watching ${views.length} pools.`);
+      else if (!marked.length && selfCustody) holds.push('No positions yet. Add LP from Pools: you pay from your own wallet and approve it there.');
+      else if (custodyClosing && holdingsUsd(cash, tokens) >= MIN_POSITION_USD)
+        holds.push("Binwise no longer keeps funds for you, so idle funds aren't deployed. Withdraw them to your own wallet (Portfolio → Withdraw) and add LP from there.");
       else if (!marked.length && holdingsUsd(cash, tokens) < MIN_POSITION_USD) holds.push('No idle funds to deploy. Deposit to start.');
       else if (!holds.length) holds.push('All positions are in range and trends are healthy. Moving anything now would cost more than it earns.');
     }
@@ -546,14 +567,17 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
 
   // ---- Manual mode: the agent proposes and waits. Only protective exits (risk alarms,
   // daily loss stop) still run on their own, so a missed message can't cost the vault.
+  // Self-custody: everything is a proposal, protective exits too: only the owner's wallet can sign.
   const waiting: string[] = [];
-  if (s.toggles.askBeforeTrading && !killed) {
+  if ((s.toggles.askBeforeTrading || selfCustody) && !killed) {
     await db.proposal.updateMany({ where: { vaultId: vault.id, status: 'pending', expiresAt: { lt: new Date(now) } }, data: { status: 'expired' } });
-    for (const p of plans.filter((x) => !(x.kind === 'exit' && x.urgent))) {
+    const runsItself = (x: Plan) => !selfCustody && x.kind === 'exit' && !!x.urgent;
+    // Self-custody never deploys by itself: the owner adds LP from their wallet.
+    for (const p of plans.filter((x) => !runsItself(x) && !(selfCustody && x.kind === 'deploy'))) {
       const title = await propose(deps, vault, p, now);
       if (title) waiting.push(title);
     }
-    plans.splice(0, plans.length, ...plans.filter((x) => x.kind === 'exit' && x.urgent));
+    plans.splice(0, plans.length, ...plans.filter(runsItself));
     if (waiting.length) {
       holds.unshift(`Waiting for your approval: ${waiting.join('; ')}.`);
       deps.emit(vault.id, { type: 'proposals', pending: await db.proposal.count({ where: { vaultId: vault.id, status: 'pending' } }) });
@@ -608,7 +632,10 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
     }
   }
 
-  if (stopHit && !killed && failedExits) {
+  if (stopHit && !killed && selfCustody) {
+    // Nothing closes without the owner's wallet: the exits wait as proposals (sent to Telegram when new).
+    texts.push(`Vault fell more than ${s.dailyStopPct}% in 24 hours. Daily loss stop: approve closing your positions in your wallet.`);
+  } else if (stopHit && !killed && failedExits) {
     // Pausing now would leave positions nobody manages: keep running and retry the exits.
     texts.push(`Daily loss stop: ${failedExits} position(s) couldn't be closed yet. Retrying next cycle before pausing.`);
     await deps.notify?.(vault, `Daily loss stop hit, but ${failedExits} position(s) couldn't be closed yet. Retrying every minute.`).catch(() => {});
@@ -1127,6 +1154,7 @@ export async function runManualDeploy(
   const view = await poolView(snap, tokens, s, strategyWeights(vault.strategy!), params);
   if (!view) throw new Error('Token prices are missing for this pool.');
   if (vault.status !== 'running') throw new Error(`The agent is paused${vault.pausedReason ? ` (${vault.pausedReason})` : ''}. Resume it first.`);
+  if (keyHeldHere(vault)) throw new Error("Binwise no longer keeps funds for you. Withdraw this vault's funds to your own wallet, then add LP from there on the website.");
   const override = !!opts.override && !view.a.eligible;
   if (!override) {
     if (!view.a.eligible) throw new Error(`The agent won't enter this pool right now. ${view.a.reason}`);

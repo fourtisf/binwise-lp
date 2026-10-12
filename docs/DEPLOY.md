@@ -74,23 +74,15 @@ and the agent manages the position afterwards. The bot only answers private chat
 
 To disconnect a chat, send `/unlink` to the bot.
 
-### Wallets created in the bot (no website needed)
+### Wallets in the bot (closed: funds stay in owners' own wallets)
 
-In an unlinked chat, **🆕 Create wallet** makes a new live vault with its own agent wallet, owned by that chat.
-**💳 Wallet** shows the deposit address and balance, **💸 Withdraw** sends idle funds to an address the user pastes
-(website vaults: only to their registered wallet), and **🔑 Private key** shows the key (base58, imports into Phantom)
-after a warning, in a message that deletes itself after 60 seconds. Showing the key is logged in Activity (never the key).
+Binwise no longer creates, imports or keeps wallets. In an unlinked chat the bot points to the website, where people
+connect their own wallet; linking Telegram there gives alerts and proposals in the chat. A private key pasted in the bot
+is still deleted at once.
 
-**📥 Import wallet** takes a pasted private key (base58 or byte array) instead: the message is deleted at once, the key
-is sealed like any agent key, and what the wallet already holds becomes its starting deposit. A wallet already used on
-Binwise (website or another chat) can't be imported. A private key pasted anywhere else in the bot is deleted too.
-
-- Deposits to a bot wallet count from any address (exchange or wallet).
-- Who may create one: everyone when `LIVE_WALLETS=*`; otherwise only Telegram ids in `LIVE_TELEGRAM_IDS`
-  (comma-separated; `/id` in the bot shows it; `deploy/go-live.sh` asks for it with option 1).
-- A bot wallet can't be unlinked from its chat (that chat is how its owner reaches it).
-- Moving funds out with the key in another wallet works, but the agent sees it as a drop in value and may close
-  positions and pause; 💸 Withdraw keeps the numbers right.
+Wallets made in the bot before keep working: **💳 Wallet** shows the balance, **💸 Withdraw** sends idle funds out, and
+**🔐 Move to my wallet app** walks the owner through saving the key (**🔑 Private key**, imports into Phantom) and then
+deleting it from Binwise (only after the key was shown). The vault then works from the owner's own wallet.
 
 ## 3. Backtest report (build step 4)
 
@@ -143,14 +135,19 @@ LIVE_MAX_USD=200                # per vault
 LIVE_MAX_TOTAL_USD=2000         # all vaults together
 ```
 
-Rebuild the site after changing `NEXT_PUBLIC_*`. New wallets get a live vault with their own agent wallet; nothing trades
-until they deposit (the website has no Deposit button: link Telegram under Strategy → Telegram alerts, then 💳 Wallet in
-the bot shows the vault's deposit address). Anyone can still switch
-their vault to Paper. The landing-page demo stays a simulated paper vault.
+Rebuild the site after changing `NEXT_PUBLIC_*`. New wallets get a **self-custody** live vault: Binwise stores no key and
+holds no funds. Add LP, close, claim and the agent's proposals (rebalance, exit, compound) are built by the API and signed
+in the owner's own wallet, all steps in one approval; the agent only reads the wallet and proposes. Anyone can still
+switch their vault to Paper. The landing-page demo stays a simulated paper vault.
+
+Vaults from before, whose agent wallet Binwise holds the key of, take no new money and open no new positions; open ones
+are still managed until closed. Their owners withdraw to their wallet, then **Switch to my own wallet** (Overview) deletes
+the key, only once the vault wallet is empty.
 
 ## Going live (build step 6, owner approval required)
 
-Live mode sends real transactions from a per-vault agent wallet. Safety rails, all on by default:
+Live mode uses real funds, which stay in each owner's own wallet (self-custody): every transaction is signed there.
+Safety rails, all on by default:
 
 - `LIVE_TRADING_ENABLED=true` **and** the wallet listed in `LIVE_WALLETS` **and** the owner confirming in the app.
 - `LIVE_MAX_USD` (default 200) and `LIVE_MAX_POSITIONS` (default 1): the agent never deploys more, whatever is deposited.
@@ -164,7 +161,7 @@ Steps:
 
 1. Put a Helius mainnet URL in `RPC_URL` and `NEXT_PUBLIC_RPC_URL`, a Jupiter key in `JUPITER_API_KEY`, your wallet address in `LIVE_WALLETS`, and set `LIVE_TRADING_ENABLED=true`.
 2. Rebuild the site and restart: `sudo -u binwise -H bash -lc 'cd ~/binwise && pnpm --filter @binwise/web build && pm2 restart all'`.
-3. In the app: Connect wallet → switch **Live** → confirm. Deposit a small amount of SOL (keep at least 0.25 SOL for fees and rent) and/or USDC
-   to the vault's address from the Telegram bot's 💳 Wallet (the agent picks up transfers from your signed-in wallet on its own).
-4. Watch Activity. Test **Withdraw** and the kill switch with the small amount before adding more.
+3. In the app: Connect wallet → switch **Live** → confirm. Open a pool → Add LP with a small amount of SOL from your wallet
+   (about 0.1 SOL more stays in the wallet for the position's rent and fees) → approve once in the wallet.
+4. Watch Activity. Test **Close** on the position and the kill switch with the small amount before adding more.
 5. To stop at once: `sudo -u binwise -H bash -lc 'cd ~/binwise && pnpm --filter @binwise/agent kill on'`.

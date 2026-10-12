@@ -83,14 +83,16 @@ export class JupiterClient {
     return out;
   }
 
-  quote(inputMint: string, outputMint: string, amountRaw: string, slippageBps = 50, maxAccounts?: number) {
+  /** `asLegacyTransaction`: a route that fits a legacy transaction (wallets that can't sign versioned ones). */
+  quote(inputMint: string, outputMint: string, amountRaw: string, slippageBps = 50, maxAccounts?: number, asLegacyTransaction = false) {
     const q = new URLSearchParams({ inputMint, outputMint, amount: amountRaw, slippageBps: String(slippageBps), restrictIntermediateTokens: 'true' });
     // Swap API v1 quote parameter: rough cap on accounts the route may use (default 64).
     if (maxAccounts) q.set('maxAccounts', String(maxAccounts));
+    if (asLegacyTransaction) q.set('asLegacyTransaction', 'true');
     return fetchJson<JupiterQuote>(`${this.baseUrl}/swap/v1/quote?${q}`, { headers: this.headers, minIntervalMs: this.spacing });
   }
 
-  swap(quoteResponse: JupiterQuote, userPublicKey: string, maxPriorityLamports = 200_000) {
+  swap(quoteResponse: JupiterQuote, userPublicKey: string, maxPriorityLamports = 200_000, asLegacyTransaction = false) {
     return fetchJson<JupiterSwapResponse>(`${this.baseUrl}/swap/v1/swap`, {
       method: 'POST',
       headers: this.headers,
@@ -101,6 +103,7 @@ export class JupiterClient {
         userPublicKey,
         wrapAndUnwrapSol: true,
         dynamicComputeUnitLimit: true,
+        ...(asLegacyTransaction ? { asLegacyTransaction: true } : {}),
         prioritizationFeeLamports: { priorityLevelWithMaxLamports: { priorityLevel: 'high', maxLamports: maxPriorityLamports } },
       },
     });

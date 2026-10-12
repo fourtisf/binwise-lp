@@ -3,6 +3,7 @@ import {
   JitoClient,
   LiveExecutor,
   PaperExecutor,
+  WalletReader,
   assertLiveTradingAllowed,
   assertLiveOwner,
   loadAgentKey,
@@ -10,7 +11,7 @@ import {
   type Executor,
   type Holdings,
 } from '@binwise/chain';
-import { getDb, type PrismaClient } from '@binwise/db';
+import { getDb, isSelfCustody, type PrismaClient } from '@binwise/db';
 import { PublicKey } from '@solana/web3.js';
 import type { Redis } from 'ioredis';
 import { publish, redisIdempotency, redisKillSwitch, withVaultLock } from './redis';
@@ -51,7 +52,7 @@ export function makeAgentDeps(redis: Redis, db: PrismaClient = getDb(), telegram
       ? async (vault, proposal) => {
           const user = await db.user.findUnique({ where: { id: vault.userId } });
           if (!user?.telegramChatId) return;
-          const m = proposalMessage(proposal);
+          const m = proposalMessage(proposal, Date.now(), isSelfCustody(vault) ? `https://${process.env.PUBLIC_DOMAIN || 'binwise.org'}/app` : undefined);
           await telegram.send(user.telegramChatId, m.text, { html: true, keyboard: m.keyboard });
         }
       : undefined,
@@ -59,9 +60,11 @@ export function makeAgentDeps(redis: Redis, db: PrismaClient = getDb(), telegram
       const costs = { ...DEFAULT_COSTS, solUsd: await solUsd() };
       if (vault.mode !== 'live') return new PaperExecutor({ ...(vault.cash as Holdings) }, costs);
       assertLiveTradingAllowed(vault);
-      if (!vault.encSecret) throw new Error('Live vault has no agent key.');
       const user = await db.user.findUniqueOrThrow({ where: { id: vault.userId } });
       assertLiveOwner(user, vault.agentPubkey);
+      // Self-custody: no key here. The agent reads the owner's wallet and proposes; the owner signs.
+      if (isSelfCustody(vault)) return new WalletReader({ conn: makeConnection(), owner: user.wallet, costs });
+      if (!vault.encSecret) throw new Error('Live vault has no agent key.');
       return new LiveExecutor({
         conn: makeConnection(),
         agent: loadAgentKey(vault.encSecret, undefined, vault.agentPubkey),

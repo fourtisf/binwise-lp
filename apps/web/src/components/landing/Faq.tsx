@@ -6,7 +6,7 @@ import { LIVE_DEFAULT } from '@/lib/site';
 const FAQ: [string, string][] = [
   [
     'Does Binwise hold my funds?',
-    'No. In live mode each vault is a wallet only you can withdraw from. The agent can add or remove liquidity and swap to rebalance, but it can never send funds anywhere except back to you.',
+    'No. Your funds and positions stay in your own wallet, and Binwise never holds your keys. The agent watches the pools and proposes each move; adding LP, rebalancing, exiting and claiming are transactions you approve in your wallet. If Binwise were ever offline or hacked, your funds would still be in your wallet.',
   ],
   [
     'Is profit guaranteed?',
@@ -18,7 +18,9 @@ const FAQ: [string, string][] = [
   ],
   [
     'What happens in a crash?',
-    'Your downtrend rule and daily loss stop take over. The agent exits pools whose trend breaks your limit, and pauses everything if the vault drops past your daily stop.',
+    LIVE_DEFAULT
+      ? 'Your downtrend rule and daily loss stop take over. When a pool\'s trend breaks your limit, or the vault drops past your daily stop, the agent asks you right away (in the app and on Telegram) to approve the exit in your wallet.'
+      : 'Your downtrend rule and daily loss stop take over. The agent exits pools whose trend breaks your limit, and pauses everything if the vault drops past your daily stop. With real funds, it asks you to approve each exit in your wallet.',
   ],
   [
     'Which pools does it farm?',

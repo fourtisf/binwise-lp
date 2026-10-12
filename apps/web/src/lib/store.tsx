@@ -26,12 +26,23 @@ import type {
   VaultMode,
   VaultOverview,
 } from '@binwise/core';
-import { ApiError, getClient, type BinwiseClient } from './api/client';
+import { ApiError, getClient, type BinwiseClient, type WalletAction } from './api/client';
 import { usd } from './format';
 import { LIVE_DEFAULT, WALLET_LOGIN } from './site';
 import { useUi } from './ui';
+import { finishPendingPlans, runWalletPlan, walletErrorText, type PlanPhase } from './wallet-plan';
+import { SignInError, findWalletFor, installedSolanaWallets, rememberWallet, type Wallet } from './wallets';
 
 type TickFn = (t: PositionTick) => void;
+
+/** Self-custody: an action being carried out in the owner's own wallet, for the progress card. */
+export interface WalletTask {
+  title: string;
+  action: WalletAction;
+  wallet: Wallet | null;
+  /** find: looking for the signed-in wallet; pick: not found, the owner picks it; then the plan's own phases */
+  phase: PlanPhase | { phase: 'find' } | { phase: 'pick'; wallets: Wallet[] } | { phase: 'error'; message: string };
+}
 
 interface AppData {
   client: BinwiseClient | null;
@@ -64,6 +75,16 @@ interface AppData {
   close: (p: PositionView) => void;
   /** Add LP by hand (override: a pool the agent wouldn't enter; the owner accepted the risk) */
   deploy: (poolId: string, usd: number, override: boolean, opts?: { shape?: LiquidityShape; range?: CustomRange }) => void;
+  /** Self-custody: funds and positions stay in the owner's own wallet, which approves every change */
+  selfCustody: boolean;
+  /** Self-custody: the action running in the owner's wallet, if any */
+  walletTask: WalletTask | null;
+  /** Self-custody: runs `action` in the owner's wallet (one approval); `wallet`: the one the owner picked. True once recorded. */
+  inWallet: (action: WalletAction, title: string, wallet?: Wallet) => Promise<boolean>;
+  /** Stops waiting for the wallet (before its approval), or hides the card (after) */
+  stopWalletTask: () => void;
+  /** A vault wallet from before self-custody, once empty: Binwise deletes its key; the vault then works from the owner's wallet */
+  releaseCustody: () => void;
   /** Re-reads who is signed in and which vault to show */
   reload: () => void;
   /** Runs `fn` only for a signed-in owner; otherwise asks to connect a wallet. */
@@ -94,6 +115,9 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   const [decisionText, setDecisionText] = useState('Waiting for cycle');
   const [draft, setDraft] = useState<StrategySettings | null>(null);
   const [generation, setGeneration] = useState(0);
+  const [walletTask, setWalletTask] = useState<WalletTask | null>(null);
+  /** Bumped by "Stop waiting": a wallet answer that comes later no longer updates the card. */
+  const walletRun = useRef(0);
   const seriesRef = useRef(new Map<string, PositionChart>());
   const tickFns = useRef(new Map<string, Set<TickFn>>());
 
@@ -207,6 +231,13 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
         applyCycle(cy);
         if (o.status === 'paused') setDecisionText(o.pausedReason ?? 'Agent paused. Resume to continue.');
         setDraft(st);
+        // Self-custody: record what an earlier visit approved in the wallet but didn't get to record.
+        if (o.custody === 'wallet' && o.mode === 'live' && !o.readOnly)
+          void finishPendingPlans(c).then((titles) => {
+            if (cancelled || !titles.length) return;
+            titles.forEach((t) => toast(`Recorded: ${t}`, 5000));
+            void reloadPositions(c);
+          });
       } catch (e) {
         toast(errorText(e));
       } finally {
@@ -217,7 +248,51 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       cancelled = true;
       off?.();
     };
-  }, [onEvent, applyCycle, toast, generation]);
+  }, [onEvent, applyCycle, toast, generation, reloadPositions]);
+
+  const inWallet = useCallback(
+    async (action: WalletAction, title: string, picked?: Wallet): Promise<boolean> => {
+      if (!client || !me) return false;
+      const id = ++walletRun.current;
+      const live = () => walletRun.current === id;
+      const update = (t: Partial<WalletTask>) => live() && setWalletTask((prev) => (prev ? { ...prev, ...t } : prev));
+      setWalletTask({ title, action, wallet: picked ?? null, phase: { phase: 'find' } });
+      let name = picked?.name ?? 'your wallet';
+      try {
+        const all = installedSolanaWallets();
+        const w = picked ?? (await findWalletFor(all, me.wallet));
+        if (!live()) return false;
+        if (!w) {
+          update({
+            phase: all.length
+              ? { phase: 'pick', wallets: all }
+              : { phase: 'error', message: 'No Solana wallet found in this browser. Open Binwise where your wallet is installed (Phantom, Solflare, Backpack, Bitget…).' },
+          });
+          return false;
+        }
+        if (picked) rememberWallet(picked.name, me.wallet);
+        name = w.name;
+        update({ wallet: w });
+        const r = await runWalletPlan({ client, owner: me.wallet, wallet: w, action, stopped: () => !live(), onPhase: (p) => update({ phase: p }) });
+        if (live()) setWalletTask(null);
+        toast(r.title, 5000);
+        void reloadPositions(client).catch(() => {});
+        void client.overview().then(setOverview).catch(() => {});
+        if (action.action === 'proposal') void client.proposals().then(setProposals).catch(() => {});
+        return true;
+      } catch (e) {
+        if (e instanceof SignInError && e.kind === 'stopped') return false;
+        const message = walletErrorText(e, name);
+        // A wallet that failed by itself: maybe not the one signed in with, so offer the others.
+        const others = e instanceof SignInError && e.kind === 'wallet' ? installedSolanaWallets() : [];
+        if (live()) update({ phase: others.length > 1 ? { phase: 'pick', wallets: others } : { phase: 'error', message } });
+        // The card shows the error itself, except while it offers the other wallets or after "Stop waiting".
+        if (others.length > 1 || !live()) toast(message, 9000);
+        return false;
+      }
+    },
+    [client, me, toast, reloadPositions],
+  );
 
   const value = useMemo<AppData>(() => {
     const run = <T,>(p: Promise<T> | undefined, ok: (v: T) => void) => p?.then(ok).catch((e) => toast(errorText(e)));
@@ -229,16 +304,31 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       else if (client?.kind === 'http') openConnect();
       else toast('This vault is read-only.');
     };
+    const selfCustody = overview?.mode === 'live' && overview.custody === 'wallet';
     return {
       client,
       me,
       ready,
       empty,
       overview,
+      selfCustody,
+      walletTask,
+      inWallet,
+      stopWalletTask: () => {
+        walletRun.current++;
+        setWalletTask(null);
+      },
+      releaseCustody: () =>
+        guard(() =>
+          run(client?.releaseCustody(), (o) => {
+            setOverview(o);
+            toast('Switched: your funds stay in your own wallet now', 5000);
+          }),
+        ),
       positions,
       decisions,
       proposals,
-      approve: (p) => guard(() => run(client?.approve(p.id), (list) => {
+      approve: (p) => guard(() => selfCustody ? void inWallet({ action: 'proposal', proposalId: p.id }, p.title) : run(client?.approve(p.id), (list) => {
         setProposals(list);
         toast(`Approved: ${p.title}. The agent is on it.`);
       })),
@@ -295,9 +385,14 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
         }),
       claim: (p) =>
         guard(() =>
-          run(client?.claim(p.id), (r) => toast(r.queued ? `Claiming fees from ${p.pair}…` : `Claimed ${usd(r.amount ?? 0, 2)} from ${p.pair}`)),
+          selfCustody
+            ? void inWallet({ action: 'claim', positionId: p.id }, `Claim fees from ${p.pair}`)
+            : run(client?.claim(p.id), (r) => toast(r.queued ? `Claiming fees from ${p.pair}…` : `Claimed ${usd(r.amount ?? 0, 2)} from ${p.pair}`)),
         ),
-      close: (p) => guard(() => run(client?.close(p.id), (r) => toast(r.queued ? `Closing ${p.pair}…` : `Closed ${p.pair}`))),
+      close: (p) =>
+        guard(() =>
+          selfCustody ? void inWallet({ action: 'close', positionId: p.id }, `Close ${p.pair}`) : run(client?.close(p.id), (r) => toast(r.queued ? `Closing ${p.pair}…` : `Closed ${p.pair}`)),
+        ),
       deploy: (poolId, amount, override, opts) =>
         guard(() => run(client?.deploy(poolId, amount, override, opts), (r) => toast(`Adding ${amount > 0 ? usd(amount) + ' ' : ''}LP to ${r.pair}… The result shows in Activity.`))),
       series: (id) => seriesRef.current.get(id),
@@ -308,7 +403,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
         return () => set.delete(fn);
       },
     };
-  }, [client, me, ready, empty, overview, positions, decisions, proposals, pools, cycle, cycleStart, decisionText, draft, toast, openConnect, openConfirmLive]);
+  }, [client, me, ready, empty, overview, positions, decisions, proposals, pools, cycle, cycleStart, decisionText, draft, toast, openConnect, openConfirmLive, walletTask, inWallet]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

@@ -1,5 +1,5 @@
 import { JupiterClient, createAgentKey, exportAgentSecret, makeConnection, sealImportedKey, walletBalances } from '@binwise/chain';
-import { getDb } from '@binwise/db';
+import { getDb, isSelfCustody } from '@binwise/db';
 import { CYCLE_MS, runApprovedProposal, runManualAction, runManualDeploy, runVaultCycle, type ManualResult } from './agent';
 import { BOT_COMMANDS, makeBot, resultMessage, type ManualRequest } from './bot';
 import { KEYS, makeRedis, publish, withVaultLock } from './redis';
@@ -7,6 +7,9 @@ import { makeAgentDeps, makeWithdrawChain } from './runtime';
 import { runWithdraw } from './wallet';
 import { Telegram } from './telegram';
 import { tickOnce } from './ticker';
+
+/** The website, where self-custody owners approve in their wallet */
+const SITE = `https://${process.env.PUBLIC_DOMAIN || 'binwise.org'}`;
 
 /** Agent worker (PM2): runs every running vault once per minute, plus live price ticks and Telegram. */
 const db = getDb();
@@ -81,6 +84,9 @@ async function manualActions() {
         let result: ManualResult | null = null;
         let error: string | undefined;
         try {
+          // Self-custody: only the owner's wallet can sign, on the website.
+          if (isSelfCustody(vault) && req.action !== 'withdraw')
+            throw new Error(`Your funds are in your own wallet, so you approve this there: open ${SITE} and do it from Positions or Overview.`);
           result =
             req.action === 'deploy'
               ? await runManualDeploy(deps, vault, req.poolId!, req.usd ?? 0, req.id, req.chatId ? 'Requested from Telegram' : 'Requested from the app', { override: req.override, shape: req.shape, range: req.range })
@@ -109,7 +115,9 @@ if (telegram) {
     tg: telegram,
     enqueue: async (vaultId, req) => void (await redis.lpush(KEYS.actions(vaultId), JSON.stringify(req))),
     onPaused: async (v) => void (await publish(redis, v.id, { type: 'cycle', cycle: { cycle: v.cycle, step: -1, paused: true, intervalMs: CYCLE_MS, elapsedMs: 0, steps: [] } })),
-    appUrl: `https://${process.env.PUBLIC_DOMAIN || 'binwise.org'}`,
+    appUrl: SITE,
+    // Funds stay in owners' own wallets: no new wallets here (a pasted key is still recognised and deleted).
+    keysClosed: true,
     balances: (address) => walletBalances(makeConnection(), address),
     newWallet: () => {
       const k = createAgentKey();

@@ -13,18 +13,13 @@ import {
   type PoolDetail,
   type VaultBalance,
 } from '@binwise/core';
-import { ApiError } from '@/lib/api/client';
 import { usd } from '@/lib/format';
-import { BOT_URL } from '@/lib/site';
 import { useAppData } from '@/lib/store';
 import { useUi } from '@/lib/ui';
-import { SignInError, findWalletFor, rememberWallet, sendWithWallet, type Wallet } from '@/lib/wallets';
 import { Icon } from '../Sprite';
 import { Tok } from '../Tokens';
 import { LpRecommend, RecDot } from './LpRecommend';
 import { LpShape } from './LpShape';
-import { useSolanaWallets } from './Wallet';
-import { SendYourself, WalletWaiting } from './WalletWait';
 
 /** Why Add LP can't put more into this pool (VaultBalance.pool.limit), in plain words. */
 const LIMIT_TEXT: Record<NonNullable<VaultBalance['pool']>['limit'], string> = {
@@ -38,17 +33,11 @@ const LIMIT_TEXT: Record<NonNullable<VaultBalance['pool']>['limit'], string> = {
 
 const SHAPE_NAME: Record<LiquidityShape, string> = { spot: 'Spot', curve: 'Curve', bidask: 'Bid-Ask' };
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
-/** SOL the vault wallet keeps for network fees and rent (the agent's SOL_RESERVE). */
-const VAULT_RESERVE_SOL = 0.25;
-/** SOL left in the owner's wallet for the transfer's own fee. */
-const WALLET_FEE_SOL = 0.005;
-/** Seconds between asks whether Solana confirmed a transfer: about 3 minutes, at most 9 asks in any minute. */
-const CONFIRM_WAITS_S = [1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30, 30];
+/** SOL that stays in the owner's wallet for the position's rent and network fees (the API's WALLET_KEEP_SOL). */
+const WALLET_KEEP_SOL = 0.1;
 
 type Side = 'both' | 'x' | 'y';
-/** What SOL from the owner's wallet is for: just moving it into the vault, or paying for this LP */
-type Flow = 'move' | 'add';
-/** One Jupiter swap the vault makes before adding liquidity */
+/** One Jupiter swap made before adding liquidity */
 type Swap = { from: string; fromMint: string; to: string; toMint: string; usd: number };
 /** 'agent': the agent's own width; a number: ±% around the price; 'max': the widest one position holds. */
 type RangeMode = 'agent' | number | 'max' | 'custom';
@@ -62,22 +51,22 @@ const amount = (n: number) =>
 /** Prices from 0.00001234 to 152,310: enough significant digits to tell bins apart. */
 const price = (n: number) => (n >= 1000 ? n.toLocaleString('en-US', { maximumFractionDigits: 2 }) : String(Number(n.toPrecision(6))));
 const pctFrom = (p: number, ref: number) => `${p >= ref ? '+' : '−'}${Math.abs((p / ref - 1) * 100).toFixed(1)}%`;
-const fromBase64 = (b64: string) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-const toBase64 = (bytes: Uint8Array) => btoa(Array.from(bytes, (b) => String.fromCharCode(b)).join(''));
 
 const label = { display: 'block', fontSize: 12.5, color: 'var(--muted)', margin: '16px 0 7px' } as const;
 const segFull = { display: 'flex', width: '100%' } as const;
 const segBtn = { flex: 1, padding: '6px 4px' } as const;
 
 /**
- * Add LP by hand, in the pool drawer: the vault's balance and limits, moving SOL in from the owner's own
- * wallet, the strategy shape, which token(s) to deposit, the price range, and the swaps the vault will
- * make first. With every option on "Agent", the agent decides all of it, as before.
+ * Add LP by hand, in the pool drawer: the balance and limits, the strategy shape, which token(s) to deposit,
+ * the price range, and the swaps made first. With every option on "Agent", the agent decides all of it.
+ *
+ * Self-custody (live): paid with SOL from the owner's own wallet, which approves the swaps and the new
+ * position in one go; the position belongs to that wallet. Paper: from the simulated vault, by the agent.
+ * A live vault whose funds Binwise still holds takes no new LP: its owner withdraws to their wallet.
  */
 export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }) {
-  const { client, me, overview, positions, deploy } = useAppData();
-  const { toast } = useUi();
-  const wallets = useSolanaWallets();
+  const { client, overview, positions, deploy, selfCustody, walletTask, inWallet } = useAppData();
+  const { openWithdraw } = useUi();
   const [amt, setAmt] = useState('');
   const [risk, setRisk] = useState(false);
   const [bal, setBal] = useState<VaultBalance | null>(null);
@@ -87,20 +76,8 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
   const [mode, setMode] = useState<RangeMode>('agent');
   const [minS, setMinS] = useState('');
   const [maxS, setMaxS] = useState('');
-  const [moveS, setMoveS] = useState('');
-  /** SOL from the owner's wallet to pay for this LP with (empty vault): moved in, swapped, added in one go */
-  const [payS, setPayS] = useState('');
-  const [moving, setMoving] = useState(false);
-  const [moveErr, setMoveErr] = useState<string | null>(null);
-  /** Only when the wallet the owner signed in with can't be found or fails: they pick it among those installed */
-  const [picking, setPicking] = useState(false);
-  const [walletPick, setWalletPick] = useState<string | null>(null);
-  /** The wallet asked to approve right now, and for what; 'confirm': approved, Solana is confirming the transfer */
-  const [asking, setAsking] = useState<{ wallet: Wallet; flow: Flow; sol: number; phase?: 'confirm' } | null>(null);
-  /** Bumped by "Stop waiting": a wallet answer that comes later no longer continues the Add LP. */
-  const run = useRef(0);
-  /** Sending the SOL by hand to the vault address (the wallet won't approve here); lpUsd: the LP planned with it */
-  const [manual, setManual] = useState<{ sol: number; flow: Flow; lpUsd: number } | null>(null);
+  /** Self-custody: SOL from the owner's wallet to pay for this LP with */
+  const [solS, setSolS] = useState('');
   const [tick, setTick] = useState(0);
 
   // A new pool starts on the recommendation; the side is set once its Add LP data arrives.
@@ -113,10 +90,7 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
     setShape('agent');
     setSide(x.lp?.side ?? 'both');
     setMode('agent');
-    setMoveS('');
-    setPayS('');
-    setMoveErr(null);
-    setManual(null);
+    setSolS('');
     // Not on every refresh of the recommended side: that would undo the user's own choice mid-edit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [x.id, hasLp]);
@@ -292,20 +266,6 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
     }
     return { out, short };
   }, [shareA, bal, plannedUsd, mintA, mintB, symA, symB]);
-  // An empty vault: what the SOL moved in becomes, for the amount typed (a pool token that is SOL needs no swap).
-  const emptyVault = !!bal && bal.availableUsd < 1;
-  const solSwaps: Swap[] =
-    emptyVault && shareA != null && want > 0
-      ? (
-          [
-            [mintA, symA, want * shareA],
-            [mintB, symB, want * (1 - shareA)],
-          ] as const
-        )
-          .filter(([m, , u]) => m !== SOL_MINT && u >= 1)
-          .map(([m, sym, u]) => ({ from: 'SOL', fromMint: SOL_MINT, to: sym, toMint: m, usd: u }))
-      : [];
-
   /** Logo and letter for a token in a swap row: the pool's own tokens, SOL, or an idle token by mint. */
   const tokenOf = (mint: string, symbol: string) =>
     mint === x.tokenA.mint
@@ -316,167 +276,17 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
           ? { symbol: 'SOL', letter: 'S', color: '#1b1d27', logo: '/tokens/SOL.png', mint }
           : { symbol, letter: (symbol[0] ?? '?').toUpperCase(), color: '#2a2c38', mint };
 
-  // ---- moving SOL in from the owner's own wallet
+  // ---- self-custody: paid with SOL from the owner's own wallet, approved there
   const wallet = bal?.wallet;
-  const movable = wallet ? Math.max(0, Math.floor((wallet.sol - WALLET_FEE_SOL) * 10_000) / 10_000) : 0;
-  const reserveShort = bal?.vaultSol != null ? Math.max(0, VAULT_RESERVE_SOL - bal.vaultSol) : 0;
-  // What the vault must hold for `want` here: idle funds, 2% kept for fees; limits that more funds can't raise
-  // both have to allow it; limits that more funds can't raise (pool size, per-position cap, live) cap the target.
-  const target = lim?.ceilingUsd != null ? Math.min(want, lim.ceilingUsd) : want;
-  const neededIdle = target / 0.98;
-  const neededUsd = want > 0 && bal ? Math.max(0, neededIdle - bal.availableUsd) : 0;
-  const suggestSol = wallet && wallet.solPriceUsd > 0 && neededUsd > 0 ? Math.min(movable, Math.ceil((neededUsd / wallet.solPriceUsd + reserveShort) * 1000) / 1000) : 0;
-  /**
-   * Sends `sol` from the owner's wallet to the vault and waits until the API has checked it on-chain. After
-   * "Stop waiting" (`live` false) the wallet gets no new request, but one approved anyway is still recorded.
-   */
-  const sendSol = async (sol: number, w: Wallet, live: () => boolean): Promise<boolean> => {
-    const { tx } = await client!.depositTx(sol);
-    if (!live()) throw new SignInError('stopped', 'Stopped waiting for the wallet.');
-    // If the wallet can sign but not send (Phantom's "Unexpected error"), Binwise sends it: only this transfer to the vault.
-    const signature = await sendWithWallet(
-      w,
-      me!.wallet,
-      fromBase64(tx),
-      async (signed) => (await client!.depositSend(toBase64(signed))).signature,
-      () => !live(),
-    );
-    if (live()) setAsking((a) => a && { ...a, phase: 'confirm' });
-    // The API checks the transfer on-chain before counting it. Solana confirms in seconds, a minute or two when
-    // busy: ask until then, slower and slower, under the API's limit (10 a minute); a "too many" is only a wait.
-    for (const s of CONFIRM_WAITS_S) {
-      await new Promise((r) => setTimeout(r, s * 1000));
-      try {
-        await client!.depositLive(signature);
-        return true;
-      } catch (e) {
-        if (!(e instanceof ApiError) || (e.code !== 'tx_not_found' && e.code !== 'rate_limited')) throw e;
-      }
-    }
-    return false;
-  };
-  /** Sent, but Solana hadn't confirmed it after about 3 minutes: where it will show, and not to send it twice. */
-  const notConfirmed = (sol: number) =>
-    setMoveErr(
-      `Your wallet sent ${amount(sol)} SOL, but Solana hasn't confirmed it after 3 minutes. If it lands, it shows in your vault (Portfolio) within a few minutes: then add LP. Check there before sending again.`,
-    );
-  const walletError = (e: unknown, name: string) =>
-    e instanceof SignInError
-      ? e.kind === 'rejected'
-        ? `Cancelled in ${name}. Nothing was sent.`
-        : e.kind === 'pending'
-          ? `${name} already has a request open. Click the ${name} icon in your browser's toolbar, approve or reject it there, then try again.`
-          : e.kind === 'wallet' && wallets.length > 1
-            ? `Signed in with another wallet? Pick it under “Approve in”.\n${e.message}`
-            : e.message
-      : e instanceof ApiError
-        ? e.message
-        : 'Something went wrong. Nothing was sent; try again.';
-  /** The wallet to approve in: the one the owner signed in with, found on its own (see findWalletFor). */
-  const pickWallet = async (sol: number): Promise<Wallet | string> => {
-    if (!(sol > 0) || sol > movable) return `Enter up to ${amount(movable)} SOL (a little stays for the network fee).`;
-    if (!wallets.length) return 'No wallet found in this browser. Open this page where you signed in (Phantom, Solflare, Backpack or Bitget).';
-    const w = wallets.find((x) => x.name === walletPick) ?? (await findWalletFor(wallets, me!.wallet));
-    if (w) return w;
-    setPicking(true);
-    return 'Pick the wallet you signed in with under “Approve in”.';
-  };
-  /**
-   * Runs `fn` with the owner's wallet; a failure shows under the amount, and offers the other wallets if it was
-   * the wallet. `live()` turns false once the owner stops waiting: from then on this run stays quiet.
-   */
-  const withWallet = async (sol: number, flow: Flow, fn: (w: Wallet, live: () => boolean) => Promise<unknown>) => {
-    setMoveErr(null);
-    setManual(null);
-    if (!client || !me || !wallet) return;
-    const id = ++run.current;
-    const live = () => run.current === id;
-    setMoving(true);
-    let name = 'your wallet';
-    try {
-      const w = await pickWallet(sol);
-      if (!live()) return;
-      if (typeof w === 'string') return setMoveErr(w);
-      name = w.name;
-      setAsking({ wallet: w, flow, sol });
-      await fn(w, live);
-    } catch (e) {
-      if (!live() || (e instanceof SignInError && e.kind === 'stopped')) return;
-      if (e instanceof SignInError && e.kind === 'wallet' && wallets.length > 1) setPicking(true);
-      setMoveErr(walletError(e, name));
-    } finally {
-      if (live()) {
-        setMoving(false);
-        setAsking(null);
-      }
-    }
-  };
-  /** The vault wallet's address, for sending SOL to it by hand */
-  const vaultAddress = bal?.vaultWallet;
-  /** Stops waiting for the wallet; with `lpUsd`, opens "Send it yourself" for the same SOL instead. */
-  const stopWaiting = (lpUsd?: number) => {
-    const a = asking;
-    run.current++;
-    setMoving(false);
-    setAsking(null);
-    if (a?.phase === 'confirm') return setMoveErr(`Stopped waiting. The ${amount(a.sol)} SOL is on its way: it shows in your vault (Portfolio) once Solana confirms it. Then add LP.`);
-    if (a && lpUsd != null && vaultAddress) return setManual({ sol: a.sol, flow: a.flow, lpUsd });
-    setMoveErr(`Stopped waiting. If ${a?.wallet.name ?? 'your wallet'} still shows the request, reject it there: nothing is sent unless you approve it.`);
-  };
-  /** Opens "Send it yourself" for the SOL typed in, without asking the wallet. */
-  const sendYourself = (sol: number, flow: Flow, lpUsd: number) => {
-    setMoveErr(null);
-    if (!(sol > 0)) return setMoveErr('Enter how much SOL first.');
-    setManual({ sol, flow, lpUsd });
-  };
-  /** Shown only when the signed-in wallet wasn't found or failed and several are installed. */
-  const approveIn = picking && wallets.length > 1 && me && (
-    <>
-      <span style={label}>Approve in</span>
-      <div className="seg" style={{ ...segFull, flexWrap: 'wrap' }} role="group" aria-label="Wallet to approve in">
-        {wallets.map((w) => (
-          <button
-            key={w.name}
-            style={{ ...segBtn, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, whiteSpace: 'nowrap' }}
-            aria-pressed={walletPick === w.name}
-            disabled={moving}
-            onClick={() => {
-              setWalletPick(w.name);
-              rememberWallet(w.name, me.wallet);
-              setMoveErr(null);
-            }}
-          >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            {w.icon && <img src={w.icon} alt="" style={{ width: 16, height: 16, borderRadius: 4 }} />}
-            {w.name}
-          </button>
-        ))}
-      </div>
-      <p className="muted" style={{ fontSize: 12, lineHeight: 1.5, marginTop: 6 }}>
-        The wallet you signed in with ({me.wallet.slice(0, 4)}…{me.wallet.slice(-4)}). Binwise remembers it.
-      </p>
-    </>
-  );
-  const move = () =>
-    withWallet(Number(moveS), 'move', async (w, live) => {
-      const sol = Number(moveS);
-      const recorded = await sendSol(sol, w, live);
-      if (recorded) toast(`Moved ${amount(sol)} SOL to your vault`);
-      else notConfirmed(sol);
-      if (live()) setMoveS('');
-      reload();
-    });
-
-  // ---- paying with SOL from the wallet (empty vault): move it in, then the agent swaps and adds LP
-  // Also when the vault holds too little to add anything here.
-  const payMode = (emptyVault || blocked) && !!wallet && movable > 0 && !hardBlocked;
   const solPrice = wallet?.solPriceUsd ?? 0;
-  const paySol = Number(payS) || 0;
-  // What reaches the vault after the fee reserve, and how much of it this pool may take (same limits as above).
-  const payIdleUsd = (bal?.availableUsd ?? 0) + Math.max(0, paySol - reserveShort) * solPrice;
-  const payLpUsd = lim ? Math.max(0, Math.min(payIdleUsd * 0.98, lim.ceilingUsd ?? Infinity)) : 0;
+  const walletSol = selfCustody ? (wallet?.sol ?? 0) : 0;
+  /** The most SOL Add LP takes here: the wallet keeps some for rent and fees, and the pool's limit applies. */
+  const maxSol =
+    selfCustody && wallet && lim && solPrice > 0 ? Math.max(0, Math.floor(Math.min(walletSol - WALLET_KEEP_SOL, lim.maxUsd / solPrice) * 10_000) / 10_000) : 0;
+  const paySol = Number(solS) || 0;
+  const payLpUsd = lim ? Math.min(paySol * solPrice, lim.maxUsd) : 0;
   const paySwaps: Swap[] =
-    payMode && shareA != null && payLpUsd > 0
+    selfCustody && shareA != null && payLpUsd > 0
       ? (
           [
             [mintA, symA, payLpUsd * shareA],
@@ -487,48 +297,37 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
           .map(([m, sym, u]) => ({ from: 'SOL', fromMint: SOL_MINT, to: sym, toMint: m, usd: u }))
       : [];
   const payTooSmall = paySol > 0 && !!lim && payLpUsd < lim.minUsd;
-  /** Once `sol` paid with is in the vault: adds the LP planned with it (`lpUsd`), sized from the vault as it is now. */
-  const addFromVault = async (sol: number, lpUsd: number) => {
-    const fresh = await client!.balance(x.id);
-    const size = Math.min(lpUsd, fresh.pool?.maxUsd ?? 0);
-    if (!fresh.pool || size < fresh.pool.minUsd) {
-      setMoveErr(`Moved ${amount(sol)} SOL to your vault, but this pool can't take enough of it right now. Try a smaller amount or another pool.`);
-      return reload();
-    }
-    deploy(x.id, size, x.call !== 'in', opts);
-    setPayS('');
-    reload();
-  };
-  const payAndAdd = () =>
-    withWallet(paySol, 'add', async (w, live) => {
-      const sol = paySol;
-      if (!(await sendSol(sol, w, live))) {
-        notConfirmed(sol);
-        return reload();
+  const payOver = paySol > 0 && maxSol > 0 && paySol > maxSol + 1e-9;
+  /** A wallet action is running (this one or another): one at a time. */
+  const busy = !!walletTask && walletTask.phase.phase !== 'error' && walletTask.phase.phase !== 'pick';
+  const mine = walletTask?.action.action === 'open' && walletTask.action.poolId === x.id ? walletTask : null;
+  const addInWallet = () =>
+    void inWallet({ action: 'open', poolId: x.id, sol: Math.min(paySol, maxSol), override: x.call !== 'in', ...opts }, `Add LP to ${x.pair}`).then((ok) => {
+      if (ok) {
+        setSolS('');
+        reload();
       }
-      // Approved after "Stop waiting": the SOL is in, but the owner may have moved on, so no LP by itself.
-      if (!live()) {
-        toast(`Moved ${amount(sol)} SOL to your vault. Add LP when you're ready.`);
-        return reload();
-      }
-      await addFromVault(sol, payLpUsd);
     });
-  /** "Send it yourself": the SOL arrived in the vault. */
-  const manualArrived = (m: { sol: number; flow: Flow; lpUsd: number }, received: number) => {
-    setManual(null);
-    if (m.flow === 'move') {
-      toast(`Received ${amount(received)} SOL in your vault`);
-      setMoveS('');
-      return reload();
-    }
-    // Against the agent's call only while the owner still accepts the risk.
-    if (x.call !== 'in' && !risk) return setMoveErr(`Received ${amount(received)} SOL in your vault. Tick the risk box and click Add LP to use it.`);
-    addFromVault(received, m.lpUsd).catch(() => setMoveErr(`The SOL is in your vault, but the LP didn't start. Click Add LP to try again.`));
-  };
+  // A live vault whose funds Binwise still holds: no new LP, its owner moves the funds to their own wallet.
+  const custodyClosing = overview?.mode === 'live' && !selfCustody;
 
-  /** Paying with SOL can't start yet: risk not accepted, no amount, too small, or a broken range */
-  const payBlocked = (x.call !== 'in' && !risk) || !(paySol > 0) || payTooSmall || (custom && !!rangeErr);
-  const disabled = payMode ? payBlocked || moving : (x.call !== 'in' && !risk) || blocked || tooSmall || (custom && !!rangeErr);
+  const disabled = selfCustody
+    ? (x.call !== 'in' && !risk) || !(paySol > 0) || payTooSmall || payOver || blocked || busy || (custom && !!rangeErr)
+    : (x.call !== 'in' && !risk) || blocked || tooSmall || (custom && !!rangeErr);
+
+  if (custodyClosing)
+    return (
+      <>
+        <div className="dsec">Add LP by hand</div>
+        <div className="verdict wt" id="dClosing">
+          Binwise no longer keeps funds for you: your money stays in your own wallet. Withdraw this vault&apos;s funds to your wallet, then add LP
+          straight from it. Open positions here keep running until you close them in Positions.
+        </div>
+        <button className="btn btn-dark" style={{ width: '100%', marginTop: 12 }} onClick={openWithdraw}>
+          Withdraw to my wallet
+        </button>
+      </>
+    );
 
   return (
     <>
@@ -541,9 +340,9 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
       )}
       <div className="rows">
         <div>
-          <span>Vault balance</span>
+          <span>{selfCustody ? 'In your wallet' : 'Vault balance'}</span>
           <b className="num" id="dBal">
-            {bal ? usd(bal.availableUsd, 2) : balErr ? '—' : 'Checking…'}
+            {!bal ? (balErr ? '—' : 'Checking…') : selfCustody ? (wallet ? `${amount(wallet.sol)} SOL` : '—') : usd(bal.availableUsd, 2)}
           </b>
         </div>
         {lim && (
@@ -555,11 +354,29 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
           </div>
         )}
       </div>
-      {bal && (
+      {bal && selfCustody && (
+        <p className="muted" style={{ fontSize: 12.5, lineHeight: 1.5, marginTop: 8 }}>
+          {wallet ? (
+            <>
+              {solPrice > 0 && `${usd(wallet.sol * solPrice, 2)} · `}
+              {WALLET_KEEP_SOL} SOL stays in your wallet for the position&apos;s rent and network fees. Binwise never holds your funds: the position opens in
+              your wallet and stays there.
+            </>
+          ) : (
+            'Couldn’t read your wallet right now. Try again in a moment.'
+          )}
+          {lim && !blocked && (
+            <>
+              <br />
+              {lim.limit === 'balance' ? 'Limited by the SOL in your wallet.' : LIMIT_TEXT[lim.limit]}
+            </>
+          )}
+        </p>
+      )}
+      {bal && !selfCustody && (
         <p className="muted" style={{ fontSize: 12.5, lineHeight: 1.5, marginTop: 8 }}>
           {bal.assets.length ? bal.assets.map((a) => `${amount(a.amount)} ${a.symbol}`).join(' · ') : 'No idle funds'}
           {bal.reserveSol > 0 && ` · ${amount(bal.reserveSol)} SOL kept for network fees`}
-          {bal.source === 'agent' && overview?.mode === 'live' && ' · as of the agent’s last check'}
           {lim && !blocked && (
             <>
               <br />
@@ -570,106 +387,19 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
       )}
       {balErr && !bal && (
         <p className="muted" style={{ fontSize: 12.5, lineHeight: 1.5, marginTop: 8 }}>
-          Couldn&apos;t read the vault balance right now. The agent still checks it before adding.
+          {selfCustody ? 'Couldn’t read your wallet right now. Try again in a moment.' : 'Couldn’t read the vault balance right now. The agent still checks it before adding.'}
         </p>
       )}
-      {blocked && lim && bal && !payMode && (
+      {blocked && lim && bal && (
         <div className="verdict wt" id="dBlocked">
-          {hardBlocked ? (
-            LIMIT_TEXT[lim.limit]
-          ) : (
-            <>
-              {lim.limit === 'balance'
-                ? `Not enough in your vault: Add LP needs at least ${usd(lim.minUsd)} idle.`
-                : `You can add up to ${usd(lim.maxUsd, 2)} here now, below the ${usd(lim.minUsd)} minimum. ${LIMIT_TEXT[lim.limit]}`}{' '}
-              {wallet && movable > 0 ? (
-                'Move SOL from your wallet below.'
-              ) : (
-                <>
-                  Deposit SOL or USDC to your vault in the{' '}
-                  <a href={BOT_URL} target="_blank" rel="noreferrer" style={{ textDecoration: 'underline' }}>
-                    Telegram bot
-                  </a>{' '}
-                  (💳 Wallet).
-                </>
-              )}
-            </>
-          )}
+          {hardBlocked
+            ? LIMIT_TEXT[lim.limit]
+            : lim.limit === 'balance'
+              ? selfCustody
+                ? `Not enough SOL in your wallet: Add LP needs at least ${usd(lim.minUsd)} of SOL, plus ${WALLET_KEEP_SOL} SOL for rent and fees.`
+                : `Not enough in your vault: Add LP needs at least ${usd(lim.minUsd)} idle.`
+              : `You can add up to ${usd(lim.maxUsd, 2)} here now, below the ${usd(lim.minUsd)} minimum. ${LIMIT_TEXT[lim.limit]}`}
         </div>
-      )}
-
-      {wallet && movable > 0 && !hardBlocked && !payMode && (
-        <div id="dFund" style={{ marginTop: 14, padding: 14, borderRadius: 12, border: '1px solid var(--line)', background: 'rgba(255,255,255,.02)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 13.5 }}>
-            <b style={{ fontWeight: 500 }}>Use SOL from your wallet</b>
-            <span className="muted num">
-              {amount(wallet.sol)} SOL{wallet.solPriceUsd ? ` · ${usd(wallet.sol * wallet.solPriceUsd, 2)}` : ''}
-            </span>
-          </div>
-          <div style={{ position: 'relative' }}>
-            <input
-              className="capin"
-              inputMode="decimal"
-              placeholder="SOL to move into the vault"
-              aria-label="SOL to move into the vault"
-              value={moveS}
-              disabled={moving}
-              style={{ paddingRight: 64 }}
-              onChange={(e) => setMoveS(e.target.value.replace(/[^0-9.]/g, ''))}
-            />
-            <button className="btn btn-dark btn-sm" style={{ position: 'absolute', right: 6, top: 16, height: 26, padding: '0 10px', fontSize: 12.5 }} onClick={() => setMoveS(String(movable))}>
-              Max
-            </button>
-          </div>
-          {suggestSol > 0 && (
-            <button className="muted" style={{ fontSize: 12.5, marginTop: 8, textDecoration: 'underline', textAlign: 'left' }} onClick={() => setMoveS(String(suggestSol))}>
-              Move {amount(suggestSol)} SOL to add {usd(target)}
-              {reserveShort > 0 ? ' (incl. the fee reserve)' : ''}
-            </button>
-          )}
-          {lim?.ceilingUsd != null && want > lim.ceilingUsd && (
-            <p className="muted" style={{ fontSize: 12, lineHeight: 1.5, marginTop: 6 }}>
-              This pool takes at most {usd(lim.ceilingUsd, 2)} from you (pool size, your max per position or the live limits), however much is in the vault.
-            </p>
-          )}
-          <p className="muted" style={{ fontSize: 12, lineHeight: 1.5, marginTop: 8 }}>
-            You approve the transfer in your wallet. The vault keeps {VAULT_RESERVE_SOL} SOL for network fees{reserveShort > 0 ? ' (not there yet)' : ''}; the rest can go into LP.
-          </p>
-          {approveIn}
-          {asking?.flow === 'move' && (
-            <WalletWaiting
-              key={asking.phase ?? 'approve'}
-              wallet={asking.wallet}
-              confirming={asking.phase === 'confirm'}
-              what={asking.phase === 'confirm' ? `Sending ${amount(asking.sol)} SOL to your vault.` : `It asks you to send ${amount(asking.sol)} SOL from your wallet to your vault.`}
-              onStop={() => stopWaiting()}
-              onSendYourself={vaultAddress ? () => stopWaiting(0) : undefined}
-            />
-          )}
-          {moveErr && (
-            <p className="down" style={{ fontSize: 12.5, lineHeight: 1.5, marginTop: 8, whiteSpace: 'pre-line' }}>
-              {moveErr}
-            </p>
-          )}
-          <button className="btn btn-dark btn-sm" style={{ width: '100%', marginTop: 10 }} disabled={moving || !(Number(moveS) > 0)} onClick={move}>
-            {moving ? (asking?.phase === 'confirm' ? 'Confirming on Solana…' : asking ? `Approve in ${asking.wallet.name}…` : 'Finding your wallet…') : `Move ${Number(moveS) > 0 ? amount(Number(moveS)) + ' ' : ''}SOL to the vault`}
-          </button>
-          {!moving && !manual && vaultAddress && (
-            <button className="muted" style={{ fontSize: 12.5, marginTop: 8, textDecoration: 'underline', textAlign: 'left' }} onClick={() => sendYourself(Number(moveS), 'move', 0)}>
-              Wallet won&apos;t open? Send the SOL yourself
-            </button>
-          )}
-        </div>
-      )}
-      {manual?.flow === 'move' && vaultAddress && me && (
-        <SendYourself
-          sol={manual.sol}
-          vault={vaultAddress}
-          owner={me.wallet}
-          then="It shows in your vault as soon as it arrives."
-          onArrived={(got) => manualArrived(manual, got)}
-          onClose={() => setManual(null)}
-        />
       )}
 
       {lp && !hardBlocked && (
@@ -792,13 +522,15 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
         </>
       )}
 
-      {payMode && wallet ? (
+      {selfCustody ? (
         <>
           <span style={{ ...label, display: 'flex', justifyContent: 'space-between' }}>
             <span>Pay with SOL from your wallet</span>
-            <span className="num">
-              {amount(wallet.sol)} SOL{solPrice ? ` · ${usd(wallet.sol * solPrice, 2)}` : ''}
-            </span>
+            {wallet && (
+              <span className="num">
+                {amount(wallet.sol)} SOL{solPrice ? ` · ${usd(wallet.sol * solPrice, 2)}` : ''}
+              </span>
+            )}
           </span>
           <div style={{ position: 'relative' }}>
             <input
@@ -807,23 +539,24 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
               inputMode="decimal"
               placeholder="SOL to use"
               aria-label="SOL to pay with"
-              value={payS}
-              disabled={moving}
-              onChange={(e) => setPayS(e.target.value.replace(/[^0-9.]/g, ''))}
+              value={solS}
+              disabled={hardBlocked || busy}
+              onChange={(e) => setSolS(e.target.value.replace(/[^0-9.]/g, ''))}
             />
-            <button className="btn btn-dark btn-sm" style={{ position: 'absolute', right: 6, top: 6, height: 26, padding: '0 10px', fontSize: 12.5 }} onClick={() => setPayS(String(movable))}>
-              Max
-            </button>
+            {maxSol > 0 && (
+              <button className="btn btn-dark btn-sm" style={{ position: 'absolute', right: 6, top: 6, height: 26, padding: '0 10px', fontSize: 12.5 }} onClick={() => setSolS(String(maxSol))}>
+                Max
+              </button>
+            )}
           </div>
           {payTooSmall && lim && (
             <p className="down" style={{ fontSize: 12.5, lineHeight: 1.5, marginTop: 8 }}>
-              That adds about {usd(payLpUsd, 2)} of LP; the minimum is {usd(lim.minUsd)}.{reserveShort > 0 ? ` ${VAULT_RESERVE_SOL} SOL of it stays in the vault for network fees.` : ''}
+              That adds about {usd(payLpUsd, 2)} of LP; the minimum is {usd(lim.minUsd)}.
             </p>
           )}
-          {approveIn}
-          {moveErr && (
-            <p className="down" style={{ fontSize: 12.5, lineHeight: 1.5, marginTop: 8, whiteSpace: 'pre-line' }}>
-              {moveErr}
+          {payOver && (
+            <p className="down" style={{ fontSize: 12.5, lineHeight: 1.5, marginTop: 8 }}>
+              At most {amount(maxSol)} SOL here ({WALLET_KEEP_SOL} SOL stays in your wallet for rent and fees, and the pool&apos;s limit applies).
             </p>
           )}
         </>
@@ -870,9 +603,9 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
           <span style={label}>Swap</span>
           <div id="dSwaps" style={{ padding: '10px 14px 12px', borderRadius: 11, background: 'rgba(255,255,255,.025)', border: '1px solid var(--line)' }}>
             {(() => {
-              // From the vault's idle funds, or (empty vault) from the SOL the owner moves in.
-              const rows = payMode ? paySwaps : emptyVault ? solSwaps : swaps && !blocked ? swaps.out : [];
-              const holdBoth = !emptyVault && !!swaps && !blocked && swaps.out.length === 0;
+              // From the SOL in the owner's wallet (self-custody), or from the vault's idle funds.
+              const rows = selfCustody ? paySwaps : swaps && !blocked ? swaps.out : [];
+              const holdBoth = !selfCustody && !!swaps && !blocked && swaps.out.length === 0;
               return (
                 <>
                   {rows.map((r, i) => (
@@ -891,59 +624,33 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
                       <b>≈ {usd(r.usd, 2)}</b>
                     </div>
                   ))}
-                  {payMode &&
-                    paySol > 0 &&
-                    (() => {
-                      // Where the SOL goes: into the LP, or kept in the vault (still the owner's).
-                      const reserveSol = Math.min(paySol, reserveShort);
-                      const capped = payLpUsd < payIdleUsd * 0.98 - 0.5;
-                      const bufferUsd = capped ? 0 : payIdleUsd - payLpUsd;
-                      const keptUsd = Math.max(0, paySol * solPrice - payLpUsd);
-                      return (
-                        <>
-                          <div className="rows" style={{ marginTop: rows.length ? 6 : 0, fontSize: 13 }} id="dPayRows">
-                            <div>
-                              <span>You pay</span>
-                              <b className="num">
-                                {amount(paySol)} SOL · {usd(paySol * solPrice, 2)}
-                              </b>
-                            </div>
-                            <div>
-                              <span>Into the LP</span>
-                              <b className="num up">≈ {usd(payLpUsd, 2)}</b>
-                            </div>
-                            <div>
-                              <span>Stays in your vault</span>
-                              <b className="num">≈ {usd(keptUsd, 2)}</b>
-                            </div>
-                          </div>
-                          <p className="muted" style={{ fontSize: 12, lineHeight: 1.55, marginTop: 8 }}>
-                            {reserveSol > 0 &&
-                              `${amount(reserveSol)} SOL (≈ ${usd(reserveSol * solPrice, 2)}) is the vault's reserve: Solana needs it for the position's rent deposit and network fees. The rent comes back when the position closes, and the reserve stays in the vault, so later deposits go in fully. `}
-                            {bufferUsd >= 0.5 && `${usd(bufferUsd, 2)} (2%) is a buffer for swap fees and price moves. `}
-                            {capped && 'This pool takes no more from you (2% of its liquidity, your max per position or the live limits). '}
-                            What stays in the vault is yours: withdraw it or use it for the next LP.
-                          </p>
-                        </>
-                      );
-                    })()}
+                  {selfCustody && paySol > 0 && (
+                    <div className="rows" style={{ marginTop: rows.length ? 6 : 0, fontSize: 13 }} id="dPayRows">
+                      <div>
+                        <span>You pay</span>
+                        <b className="num">
+                          {amount(Math.min(paySol, maxSol || paySol))} SOL · {usd(Math.min(paySol, maxSol || paySol) * solPrice, 2)}
+                        </b>
+                      </div>
+                      <div>
+                        <span>Into the LP</span>
+                        <b className="num up">≈ {usd(payLpUsd, 2)}</b>
+                      </div>
+                    </div>
+                  )}
                   <p className="muted" style={{ fontSize: 12, lineHeight: 1.5, marginTop: rows.length ? 6 : 2 }}>
-                    {payMode
+                    {selfCustody
                       ? paySol > 0
-                        ? `One click: you approve sending ${amount(paySol)} SOL to your vault in your wallet, then the vault swaps it through Jupiter (at most 0.5% slippage) and adds ≈ ${usd(payLpUsd, 2)} of LP. You don't need to hold ${symA} or ${symB}.`
-                        : `Enter how much SOL to use. The vault swaps it into ${symA} and ${symB} through Jupiter and adds the LP, in one click. You don't need to hold either token.`
+                        ? `One approval in your wallet: it swaps the SOL into ${symA} and ${symB} through Jupiter (at most 0.5% slippage) and opens the position in your wallet. About 0.06 SOL more goes to the position's rent and network fees; the rent comes back when it closes.`
+                        : `Enter how much SOL to use. Your wallet swaps it into ${symA} and ${symB} through Jupiter and opens the position, all in one approval. You don't need to hold either token.`
                       : holdBoth
-                      ? `No swap needed: the vault already holds ${symA} and ${symB}.`
-                      : emptyVault
-                        ? want > 0
-                          ? `Estimate for ${usd(want, 2)}. Move SOL into the vault above; when you add LP, the vault swaps it through Jupiter (at most 0.5% slippage). You don't need to hold ${symA} or ${symB}.`
-                          : `You don't need to hold ${symA} or ${symB}. Move SOL into the vault above and enter an amount: the vault swaps the SOL into both through Jupiter when you add LP.`
+                        ? `No swap needed: the vault already holds ${symA} and ${symB}.`
                         : rows.length
                           ? `Through Jupiter, inside your vault, right before the LP opens (at most 0.5% slippage). You don't need to hold ${symA} or ${symB} yourself.`
                           : rangeErr
                             ? 'Pick a valid price range to see the swaps.'
                             : `The vault swaps its idle funds into ${symA} and ${symB} through Jupiter when you add LP.`}
-                    {!emptyVault && swaps && swaps.short > 1 && ' Not enough idle funds for all of it: the agent sizes the position down.'}
+                    {!selfCustody && swaps && swaps.short > 1 && ' Not enough idle funds for all of it: the agent sizes the position down.'}
                   </p>
                 </>
               );
@@ -962,49 +669,29 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
         className="btn btn-white"
         style={{ width: '100%', marginTop: 12 }}
         disabled={disabled}
-        onClick={() => (payMode ? payAndAdd() : deploy(x.id, Math.min(want, lim?.maxUsd ?? want), x.call !== 'in', opts))}
+        onClick={() => (selfCustody ? addInWallet() : deploy(x.id, Math.min(want, lim?.maxUsd ?? want), x.call !== 'in', opts))}
       >
         <Icon id="i-plus" />
-        {payMode
-          ? moving
-            ? asking?.phase === 'confirm'
-              ? 'Confirming on Solana…'
-              : asking
-                ? `Approve in ${asking.wallet.name}…`
-                : 'Finding your wallet…'
-            : `Swap & add LP${paySol > 0 ? ` with ${amount(paySol)} SOL` : ''}`
-          : swaps && !blocked && swaps.out.length
-            ? `Swap & add LP to ${x.pair}`
-            : `Add LP to ${x.pair}`}
+        {mine
+          ? mine.phase.phase === 'approve'
+            ? `Approve in ${mine.wallet?.name ?? 'your wallet'}…`
+            : mine.phase.phase === 'send'
+              ? `Step ${mine.phase.step} of ${mine.phase.steps}…`
+              : mine.phase.phase === 'record'
+                ? 'Recording…'
+                : mine.phase.phase === 'error' || mine.phase.phase === 'pick'
+                  ? `Swap & add LP${paySol > 0 ? ` with ${amount(paySol)} SOL` : ''}`
+                  : 'Preparing…'
+          : selfCustody
+            ? `Swap & add LP${paySol > 0 ? ` with ${amount(Math.min(paySol, maxSol || paySol))} SOL` : ''}`
+            : swaps && !blocked && swaps.out.length
+              ? `Swap & add LP to ${x.pair}`
+              : `Add LP to ${x.pair}`}
       </button>
-      {asking?.flow === 'add' && (
-        <WalletWaiting
-          key={asking.phase ?? 'approve'}
-          wallet={asking.wallet}
-          confirming={asking.phase === 'confirm'}
-          what={
-            asking.phase === 'confirm'
-              ? `Sending ${amount(asking.sol)} SOL to your vault. Then the vault swaps it and adds the LP by itself: nothing more to approve.`
-              : `It asks you to send ${amount(asking.sol)} SOL from your wallet to your vault. Then the vault swaps it and adds the LP by itself: nothing more to approve.`
-          }
-          onStop={() => stopWaiting()}
-          onSendYourself={vaultAddress ? () => stopWaiting(payLpUsd) : undefined}
-        />
-      )}
-      {payMode && !moving && !manual && !payBlocked && vaultAddress && (
-        <button className="muted" style={{ fontSize: 12.5, marginTop: 10, textDecoration: 'underline', textAlign: 'left' }} onClick={() => sendYourself(paySol, 'add', payLpUsd)}>
-          Wallet won&apos;t open? Send the SOL yourself
-        </button>
-      )}
-      {manual?.flow === 'add' && vaultAddress && me && (
-        <SendYourself
-          sol={manual.sol}
-          vault={vaultAddress}
-          owner={me.wallet}
-          then="Then the vault swaps it and adds the LP by itself."
-          onArrived={(got) => manualArrived(manual, got)}
-          onClose={() => setManual(null)}
-        />
+      {selfCustody && (
+        <p className="muted" style={{ fontSize: 12, lineHeight: 1.5, marginTop: 8 }}>
+          You approve it in your own wallet. After that, the agent watches the position and asks you before any change.
+        </p>
       )}
     </>
   );

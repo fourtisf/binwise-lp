@@ -11,8 +11,17 @@ type DlmmModule = typeof import('@meteora-ag/dlmm');
 let sdkModule: DlmmModule | null = null;
 export const sdk = (): DlmmModule => (sdkModule ??= createRequire(import.meta.url)('@meteora-ag/dlmm') as DlmmModule);
 
+/**
+ * The DLMM class. The CommonJS build (1.9.x) makes it the module itself, with the named exports attached
+ * and no `default`; older builds had it under `default`. Either way, this is the class.
+ */
+export const dlmmClass = (): typeof DLMMClass => {
+  const m = sdk() as unknown as { default?: typeof DLMMClass };
+  return m.default ?? (m as unknown as typeof DLMMClass);
+};
+
 export const DLMM = {
-  create: (...a: Parameters<typeof DLMMClass.create>) => sdk().default.create(...a),
+  create: (...a: Parameters<typeof DLMMClass.create>) => dlmmClass().create(...a),
 };
 
 /** Real liquidity sitting in a pool's active bin, in USD (read from chain). */

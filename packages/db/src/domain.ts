@@ -66,11 +66,20 @@ export async function ensureUser(db: PrismaClient, wallet: string) {
   return db.user.upsert({ where: { wallet }, update: {}, create: { wallet } });
 }
 
-/** New vault in paper mode with the default (balanced) strategy. */
+/**
+ * New vault with the default (balanced) strategy: paper unless asked otherwise. `selfCustody`: live, with the
+ * funds in the owner's own wallet (no key at Binwise). `live`: live with a vault wallet whose key Binwise keeps.
+ */
 export async function createVault(
   db: PrismaClient,
   userId: string,
-  opts: { name?: string; isDemo?: boolean; cash?: Record<string, number>; live?: { agentPubkey: string; encSecret: Uint8Array<ArrayBuffer> } } = {},
+  opts: {
+    name?: string;
+    isDemo?: boolean;
+    cash?: Record<string, number>;
+    live?: { agentPubkey: string; encSecret: Uint8Array<ArrayBuffer> };
+    selfCustody?: boolean;
+  } = {},
 ) {
   return db.vault.create({
     data: {
@@ -79,11 +88,22 @@ export async function createVault(
       isDemo: opts.isDemo ?? false,
       cash: opts.cash ?? {},
       ...(opts.live ? { mode: 'live' as const, agentPubkey: opts.live.agentPubkey, encSecret: opts.live.encSecret } : {}),
+      ...(opts.selfCustody ? { mode: 'live' as const, custody: 'wallet' as const } : {}),
       strategy: { create: strategyData(DEFAULT_STRATEGY) },
     },
     include: { strategy: true },
   });
 }
+
+/** True when the vault's funds stay in the owner's own wallet and Binwise holds no key. */
+export const isSelfCustody = (vault: { mode: string; custody: string }) => vault.mode === 'live' && vault.custody === 'wallet';
+
+/**
+ * The address that holds a live vault's funds and positions: the owner's own wallet (self-custody), or the
+ * vault wallet Binwise keeps the key of. Null for paper vaults and a live vault without a wallet yet.
+ */
+export const fundsAddress = (vault: { mode: string; custody: string; agentPubkey: string | null }, owner: { wallet: string }) =>
+  vault.mode !== 'live' ? null : vault.custody === 'wallet' ? owner.wallet : vault.agentPubkey;
 
 /**
  * After a withdrawal, shrink the hold baseline by the same share of its value, whatever token

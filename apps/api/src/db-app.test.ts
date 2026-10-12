@@ -6,7 +6,7 @@ import WebSocket from 'ws';
 import { Redis } from 'ioredis';
 import type { FastifyInstance } from 'fastify';
 import { REDIS_KEYS, DEFAULT_STRATEGY } from '@binwise/core';
-import { Keypair, PublicKey, SystemInstruction, SystemProgram, Transaction } from '@solana/web3.js';
+import { ComputeBudgetProgram, Keypair, PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import { createVault, ensureUser, getDb } from '@binwise/db';
 import { buildDbApp } from './db-app';
 
@@ -188,7 +188,7 @@ describe('vaults', () => {
     expect(res.json().error).toBe('live_disabled');
   });
 
-  it('allows live mode only for approved wallets, and lets live vaults withdraw even with the flag off', async () => {
+  it('allows live mode only for approved wallets (self-custody: no key at Binwise), and lets vault wallets withdraw even with the flag off', async () => {
     const owner = wallet();
     const { headers } = await signIn(owner);
     const id = (await app.inject({ url: '/me', headers })).json().vaults[0].id;
@@ -203,8 +203,13 @@ describe('vaults', () => {
       process.env.LIVE_WALLETS = `SomeOtherWallet1111111111111111111111111111, ${owner.address}`;
       const ok = await app.inject({ method: 'POST', url: `/vaults/${id}/mode`, headers, payload: { mode: 'live', confirm: true } });
       expect(ok.statusCode).toBe(200);
-      expect(ok.json().mode).toBe('live');
-      // Turning the global flag off must not trap funds: the withdraw route still gets past the live gate.
+      expect(ok.json()).toMatchObject({ mode: 'live', custody: 'wallet' });
+      // Self-custody: no vault wallet, no key, nothing to withdraw from Binwise.
+      const row = await db.vault.findUniqueOrThrow({ where: { id } });
+      expect([row.agentPubkey, row.encSecret]).toEqual([null, null]);
+      expect((await app.inject({ method: 'POST', url: `/vaults/${id}/withdraw`, headers, payload: { token: 'SOL', amount: 1 } })).json().error).toBe('self_custody');
+      // A vault wallet from before (Binwise holds its key): turning the global flag off must not trap its funds.
+      await db.vault.update({ where: { id }, data: { custody: 'agent', agentPubkey: owner.address.split('').reverse().join(''), encSecret: new Uint8Array(8) } });
       process.env.LIVE_TRADING_ENABLED = 'false';
       const w = await app.inject({ method: 'POST', url: `/vaults/${id}/withdraw`, headers, payload: { token: 'NOPE', amount: 1 } });
       // Past the live gate: it goes on to read the wallet (no Solana node in tests).
@@ -265,9 +270,10 @@ describe('vaults', () => {
       const live = await signIn();
       const v = (await app.inject({ url: '/me', headers: live.headers })).json().vaults[0];
       expect(v.mode).toBe('live');
+      // Self-custody: the funds stay in the owner's wallet, Binwise holds no key.
       const row = await db.vault.findUniqueOrThrow({ where: { id: v.id } });
-      expect(row.agentPubkey).toMatch(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
-      expect(row.encSecret).not.toBeNull();
+      expect(row.custody).toBe('wallet');
+      expect([row.agentPubkey, row.encSecret]).toEqual([null, null]);
       expect(JSON.stringify(row.paperWallet)).toBe('{}');
 
       // A vault that was still simulated moves to mainnet on the next visit: no simulated money or history left.
@@ -278,7 +284,7 @@ describe('vaults', () => {
       const moved = await db.vault.findUniqueOrThrow({ where: { id: old } });
       expect(moved.cash).toEqual({});
       expect(moved.deposits).toEqual({});
-      expect(moved.agentPubkey).toMatch(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
+      expect([moved.custody, moved.agentPubkey, moved.encSecret]).toEqual(['wallet', null, null]);
       expect(await db.vaultSnapshot.count({ where: { vaultId: old } })).toBe(0);
       expect((await db.decision.findFirstOrThrow({ where: { vaultId: old }, orderBy: { ts: 'desc' } })).title).toBe('Moved to mainnet');
     } finally {
@@ -572,15 +578,12 @@ describe('add LP by hand: options and funding from the wallet', () => {
     expect((await app.inject({ method: 'POST', url: `/vaults/${id}/deploy`, headers, payload: { poolId: 'PL1', usd: 50, range: { below: 1.5, above: 2 } } })).statusCode).toBe(400);
   });
 
-  it('builds a SOL transfer from the owner\'s wallet to the vault wallet for the wallet to approve', async () => {
+  it('takes no new money into a vault Binwise holds the key for: the drawer still shows balances, new LP is refused', async () => {
     const owner = wallet();
     const agent = wallet().address;
-    const blockhash = wallet().address;
     const conn = {
       getBalance: async (pk: { toBase58(): string }) => (pk.toBase58() === owner.address ? 3 : 0.4) * 1e9,
-      getLatestBlockhash: async () => ({ blockhash, lastValidBlockHeight: 1000 }),
       getParsedTokenAccountsByOwner: async () => ({ value: [] }),
-      simulateTransaction: async () => ({ value: { err: null, logs: [] } }),
     };
     const sub2 = new Redis(process.env.REDIS_URL!);
     const liveApp = await buildDbApp({ db, redis, sub: sub2, domain: 'test.binwise', rpc: () => conn as never });
@@ -592,109 +595,18 @@ describe('add LP by hand: options and funding from the wallet', () => {
       const login = await liveApp.inject({ method: 'POST', url: '/auth/verify', ...ip, payload: { wallet: owner.address, message: nonce.message, signature: owner.signMsg(nonce.message) } });
       const headers = { cookie: `bw_session=${login.cookies.find((c) => c.name === 'bw_session')!.value}` };
 
-      // The drawer learns what the owner's wallet could move in.
       const bal = (await liveApp.inject({ url: `/vaults/${v.id}/balance`, headers })).json();
       expect(bal.wallet).toMatchObject({ address: owner.address, sol: 3, solPriceUsd: 150 });
       expect(bal.vaultSol).toBe(0.4);
-      // Where the owner can send SOL by hand when the wallet can't approve on the page.
       expect(bal.vaultWallet).toBe(agent);
 
-      const r = await liveApp.inject({ method: 'POST', url: `/vaults/${v.id}/deposit/tx`, headers, payload: { sol: 1.5 } });
-      expect(r.statusCode).toBe(200);
-      const tx = Transaction.from(Buffer.from(r.json().tx, 'base64'));
-      expect(tx.feePayer?.toBase58()).toBe(owner.address);
-      expect(tx.recentBlockhash).toBe(blockhash);
-      expect(tx.instructions).toHaveLength(1);
-      const t = SystemInstruction.decodeTransfer(tx.instructions[0]);
-      expect([t.fromPubkey.toBase58(), t.toPubkey.toBase58(), Number(t.lamports)]).toEqual([owner.address, agent, 1_500_000_000]);
-      // Never more than the wallet holds (keeping the network fee), never nothing, never for someone else.
-      expect((await liveApp.inject({ method: 'POST', url: `/vaults/${v.id}/deposit/tx`, headers, payload: { sol: 3 } })).json().error).toBe('insufficient_balance');
-      expect((await liveApp.inject({ method: 'POST', url: `/vaults/${v.id}/deposit/tx`, headers, payload: { sol: 0 } })).statusCode).toBe(400);
-      expect((await liveApp.inject({ method: 'POST', url: `/vaults/${v.id}/deposit/tx`, payload: { sol: 1 } })).statusCode).toBe(401);
-    } finally {
-      await liveApp.close(); // also closes sub2
-    }
-  });
-
-  it('sends a deposit the wallet only signed: just the owner-to-vault transfer, simulated, and only once', async () => {
-    const owner = wallet();
-    const kp = owner.keypair();
-    expect(kp.publicKey.toBase58()).toBe(owner.address);
-    const agent = wallet().address;
-    const blockhash = wallet().address;
-    const sent: Buffer[] = [];
-    let simErr: unknown = null;
-    let landed: { signature: string; parsed: object } | null = null;
-    const conn = {
-      getBalance: async () => 3e9,
-      getLatestBlockhash: async () => ({ blockhash, lastValidBlockHeight: 1000 }),
-      simulateTransaction: async () => ({ value: { err: simErr, logs: [] } }),
-      getSignaturesForAddress: async () => (landed ? [{ signature: landed.signature, err: null, blockTime: Math.floor(Date.now() / 1000) }] : []),
-      getParsedTransaction: async () => landed?.parsed ?? null,
-      sendRawTransaction: async (raw: Buffer) => {
-        sent.push(Buffer.from(raw));
-        return 'RELAYED';
-      },
-    };
-    const sub2 = new Redis(process.env.REDIS_URL!);
-    const liveApp = await buildDbApp({ db, redis, sub: sub2, domain: 'test.binwise', rpc: () => conn as never });
-    try {
-      const user = await ensureUser(db, owner.address);
-      const v = await createVault(db, user.id, { live: { agentPubkey: agent, encSecret: new Uint8Array(8) } });
-      const ip = { remoteAddress: '10.9.9.4' };
-      const nonce = (await liveApp.inject({ url: `/auth/nonce?wallet=${owner.address}`, ...ip })).json();
-      const login = await liveApp.inject({ method: 'POST', url: '/auth/verify', ...ip, payload: { wallet: owner.address, message: nonce.message, signature: owner.signMsg(nonce.message) } });
-      const headers = { cookie: `bw_session=${login.cookies.find((c) => c.name === 'bw_session')!.value}` };
-      const unsigned = async () => (await liveApp.inject({ method: 'POST', url: `/vaults/${v.id}/deposit/tx`, headers, payload: { sol: 1.5 } })).json().tx as string;
-      const signed = async () => {
-        const tx = Transaction.from(Buffer.from(await unsigned(), 'base64'));
-        tx.sign(kp);
-        return tx.serialize();
-      };
-      const relay = (tx: string | Buffer) => liveApp.inject({ method: 'POST', url: `/vaults/${v.id}/deposit/send`, headers, payload: { tx: typeof tx === 'string' ? tx : tx.toString('base64') } });
-
-      // Signed by the owner: sent exactly as signed.
-      const raw = await signed();
-      const ok = await relay(raw);
-      expect(ok.statusCode).toBe(200);
-      expect(ok.json()).toEqual({ signature: 'RELAYED' });
-      expect(sent).toEqual([raw]);
-
-      // Unsigned, or a transfer anywhere else (even signed by the owner): nothing goes out.
-      expect((await relay(await unsigned())).json().error).toBe('unsigned');
-      const elsewhere = new Transaction({ feePayer: kp.publicKey, blockhash, lastValidBlockHeight: 1000 }).add(
-        SystemProgram.transfer({ fromPubkey: kp.publicKey, toPubkey: new PublicKey(wallet().address), lamports: 1e9 }),
-      );
-      elsewhere.sign(kp);
-      expect((await relay(elsewhere.serialize())).json().error).toBe('bad_tx');
-      expect((await relay('bm90IGEgdHJhbnNhY3Rpb24=')).json().error).toBe('bad_tx');
-      expect((await liveApp.inject({ method: 'POST', url: `/vaults/${v.id}/deposit/send`, payload: { tx: raw.toString('base64') } })).statusCode).toBe(401);
-      expect(sent).toHaveLength(1);
-
-      // The wallet's own send landed after all (same blockhash, same amount): its signature, no second transfer.
-      const again = await signed();
-      const transfer = { program: 'system', parsed: { type: 'transfer', info: { source: owner.address, destination: agent, lamports: 1_500_000_000 } } };
-      landed = { signature: 'EARLIER', parsed: { meta: { err: null }, transaction: { message: { recentBlockhash: blockhash, instructions: [transfer], accountKeys: [] } } } };
-      expect((await relay(again)).json()).toEqual({ signature: 'EARLIER' });
-      expect(sent).toHaveLength(1);
-      // An earlier deposit of the same size (another blockhash) is not this one.
-      landed = { signature: 'OLDER', parsed: { meta: { err: null }, transaction: { message: { recentBlockhash: wallet().address, instructions: [transfer], accountKeys: [] } } } };
-      expect((await relay(again)).json()).toEqual({ signature: 'RELAYED' });
-      expect(sent).toHaveLength(2);
-      landed = null;
-
-      // Solana refuses it: a plain reason, nothing sent.
-      const late = await signed();
-      simErr = 'BlockhashNotFound';
-      expect((await relay(late)).json().error).toBe('expired');
-      expect(sent).toHaveLength(2);
-      // Before the wallet even asks, a transfer Solana would refuse says why.
-      simErr = { InsufficientFundsForRent: { account_index: 0 } };
-      const rent = (await liveApp.inject({ method: 'POST', url: `/vaults/${v.id}/deposit/tx`, headers, payload: { sol: 1.5 } })).json();
-      expect(rent.error).toBe('insufficient_balance');
-      expect(rent.message).toMatch(/0\.001 SOL/);
-      simErr = { InsufficientFundsForRent: { account_index: 1 } };
-      expect((await liveApp.inject({ method: 'POST', url: `/vaults/${v.id}/deposit/tx`, headers, payload: { sol: 0.0005 } })).json().error).toBe('too_small');
+      // No new LP from the vault wallet, and no way left to move money into it from the page.
+      const deploy = await liveApp.inject({ method: 'POST', url: `/vaults/${v.id}/deploy`, headers, payload: { poolId: 'PL1', usd: 50 } });
+      expect(deploy.statusCode).toBe(409);
+      expect(deploy.json()).toMatchObject({ error: 'custody_closing', message: expect.stringMatching(/Withdraw/) });
+      expect(await redis.llen(REDIS_KEYS.actions(v.id))).toBe(0);
+      expect((await liveApp.inject({ method: 'POST', url: `/vaults/${v.id}/deposit/tx`, headers, payload: { sol: 1 } })).statusCode).toBe(404);
+      expect((await liveApp.inject({ method: 'POST', url: `/vaults/${v.id}/deposit/send`, headers, payload: { tx: 'AA==' } })).statusCode).toBe(404);
     } finally {
       await liveApp.close(); // also closes sub2
     }
@@ -743,6 +655,229 @@ describe('add LP by hand: options and funding from the wallet', () => {
       expect((await liveApp.inject({ method: 'POST', url: `/vaults/${v.id}/deposit/scan` })).statusCode).toBe(401);
     } finally {
       await liveApp.close(); // also closes sub2
+    }
+  });
+});
+
+describe('self-custody: the owner\'s wallet signs, Binwise holds nothing', () => {
+  it('prepares Add LP for the owner\'s wallet, relays only what that wallet signed, and records what the chain shows', async () => {
+    const owner = wallet();
+    const kp = owner.keypair();
+    const POS = Keypair.generate().publicKey.toBase58();
+    const sent: Buffer[] = [];
+    let simErr: unknown = null;
+    const conn = {
+      getBalance: async () => 5e9,
+      simulateTransaction: async () => ({ value: { err: simErr, logs: [] } }),
+      sendRawTransaction: async (raw: Buffer) => {
+        sent.push(Buffer.from(raw));
+        return `SIG${sent.length}`;
+      },
+      getSignatureStatuses: async () => ({ value: [{ confirmationStatus: 'confirmed', err: null }] }),
+    };
+    // What the chain shows for each position address (null: not there).
+    const chainPositions: Record<string, { owner: string; lowerBin: number; upperBin: number; amountX: number; amountY: number; feesUsd: number } | null> = {};
+    const asked: Record<string, unknown[]> = { open: [], close: [] };
+    const step = (kind: string) => ({ label: kind, tx: 'AQ==', kind });
+    const planner = {
+      open: async (_d: unknown, req: unknown) => {
+        asked.open.push(req);
+        return { steps: [step('swap'), step('open')], swaps: [], position: { address: POS, lowerBin: -10, upperBin: 10, amountX: 0.5, amountY: 75 }, rentSol: 0.06, newBinArrays: 0 };
+      },
+      close: async (_d: unknown, req: unknown) => {
+        asked.close.push(req);
+        return { steps: [step('close')], swaps: [], out: { [SOL]: 0.5, [USDC]: 76 }, feesUsd: 1 };
+      },
+      claim: async () => ({ steps: [step('claim')], feesUsd: 2 }),
+      compound: async () => ({ steps: [step('claim')], feesUsd: 2 }),
+      rebalance: async () => ({ steps: [] }),
+      read: async (_c: unknown, _p: unknown, address: string) => chainPositions[address] ?? null,
+    };
+    const sub2 = new Redis(process.env.REDIS_URL!);
+    const scApp = await buildDbApp({ db, redis, sub: sub2, domain: 'test.binwise', rpc: () => conn as never, planner: planner as never });
+    const prev = process.env.LIVE_TRADING_ENABLED;
+    process.env.LIVE_TRADING_ENABLED = 'true';
+    try {
+      const user = await ensureUser(db, owner.address);
+      const v = await createVault(db, user.id, { selfCustody: true });
+      expect([v.mode, v.custody, v.agentPubkey, v.encSecret]).toEqual(['live', 'wallet', null, null]);
+      const ip = { remoteAddress: '10.9.9.8' };
+      const nonce = (await scApp.inject({ url: `/auth/nonce?wallet=${owner.address}`, ...ip })).json();
+      const login = await scApp.inject({ method: 'POST', url: '/auth/verify', ...ip, payload: { wallet: owner.address, message: nonce.message, signature: owner.signMsg(nonce.message) } });
+      const headers = { cookie: `bw_session=${login.cookies.find((c) => c.name === 'bw_session')!.value}` };
+      await db.pool.create({ data: { id: 'PS1', name: 'SOL-USDC', tokenA: 'SOL', tokenB: 'USDC', mintA: SOL, mintB: USDC, binStep: 25, baseFee: 0.1 } });
+      await db.poolSnapshot.create({ data: { poolId: 'PS1', tvl: 1e6, volume24h: 2e6, price: 150, volatility: 3, score: 70, scoreBreakdown: [], call: 'in', callLabel: 'Enter', reason: 'ok' } });
+      const prepare = (payload: object) => scApp.inject({ method: 'POST', url: `/vaults/${v.id}/wallet/prepare`, headers, payload });
+      const relay = (tx: Buffer | string) => scApp.inject({ method: 'POST', url: `/vaults/${v.id}/wallet/send`, headers, payload: { tx: typeof tx === 'string' ? tx : tx.toString('base64') } });
+      const done = (planId: string, signatures: string[]) => scApp.inject({ method: 'POST', url: `/vaults/${v.id}/wallet/plans/${planId}/done`, headers, payload: { signatures } });
+
+      // The old ways in are closed: nothing is ever sent to a Binwise wallet, the agent never queues a deploy.
+      expect((await scApp.inject({ method: 'POST', url: `/vaults/${v.id}/deploy`, headers, payload: { poolId: 'PS1', usd: 50 } })).json().error).toBe('approve_in_wallet');
+      expect((await scApp.inject({ method: 'POST', url: `/vaults/${v.id}/deposit`, headers, payload: { signature: 'x' } })).json().error).toBe('self_custody');
+
+      // Add LP: transactions for the owner's own wallet, the position in the owner's name.
+      // Against the agent's call only when the owner ticks the risk box.
+      expect((await prepare({ action: 'open', poolId: 'PS1', sol: 1 })).json().error).toBe('not_recommended');
+      const open = await prepare({ action: 'open', poolId: 'PS1', sol: 1, override: true });
+      expect(open.statusCode).toBe(200);
+      const plan = open.json();
+      expect(plan.steps.map((x: { kind: string }) => x.kind)).toEqual(['swap', 'open']);
+      expect(plan.summary.join(' ')).toMatch(/belongs to your wallet/);
+      expect(asked.open[0]).toMatchObject({ owner: owner.address, pool: { address: 'PS1', mintX: SOL, mintY: USDC, price: 150 }, side: 'both' });
+      const budget = (asked.open[0] as { budget: Record<string, number> }).budget[SOL];
+      expect(budget).toBeGreaterThan(0);
+      expect(budget).toBeLessThanOrEqual(1);
+      expect((await scApp.inject({ url: `/vaults/${v.id}/wallet/pending`, headers })).json()).toEqual([expect.objectContaining({ planId: plan.planId, action: 'open', pair: 'SOL / USDC' })]);
+      expect((await prepare({ action: 'open', poolId: 'PS1', sol: 0 })).json().error).toBe('invalid_amount');
+      expect((await prepare({ action: 'open', poolId: 'PS1', sol: 1, shape: 'zigzag' })).json().error).toBe('invalid_shape');
+
+      // The relay: only transactions the owner's wallet paid for and signed, calling Binwise's programs.
+      const blockhash = Keypair.generate().publicKey.toBase58();
+      const build = (payer: Keypair, program = ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 })) =>
+        new VersionedTransaction(new TransactionMessage({ payerKey: payer.publicKey, recentBlockhash: blockhash, instructions: [program] }).compileToV0Message());
+      const signed = build(kp);
+      signed.sign([kp]);
+      const ok = await relay(Buffer.from(signed.serialize()));
+      expect(ok.json()).toEqual({ signature: 'SIG1', status: 'confirmed' });
+      expect(sent).toEqual([Buffer.from(signed.serialize())]);
+      expect((await relay(Buffer.from(build(kp).serialize()))).json().error).toBe('unsigned');
+      const stranger = Keypair.generate();
+      const theirs = build(stranger);
+      theirs.sign([stranger]);
+      expect((await relay(Buffer.from(theirs.serialize()))).json().error).toBe('bad_tx');
+      const other = build(kp, new TransactionInstruction({ programId: Keypair.generate().publicKey, keys: [], data: Buffer.alloc(0) }));
+      other.sign([kp]);
+      expect((await relay(Buffer.from(other.serialize()))).json().error).toBe('bad_tx');
+      // Phantom's own guard instructions (Lighthouse) may ride along.
+      const guarded = build(kp, new TransactionInstruction({ programId: new PublicKey('L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95'), keys: [], data: Buffer.alloc(1) }));
+      guarded.sign([kp]);
+      expect((await relay(Buffer.from(guarded.serialize()))).json()).toEqual({ signature: 'SIG2', status: 'confirmed' });
+      sent.pop();
+      expect((await relay('bm90IGEgdHJhbnNhY3Rpb24=')).json().error).toBe('bad_tx');
+      simErr = { InstructionError: [0, { Custom: 6004 }] };
+      expect((await relay(Buffer.from(signed.serialize()))).json().error).toBe('sim_failed');
+      simErr = null;
+      expect(sent).toHaveLength(1);
+      expect((await scApp.inject({ method: 'POST', url: `/vaults/${v.id}/wallet/send`, payload: { tx: 'AQ==' } })).statusCode).toBe(401);
+
+      // Recorded from the chain, not from the page: nothing until the position is there, in the owner's name.
+      expect((await done(plan.planId, ['SIG1'])).json().error).toBe('not_yet');
+      chainPositions[POS] = { owner: Keypair.generate().publicKey.toBase58(), lowerBin: -10, upperBin: 10, amountX: 0.5, amountY: 75, feesUsd: 0 };
+      expect((await done(plan.planId, ['SIG1'])).json().error).toBe('not_yours');
+      chainPositions[POS] = { owner: owner.address, lowerBin: -10, upperBin: 10, amountX: 0.5, amountY: 75, feesUsd: 0 };
+      const rec = await done(plan.planId, ['SIG1']);
+      expect(rec.json()).toMatchObject({ ok: true, title: 'Added LP to SOL / USDC' });
+      const pos = await db.position.findFirstOrThrow({ where: { vaultId: v.id } });
+      expect(pos).toMatchObject({ address: POS, status: 'open', lowerBin: -10, upperBin: 10, entryAmountA: 0.5, entryAmountB: 75, entryValueUsd: 150 });
+      expect((await db.vault.findUniqueOrThrow({ where: { id: v.id } })).deposits).toEqual({ [SOL]: 0.5, [USDC]: 75 });
+      expect(await db.decision.findUnique({ where: { idempotencyKey: `wplan:${plan.planId}` } })).toMatchObject({ type: 'deploy', txSig: 'SIG1' });
+      // Once only, and the plan is no longer pending.
+      expect((await done(plan.planId, ['SIG1'])).json()).toEqual({ ok: true, already: true });
+      expect(await db.position.count({ where: { vaultId: v.id } })).toBe(1);
+      expect((await scApp.inject({ url: `/vaults/${v.id}/wallet/pending`, headers })).json()).toEqual([]);
+      expect((await prepare({ action: 'open', poolId: 'PS1', sol: 1, override: true })).json().error).toBe('held');
+
+      // Claim: recorded once the fees have left the position.
+      chainPositions[POS] = { ...chainPositions[POS]!, feesUsd: 2 };
+      const claim = (await prepare({ action: 'claim', positionId: pos.id })).json();
+      expect((await done(claim.planId, ['SIG3'])).json().error).toBe('not_yet');
+      chainPositions[POS] = { ...chainPositions[POS]!, feesUsd: 0 };
+      expect((await done(claim.planId, ['SIG3'])).json()).toMatchObject({ ok: true, title: 'Claimed fees from SOL / USDC' });
+      expect((await db.position.findUniqueOrThrow({ where: { id: pos.id } })).feesClaimedUsd).toBe(2);
+
+      // Close: the money comes back to the owner's wallet; recorded once the position is gone.
+      const close = (await prepare({ action: 'close', positionId: pos.id })).json();
+      expect(asked.close[0]).toMatchObject({ owner: owner.address, position: POS });
+      expect(close.summary.join(' ')).toMatch(/comes back to your wallet/);
+      expect((await done(close.planId, ['SIG2'])).json().error).toBe('not_yet');
+      chainPositions[POS] = null;
+      expect((await done(close.planId, ['SIG2'])).json()).toMatchObject({ ok: true, title: 'Closed SOL / USDC' });
+      expect(await db.position.findUniqueOrThrow({ where: { id: pos.id } })).toMatchObject({ status: 'closed', valueUsd: 151 });
+      expect((await db.decision.findUnique({ where: { idempotencyKey: `wplan:${close.planId}` } }))?.inputs).toMatchObject({ flowUsd: -151 });
+
+      // A plan the wallet never carried out: after a few minutes nothing can land any more, so it is dropped.
+      const never = (await prepare({ action: 'open', poolId: 'PS1', sol: 1, override: true })).json();
+      expect((await done(never.planId, [])).json().error).toBe('not_yet');
+      const stored = JSON.parse((await redis.get(`binwise:wplan:${never.planId}`))!);
+      await redis.set(`binwise:wplan:${never.planId}`, JSON.stringify({ ...stored, createdAt: Date.now() - 4 * 60_000 }));
+      expect((await done(never.planId, [])).json()).toMatchObject({ ok: false, dropped: true });
+      expect((await scApp.inject({ url: `/vaults/${v.id}/wallet/pending`, headers })).json()).toEqual([]);
+      expect(await db.position.count({ where: { vaultId: v.id, status: 'open' } })).toBe(0);
+
+      // The global switches stop everything before anything is prepared or sent.
+      await redis.set(REDIS_KEYS.kill, '1');
+      expect((await prepare({ action: 'open', poolId: 'PS1', sol: 1 })).json().error).toBe('kill_switch');
+      expect((await relay(Buffer.from(signed.serialize()))).json().error).toBe('kill_switch');
+      await redis.del(REDIS_KEYS.kill);
+      process.env.LIVE_TRADING_ENABLED = 'false';
+      expect((await prepare({ action: 'open', poolId: 'PS1', sol: 1 })).json().error).toBe('live_disabled');
+      expect(sent).toHaveLength(1);
+
+      // Someone else's vault: not theirs to prepare for.
+      process.env.LIVE_TRADING_ENABLED = 'true';
+      const { headers: strangerHeaders } = await signIn(wallet(), '10.9.9.9');
+      const foreign = await scApp.inject({ method: 'POST', url: `/vaults/${v.id}/wallet/prepare`, headers: strangerHeaders, payload: { action: 'open', poolId: 'PS1', sol: 1 } });
+      expect([403, 404]).toContain(foreign.statusCode);
+    } finally {
+      process.env.LIVE_TRADING_ENABLED = prev;
+      if (prev === undefined) delete process.env.LIVE_TRADING_ENABLED;
+      await redis.del(REDIS_KEYS.kill);
+      await scApp.close(); // also closes sub2
+    }
+  });
+});
+
+describe('ending custody of an old vault wallet', () => {
+  it('deletes the vault key only once the vault wallet is empty, then works from the owner\'s wallet', async () => {
+    const owner = wallet();
+    const agent = Keypair.generate().publicKey.toBase58();
+    const TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+    let lamports = 1.2e9;
+    let usdcLeft = 5;
+    let positions: unknown[] = [];
+    const conn = {
+      getBalance: async () => lamports,
+      getParsedTokenAccountsByOwner: async (_o: unknown, { programId }: { programId: { toBase58(): string } }) => ({
+        value:
+          programId.toBase58() === TOKEN_PROGRAM && usdcLeft > 0
+            ? [{ account: { data: { parsed: { info: { mint: USDC, tokenAmount: { uiAmount: usdcLeft, decimals: 6 } } } } } }]
+            : [],
+      }),
+    };
+    const sub2 = new Redis(process.env.REDIS_URL!);
+    const relApp = await buildDbApp({ db, redis, sub: sub2, domain: 'test.binwise', rpc: () => conn as never, positionsOf: async () => positions });
+    try {
+      const user = await ensureUser(db, owner.address);
+      const v = await createVault(db, user.id, { live: { agentPubkey: agent, encSecret: new Uint8Array(8) } });
+      const ip = { remoteAddress: '10.9.9.11' };
+      const nonce = (await relApp.inject({ url: `/auth/nonce?wallet=${owner.address}`, ...ip })).json();
+      const login = await relApp.inject({ method: 'POST', url: '/auth/verify', ...ip, payload: { wallet: owner.address, message: nonce.message, signature: owner.signMsg(nonce.message) } });
+      const headers = { cookie: `bw_session=${login.cookies.find((c) => c.name === 'bw_session')!.value}` };
+      const release = (confirm = true) => relApp.inject({ method: 'POST', url: `/vaults/${v.id}/custody/release`, headers, payload: { confirm } });
+
+      expect((await release(false)).json().error).toBe('confirm_required');
+      // Anything still in the vault wallet keeps the key: deleting it would lose those funds.
+      const full = await release();
+      expect(full.statusCode).toBe(409);
+      expect(full.json()).toMatchObject({ error: 'funds_left', message: expect.stringMatching(/1\.2 SOL.*5 USDC|5 USDC.*1\.2 SOL/) });
+      lamports = 0.001e9;
+      expect((await release()).json().message).toMatch(/5 USDC/);
+      usdcLeft = 0;
+      positions = [{ address: 'P' }];
+      expect((await release()).json().error).toBe('positions_open');
+      positions = [];
+      expect((await db.vault.findUniqueOrThrow({ where: { id: v.id } })).encSecret).not.toBeNull();
+
+      const ok = await release();
+      expect(ok.statusCode).toBe(200);
+      expect(ok.json()).toMatchObject({ mode: 'live', custody: 'wallet' });
+      const row = await db.vault.findUniqueOrThrow({ where: { id: v.id } });
+      expect([row.custody, row.agentPubkey, row.encSecret]).toEqual(['wallet', null, null]);
+      expect((await db.decision.findFirstOrThrow({ where: { vaultId: v.id, title: 'Switched to your own wallet' } })).reason).toMatch(/0\.001 SOL/);
+      // Nothing left to release; another owner can't release someone else's vault.
+      expect((await release()).json().error).toBe('no_custody');
+    } finally {
+      await relApp.close(); // also closes sub2
     }
   });
 });

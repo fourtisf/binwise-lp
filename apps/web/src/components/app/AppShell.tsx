@@ -14,6 +14,7 @@ import { Toast } from './Toast';
 import { Topbar } from './Topbar';
 import { WALLET_LOGIN } from '@/lib/site';
 import { ConfirmLiveModal, ConnectModal } from './Wallet';
+import { WalletTaskCard } from './WalletTask';
 import { WithdrawModal } from './WithdrawModal';
 import { PAGES, pageFor } from './pages';
 
@@ -62,6 +63,9 @@ function Shell({ children }: { children: ReactNode }) {
       </ErrorBoundary>
       <ErrorBoundary area="withdraw">
         <WithdrawModal />
+      </ErrorBoundary>
+      <ErrorBoundary area="wallet approval">
+        <WalletTaskCard />
       </ErrorBoundary>
       <ErrorBoundary area="search" fallback="quiet">
         <Palette />

@@ -118,6 +118,8 @@ export interface VaultOverview {
   depositAssets: DepositAsset[];
   /** Live mode: the vault's agent wallet that deposits are sent to */
   depositAddress?: string | null;
+  /** Live: 'wallet' = self-custody, the funds stay in the owner's own wallet and they approve every transaction; 'agent' = a vault wallet Binwise holds the key of (winding down) */
+  custody?: 'agent' | 'wallet';
   /** True when the viewer can't change this vault (the public demo vault) */
   readOnly?: boolean;
   pausedReason?: string | null;

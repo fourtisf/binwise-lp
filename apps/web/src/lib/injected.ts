@@ -11,7 +11,9 @@ export interface InjectedSolana {
   /** Takes a @solana/web3.js Transaction */
   signAndSendTransaction?(tx: unknown): Promise<{ signature: string } | string>;
   /** Same, signed but not sent */
-  signTransaction?(tx: unknown): Promise<{ serialize(): Uint8Array }>;
+  signTransaction?(tx: unknown): Promise<{ serialize(opts?: object): Uint8Array }>;
+  /** Several at once, one approval */
+  signAllTransactions?(txs: unknown[]): Promise<{ serialize(opts?: object): Uint8Array }[]>;
 }
 
 type W = Record<string, unknown> & {

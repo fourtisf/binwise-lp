@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import type { PerformanceRange, PerformanceSeries } from '@binwise/core';
 import { FeedItem } from '@/components/FeedItem';
+import { CustodyNotice } from '@/components/app/CustodyNotice';
 import { PositionChart } from '@/components/PositionChart';
 import { Icon } from '@/components/Sprite';
 import { PairIcon } from '@/components/Tokens';
@@ -23,7 +24,7 @@ const chartNote = (text: string) =>
 const PROPOSAL_ICON = { deploy: 'i-plus', rebalance: 'i-swap', exit: 'i-exit', compound: 'i-comp' } as const;
 
 export default function OverviewPage() {
-  const { overview: o, positions, decisions, proposals, approve, reject, cycle, decisionText, client, empty } = useAppData();
+  const { overview: o, positions, decisions, proposals, approve, reject, cycle, decisionText, client, empty, selfCustody } = useAppData();
   const { openConnect } = useUi();
   const [range, setRange] = useState<PerformanceRange>(30);
   const [perf, setPerf] = useState<PerformanceSeries | null>(null);
@@ -52,7 +53,11 @@ export default function OverviewPage() {
     }
     // Nothing deposited yet: a flat line at $0 says nothing.
     if (perf.vault.every((v) => v === 0) && perf.hold.every((v) => v === 0)) {
-      eq.current.innerHTML = chartNote('No funds in the vault yet. The chart starts with your first deposit:<br>send SOL or USDC to your vault from the Telegram bot (💳 Wallet).');
+      eq.current.innerHTML = chartNote(
+        selfCustody
+          ? 'No positions yet. The chart starts with your first LP:<br>open a pool in Pools and add LP from your own wallet.'
+          : 'No funds in the vault yet. The chart starts with your first deposit:<br>send SOL or USDC to your vault from the Telegram bot (💳 Wallet).',
+      );
       return;
     }
     // Young vaults have hourly points; label those with the time.
@@ -76,7 +81,7 @@ export default function OverviewPage() {
     };
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
-  }, [perf]);
+  }, [perf, selfCustody]);
 
   const step = cycle?.paused ? -1 : (cycle?.step ?? -1);
 
@@ -112,12 +117,17 @@ export default function OverviewPage() {
 
   return (
     <div className="page on" id="p-overview">
+      <CustodyNotice />
       {proposals.length > 0 && (
         <div className="panel card" id="approvals" style={{ marginBottom: 12 }}>
           <div className="ph">
             <div>
               <h3>Waiting for your approval</h3>
-              <p>Manual mode: the agent found these trades. Nothing runs until you approve.</p>
+              <p>
+                {selfCustody
+                  ? 'The agent found these changes to your positions. Approve one and your wallet asks you to sign it; nothing moves without that.'
+                  : 'Manual mode: the agent found these trades. Nothing runs until you approve.'}
+              </p>
             </div>
           </div>
           <div className="feed" style={{ maxHeight: 'none' }}>
@@ -131,7 +141,7 @@ export default function OverviewPage() {
                   <span>{p.reason}</span>
                   <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
                     <button className="btn btn-white btn-sm" onClick={() => approve(p)}>
-                      Approve
+                      {selfCustody ? 'Approve in wallet' : 'Approve'}
                     </button>
                     <button className="btn btn-dark btn-sm" onClick={() => reject(p)}>
                       Reject

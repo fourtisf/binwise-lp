@@ -31,6 +31,9 @@ export function watchSolanaWallets(onChange: (wallets: Wallet[]) => void): () =>
   return () => offs.forEach((off) => off());
 }
 
+/** Solana wallets installed in this browser right now. */
+export const installedSolanaWallets = (): Wallet[] => getWallets().get().filter(isSolana);
+
 export interface SignInApi {
   /** Without a wallet: a nonce for the one-step Sign In With Solana request (`message` is null). */
   challenge(wallet?: string): Promise<{ message: string | null; nonce: string; domain: string; issuedAt: string; statement: string }>;
@@ -352,4 +355,106 @@ export async function sendWithWallet(w: Wallet, owner: string, tx: Uint8Array, r
     ? `${w.name} hit an internal error. Update ${w.name}, check Testnet mode is off (Settings → Developer Settings) and turn off other wallet extensions, then try again.\n`
     : '';
   throw new SignInError('wallet', tried.length ? help + tried.join('\n') : `${w.name} can't send transactions from this page.`, tried);
+}
+
+/**
+ * Whether the wallet signs versioned (v0) transactions, which Jupiter's swaps use. If not, Binwise builds
+ * legacy ones. Only Wallet Standard says so; a wallet reached only through its classic API gets legacy ones.
+ */
+export function signsVersioned(w: Wallet): boolean {
+  const f = (w.features as Partial<SolanaSignTransactionFeature>)[SolanaSignTransaction];
+  return !!f && f.supportedTransactionVersions.includes(0);
+}
+
+/**
+ * Asks the wallet to sign every transaction of a plan (serialized, in order) in one approval, without
+ * sending them: Binwise sends them one after the other, each once the one before landed. Tries:
+ *
+ * 1. Wallet Standard signTransaction with all of them in one request (one approval in Phantom, Solflare,
+ *    Backpack and most others).
+ * 2. The classic signAllTransactions (one approval).
+ * 3. The classic signTransaction, one approval per transaction.
+ *
+ * Returns the signed transactions, in the same order. Stops like sendWithWallet: a "no", an open request,
+ * another account, or `stopped()` turning true.
+ */
+export async function signAllWithWallet(w: Wallet, owner: string, txs: Uint8Array[], stopped?: () => boolean): Promise<Uint8Array[]> {
+  const tried: string[] = [];
+  const wrongAccount = () => new SignInError('account', `Switch ${w.name} to the account you signed in with (${owner.slice(0, 4)}…${owner.slice(-4)}), then try again.`);
+  const attempt = async <T,>(label: string, run: () => Promise<T>): Promise<T | null> => {
+    if (stopped?.()) throw new SignInError('stopped', 'Stopped waiting for the wallet.', tried);
+    try {
+      return await run();
+    } catch (e) {
+      if (e instanceof SignInError) throw e;
+      console.error(`[binwise] ${w.name}: ${label} failed`, e);
+      const stop = walletFailure(e);
+      if (stop) throw stop;
+      tried.push(`${label}: ${describe(e)}`);
+      return null;
+    }
+  };
+  const all = <T,>(out: readonly T[]) => {
+    if (out.length !== txs.length) throw new Error(`The wallet returned ${out.length} of ${txs.length} transactions.`);
+    return out;
+  };
+
+  if (SolanaSignTransaction in w.features) {
+    const connector = (w.features as StandardConnectFeature)[StandardConnect];
+    const account = await attempt('Connect', async () => {
+      const mine = (accounts: readonly WalletAccount[]) => accounts.find((a) => a.address === owner);
+      const found =
+        mine(w.accounts) ??
+        mine(await quietly(connector.connect({ silent: true })).then((r) => r.accounts, () => [])) ??
+        mine((await connector.connect()).accounts);
+      if (!found) throw wrongAccount();
+      return found;
+    });
+    if (account) {
+      const signed = await attempt('Sign', async () => {
+        const out = await (w.features as SolanaSignTransactionFeature)[SolanaSignTransaction].signTransaction(
+          ...txs.map((transaction) => ({ account, chain: mainnetOf(account), transaction })),
+        );
+        return all(out).map((o) => o.signedTransaction);
+      });
+      if (signed) return signed;
+    }
+  }
+
+  const injected = injectedFor(w.name);
+  const p = injected && !(/phantom/i.test(w.name) && impostorOf(injected)) ? injected : null;
+  const web3 =
+    p && (p.signAllTransactions || p.signTransaction)
+      ? await attempt('Classic connect', async () => {
+          if ((await connectInjected(p)) !== owner) throw wrongAccount();
+          return import('@solana/web3.js');
+        })
+      : null;
+  if (web3 && p) {
+    // A fresh @solana/web3.js object per request, legacy or versioned as built.
+    const objects = () =>
+      txs.map((t) => {
+        const v = web3.VersionedTransaction.deserialize(t);
+        return v.version === 'legacy' ? web3.Transaction.from(t) : v;
+      });
+    // The position's own signature is already on it: serialize without asking for every signature again.
+    const bytes = (t: { serialize(opts?: object): Uint8Array }) => Uint8Array.from(t.serialize({ requireAllSignatures: false, verifySignatures: false }));
+    if (p.signAllTransactions) {
+      const signed = await attempt('Classic sign all', async () => all(await p.signAllTransactions!(objects())).map(bytes));
+      if (signed) return signed;
+    }
+    if (p.signTransaction) {
+      const signed = await attempt('Classic sign', async () => {
+        const out: Uint8Array[] = [];
+        for (const t of objects()) {
+          if (stopped?.()) throw new SignInError('stopped', 'Stopped waiting for the wallet.', tried);
+          out.push(bytes(await p.signTransaction!(t)));
+        }
+        return out;
+      });
+      if (signed) return signed;
+    }
+  }
+  console.error(`[binwise] ${w.name} could not sign:`, tried, '|', phantomDiagnostics());
+  throw new SignInError('wallet', tried.length ? tried.join('\n') : `${w.name} can't sign transactions from this page.`, tried);
 }

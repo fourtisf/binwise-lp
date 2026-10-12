@@ -32,6 +32,26 @@ export class ApiError extends Error {
   }
 }
 
+/** Self-custody: what the owner's wallet is asked to sign (POST /vaults/:id/wallet/prepare). */
+export type WalletAction =
+  | { action: 'open'; poolId: string; sol: number; override?: boolean; shape?: LiquidityShape; range?: CustomRange }
+  | { action: 'close' | 'claim'; positionId: string }
+  | { action: 'proposal'; proposalId: string };
+
+/** Transactions for the owner's wallet to sign together, sent in this order; `summary`: what they do, in plain words. */
+export interface WalletPlan {
+  planId: string;
+  steps: { label: string; tx: string; kind: 'swap' | 'open' | 'add' | 'close' | 'claim' }[];
+  summary: string[];
+}
+
+/** What Solana says about a transaction sent through POST /vaults/:id/wallet/send. */
+export interface WalletTxStatus {
+  signature?: string;
+  status: 'confirmed' | 'pending' | 'failed';
+  error?: string;
+}
+
 export interface DecisionFilter {
   types?: DecisionType[];
   exclude?: DecisionType[];
@@ -77,14 +97,24 @@ export interface BinwiseClient {
    * opts: the owner's own shape and price range (bins below / above the price); the agent picks when absent.
    */
   deploy(poolId: string, usd: number, override: boolean, opts?: { shape?: LiquidityShape; range?: CustomRange }): Promise<{ queued: boolean; pair: string }>;
-  /** Live: an unsigned SOL transfer from the owner's wallet to the vault wallet (base64), for the wallet to approve */
-  depositTx(sol: number): Promise<{ tx: string; lamports: number; to: string }>;
-  /** Live: broadcast that transfer once the wallet signed it but couldn't send it (base64); returns its signature */
-  depositSend(tx: string): Promise<{ signature: string }>;
+  /**
+   * Self-custody: the transactions for an action, built for the owner's own wallet to sign (it pays and owns
+   * everything). legacyOnly: for a wallet that can't sign versioned transactions.
+   */
+  walletPrepare(action: WalletAction, legacyOnly: boolean): Promise<WalletPlan>;
+  /** Self-custody: sends one transaction the owner's wallet signed (base64) and waits a little for Solana */
+  walletSend(tx: string): Promise<WalletTxStatus & { signature: string }>;
+  walletTx(signature: string): Promise<WalletTxStatus>;
+  /** Self-custody: plans prepared but not recorded yet (finished after a reload) */
+  walletPending(): Promise<{ planId: string; action: string; pair: string; createdAt: number }[]>;
+  /** Self-custody: records what a plan did once Solana shows it; `not_yet` (409) until then */
+  walletDone(planId: string, signatures: string[]): Promise<{ ok: boolean; title?: string; already?: boolean; dropped?: boolean; message?: string }>;
   /** Live: record a transfer the owner's wallet sent to the vault (checked on-chain) */
   depositLive(signature: string): Promise<VaultOverview>;
   /** Live: record transfers the owner sent to the vault address by hand (found on-chain); what it recorded now, by mint */
   depositScan(): Promise<{ recorded: Record<string, number> }>;
+  /** A vault wallet from before self-custody, once empty: Binwise deletes its key and the vault works from the owner's wallet */
+  releaseCustody(): Promise<VaultOverview>;
   /** Live: what can be withdrawn to the owner's own wallet now, by token */
   withdrawable(): Promise<Withdrawable>;
   /** Live: sends `amount` of a token from the vault to the owner's registered wallet; returns the transfer's signature */

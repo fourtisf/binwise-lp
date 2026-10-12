@@ -38,8 +38,8 @@ export default function Landing() {
           </div>
           <p className="hero-note">
             {LIVE_DEFAULT
-              ? 'Real funds on mainnet. Start small: withdrawals only ever go back to your own wallet.'
-              : 'No deposit needed to try. Withdrawals only ever go back to your own wallet.'}
+              ? 'Real funds on mainnet. Start small: your funds stay in your own wallet, and you approve every move.'
+              : 'No deposit needed to try. With real funds, everything stays in your own wallet.'}
           </p>
           {/* The Binwise token's contract address, once it launches. */}
           <div className="ca-pill" id="ca">
@@ -111,7 +111,7 @@ export default function Landing() {
               <h3>{WALLET_LOGIN ? 'Connect a wallet' : 'Open the Telegram bot'}</h3>
               <p>
                 {WALLET_LOGIN
-                  ? `Phantom, Backpack or Solflare. ${LIVE_DEFAULT ? 'You sign one message: no transaction, no cost.' : 'Paper mode needs no deposit at all.'}`
+                  ? `Phantom, Backpack, Solflare or any Solana wallet. ${LIVE_DEFAULT ? 'You sign one message: no transaction, no cost.' : 'Paper mode needs no deposit at all.'}`
                   : 'Create or import a Solana wallet in the chat and deposit SOL. No app to install.'}
               </p>
             </div>
@@ -123,7 +123,11 @@ export default function Landing() {
             <div className="st card spot">
               <span className="n">3</span>
               <h3>Let it work</h3>
-              <p>Watch every decision live. Go live with real funds only when the numbers convince you.</p>
+              <p>
+                {LIVE_DEFAULT
+                  ? 'Watch every decision live. The agent finds the moves; you approve each one in your wallet, so nothing moves without you.'
+                  : 'Watch every decision live. Go live with real funds only when the numbers convince you.'}
+              </p>
             </div>
           </div>
           <div className="metrics">
@@ -260,7 +264,7 @@ export default function Landing() {
             {!WALLET_LOGIN
               ? 'Open the Telegram bot, deposit a small amount, and watch every decision here.'
               : LIVE_DEFAULT
-                ? 'Connect a wallet, deposit a small amount, and watch every decision.'
+                ? 'Connect your wallet, add a small LP from it, and watch every decision.'
                 : 'Start in paper mode today. Go live when the numbers convince you.'}
           </p>
           <div className="ctas">
