@@ -68,6 +68,9 @@ button{cursor:pointer;border:0;background:none}
 .nav-links a{padding:7px 12px;border-radius:8px;transition:color .2s,background .2s}
 .nav-links a:hover{color:var(--text);background:rgba(255,255,255,.04)}
 .nav-r{display:flex;gap:8px;align-items:center}
+.nav-x{display:inline-grid;place-items:center;width:34px;height:34px;border-radius:9px;background:rgba(255,255,255,.04);border:1px solid var(--line2);color:var(--soft);transition:background .2s,border-color .2s,color .2s}
+.nav-x:hover{background:rgba(255,255,255,.08);border-color:var(--line3);color:var(--text)}
+.nav-x svg{width:14px;height:14px}
 
 .hero{position:relative;padding:168px 0 0;text-align:center}
 .announce{display:inline-flex;align-items:center;gap:10px;height:32px;padding:0 12px 0 4px;border-radius:999px;border:1px solid var(--line2);background:rgba(255,255,255,.03);font-size:13px;color:var(--soft);transition:border-color .2s,background .2s}
