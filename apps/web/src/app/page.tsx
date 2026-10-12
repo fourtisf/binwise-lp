@@ -104,7 +104,11 @@ export default function Landing() {
             <div className="st card spot">
               <span className="n">1</span>
               <h3>{WALLET_LOGIN ? 'Connect a wallet' : 'Open the Telegram bot'}</h3>
-              <p>{WALLET_LOGIN ? 'Phantom, Backpack or Solflare. Paper mode needs no deposit at all.' : 'Create or import a Solana wallet in the chat and deposit SOL. No app to install.'}</p>
+              <p>
+                {WALLET_LOGIN
+                  ? `Phantom, Backpack or Solflare. ${LIVE_DEFAULT ? 'You sign one message: no transaction, no cost.' : 'Paper mode needs no deposit at all.'}`
+                  : 'Create or import a Solana wallet in the chat and deposit SOL. No app to install.'}
+              </p>
             </div>
             <div className="st card spot">
               <span className="n">2</span>
@@ -135,7 +139,7 @@ export default function Landing() {
               <span>Downtrend tokens held</span>
             </div>
           </div>
-          <p className="mnote">Example figures from a simulated 30-day paper run. Past results don&apos;t guarantee future returns.</p>
+          <p className="mnote">Example figures from a simulated 30-day {LIVE_DEFAULT ? '' : 'paper '}run. Past results don&apos;t guarantee future returns.</p>
         </div>
       </section>
 
@@ -149,32 +153,35 @@ export default function Landing() {
             No subscription for the agent. A share of the profit above what holding would have made, and nothing in a losing
             month.
           </p>
-          <div className="plans" style={{ textAlign: 'left' }}>
-            <div className="plan card spot">
-              <h3>Paper</h3>
-              <div className="price">
-                <b>$0</b>
-                <span>forever</span>
+          <div className={`plans${LIVE_DEFAULT ? ' two' : ''}`} style={{ textAlign: 'left' }}>
+            {/* Mainnet site: no paper vaults, so no Paper plan. */}
+            {!LIVE_DEFAULT && (
+              <div className="plan card spot">
+                <h3>Paper</h3>
+                <div className="price">
+                  <b>$0</b>
+                  <span>forever</span>
+                </div>
+                <p>Try the full agent on live prices with simulated funds.</p>
+                <ul>
+                  <li>
+                    <Check />
+                    Full agent and reasoning log
+                  </li>
+                  <li>
+                    <Check />
+                    All risk profiles
+                  </li>
+                  <li>
+                    <Check />
+                    Unlimited simulated vaults
+                  </li>
+                </ul>
+                <Link className="btn btn-dark" href="/app">
+                  Start free
+                </Link>
               </div>
-              <p>Try the full agent on live prices with simulated funds.</p>
-              <ul>
-                <li>
-                  <Check />
-                  Full agent and reasoning log
-                </li>
-                <li>
-                  <Check />
-                  All risk profiles
-                </li>
-                <li>
-                  <Check />
-                  Unlimited simulated vaults
-                </li>
-              </ul>
-              <Link className="btn btn-dark" href="/app">
-                Start free
-              </Link>
-            </div>
+            )}
             <div className="plan card spot hl">
               <span className="pill watch tag">Most popular</span>
               <h3>Pro</h3>
@@ -186,7 +193,7 @@ export default function Landing() {
               <ul>
                 <li>
                   <Check />
-                  Everything in Paper
+                  {LIVE_DEFAULT ? 'Full agent and reasoning log, all risk profiles' : 'Everything in Paper'}
                 </li>
                 <li>
                   <Check />

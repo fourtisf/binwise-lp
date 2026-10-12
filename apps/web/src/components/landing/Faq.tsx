@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { LIVE_DEFAULT } from '@/lib/site';
 
 const FAQ: [string, string][] = [
   [
@@ -9,7 +10,11 @@ const FAQ: [string, string][] = [
   ],
   [
     'Is profit guaranteed?',
-    'No. No strategy is. Binwise is built to beat holding the same tokens by picking high-fee pools, avoiding downtrends and not over-trading. That is why paper mode exists: you see the real numbers before risking anything.',
+    `No. No strategy is. Binwise is built to beat holding the same tokens by picking high-fee pools, avoiding downtrends and not over-trading. ${
+      LIVE_DEFAULT
+        ? 'Every number is shown against holding, so you can start small and judge it on real results.'
+        : 'That is why paper mode exists: you see the real numbers before risking anything.'
+    }`,
   ],
   [
     'What happens in a crash?',

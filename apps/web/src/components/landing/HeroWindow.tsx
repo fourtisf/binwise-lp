@@ -133,9 +133,13 @@ export function HeroWindow() {
                 </button>
               ))}
             </div>
-            <span className={`pill live ${stats.inRange ? 'in' : 'out'}`} id="hStatus">
-              <span className="d"></span>
-              {stats.inRange ? 'In range' : 'Out of range'}
+            <span className="wstate">
+              {/* The public demo vault runs on live prices with simulated funds: say so, it isn't anyone's money. */}
+              <span className="demo-tag">Demo vault · simulated funds</span>
+              <span className={`pill live ${stats.inRange ? 'in' : 'out'}`} id="hStatus">
+                <span className="d"></span>
+                {stats.inRange ? 'In range' : 'Out of range'}
+              </span>
             </span>
           </div>
           <div className="wstats">
