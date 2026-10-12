@@ -5,7 +5,7 @@ import websocket from '@fastify/websocket';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import type { Redis } from 'ioredis';
 import { randomUUID } from 'node:crypto';
-import { Connection, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
+import { Connection, PublicKey, SystemProgram, Transaction, VersionedTransaction } from '@solana/web3.js';
 import {
   DEFAULT_STRATEGY,
   MAX_BINS_EACH_SIDE,
@@ -44,6 +44,8 @@ import {
   walletBalances,
   walletTokens,
   parseDeposit,
+  depositTransferLamports,
+  NotADeposit,
   createAgentKey,
   loadAgentKey,
   makeConnection,
@@ -800,8 +802,75 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     // The wallet pays the network fee on top (a few thousand lamports).
     if (lamports + 10_000 > balance) throw new ApiError(400, 'insufficient_balance', `Your wallet has ${fmt(balance / 1e9, 4)} SOL; keep a little for the network fee.`);
     const tx = new Transaction({ feePayer: owner, blockhash, lastValidBlockHeight }).add(SystemProgram.transfer({ fromPubkey: owner, toPubkey: new PublicKey(v.agentPubkey), lamports }));
+    // Solana's own verdict before the wallet asks: a plain reason here beats a wallet's "Unexpected error".
+    const sim = await conn.simulateTransaction(new VersionedTransaction(tx.compileMessage()), { sigVerify: false, commitment: 'confirmed' }).catch(() => {
+      throw new ApiError(502, 'rpc_unavailable', 'Could not reach Solana right now. Nothing was sent; try again in a moment.');
+    });
+    if (sim.value.err) throw transferRefusal(sim.value.err, sim.value.logs);
     return { tx: tx.serialize({ requireAllSignatures: false, verifySignatures: false }).toString('base64'), lamports, to: v.agentPubkey };
   });
+
+  /**
+   * Live: broadcasts a deposit the owner's wallet signed but could not send itself (Phantom's "Unexpected
+   * error" on sign-and-send). Only what /deposit/tx builds goes through: one SOL transfer from the owner's
+   * wallet to this vault's wallet, signed by the owner, accepted by a simulation. If that same transfer
+   * already landed (the wallet's own send got through after all), returns its signature instead of sending
+   * it twice. Then POST /vaults/:id/deposit with the signature records it, as after any deposit.
+   */
+  app.post<VP & { Body: { tx?: string } }>('/vaults/:id/deposit/send', moneyLimit, async (req) => {
+    const v = await writable(req, req.params.id);
+    if (v.mode !== 'live' || !v.agentPubkey) throw new ApiError(400, 'not_live', 'Only a live vault has a vault wallet to send to.');
+    const raw = Buffer.from(String(req.body?.tx ?? ''), 'base64');
+    let tx: Transaction;
+    let lamports: number;
+    try {
+      tx = Transaction.from(raw);
+      lamports = depositTransferLamports(tx, v.user.wallet, v.agentPubkey);
+    } catch (e) {
+      throw new ApiError(400, 'bad_tx', e instanceof NotADeposit ? e.message : 'That is not a transfer Binwise can send.');
+    }
+    if (!tx.verifySignatures()) throw new ApiError(400, 'unsigned', 'Your wallet did not sign this transfer. Nothing was sent.');
+    const conn = chain();
+    const unreachable = () => {
+      throw new ApiError(502, 'rpc_unavailable', 'Could not reach Solana right now. Nothing was sent; try again in a moment.');
+    };
+    const landed = await sameTransferLanded(conn, tx, v.user.wallet, v.agentPubkey, lamports).catch(unreachable);
+    if (landed) return { signature: landed };
+    const sim = await conn.simulateTransaction(VersionedTransaction.deserialize(raw), { sigVerify: true, commitment: 'confirmed' }).catch(unreachable);
+    if (sim.value.err) throw transferRefusal(sim.value.err, sim.value.logs);
+    // The exact bytes the wallet signed; already simulated, so no second preflight.
+    const signature = await conn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 5 }).catch(() => {
+      throw new ApiError(502, 'send_failed', 'Solana did not take the transfer. Nothing was sent; try again in a moment.');
+    });
+    return { signature };
+  });
+
+  /** Why Solana would refuse a SOL transfer from the owner's wallet, in plain words. */
+  function transferRefusal(err: unknown, logs: string[] | null | undefined): ApiError {
+    const text = `${JSON.stringify(err)} ${(logs ?? []).join(' ')}`;
+    if (/BlockhashNotFound/.test(text)) return new ApiError(400, 'expired', 'The approval took too long, so Solana no longer accepts it. Nothing was sent; try again.');
+    // Account 0 is the owner's wallet (fee payer); otherwise it's a new vault wallet getting too little to exist.
+    const rent = (err as { InsufficientFundsForRent?: { account_index?: number } } | null)?.InsufficientFundsForRent;
+    if (rent?.account_index === 0) return new ApiError(400, 'insufficient_balance', 'Solana needs about 0.001 SOL to stay in your wallet. Move a little less.');
+    if (rent) return new ApiError(400, 'too_small', 'The first transfer to a new vault wallet must be at least 0.001 SOL.');
+    if (/insufficient lamports|InsufficientFunds/i.test(text)) return new ApiError(400, 'insufficient_balance', 'Your wallet doesn’t have enough SOL for this and the network fee. Move a little less.');
+    return new ApiError(400, 'sim_failed', `Solana would reject this transfer (${JSON.stringify(err)}). Nothing was sent.`);
+  }
+
+  /**
+   * The signature of `tx`'s transfer if it already landed: a transfer of the same amount from `owner` to
+   * the vault wallet in the last few minutes, made with the same blockhash (so the same approval, not an
+   * earlier deposit of the same size).
+   */
+  async function sameTransferLanded(conn: Connection, tx: Transaction, owner: string, agent: string, lamports: number) {
+    const since = Date.now() / 1000 - 180;
+    const recent = (await conn.getSignaturesForAddress(new PublicKey(agent), { limit: 25 }, 'confirmed')).filter((s) => !s.err && (s.blockTime == null || s.blockTime >= since));
+    const txs = await Promise.all(recent.map((s) => conn.getParsedTransaction(s.signature, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' })));
+    const i = txs.findIndex(
+      (p) => !!p && p.transaction.message.recentBlockhash === tx.recentBlockhash && Math.round((parseDeposit(p, owner, agent)[SOL_MINT] ?? 0) * 1e9) === lamports,
+    );
+    return i < 0 ? null : recent[i].signature;
+  }
 
   async function symbolMint(symbol: string, wallet: Record<string, number>) {
     const tokens = await db.token.findMany({ where: { mint: { in: Object.keys(wallet) } } });

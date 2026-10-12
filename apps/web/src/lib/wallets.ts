@@ -2,9 +2,11 @@ import {
   SolanaSignAndSendTransaction,
   SolanaSignIn,
   SolanaSignMessage,
+  SolanaSignTransaction,
   type SolanaSignAndSendTransactionFeature,
   type SolanaSignInFeature,
   type SolanaSignMessageFeature,
+  type SolanaSignTransactionFeature,
 } from '@solana/wallet-standard-features';
 import { getWallets } from '@wallet-standard/app';
 import type { Wallet, WalletAccount } from '@wallet-standard/base';
@@ -205,44 +207,84 @@ const remembered = () => {
 export const walletFor = (wallets: Wallet[], owner: string) =>
   wallets.find((w) => w.name === remembered()) ?? wallets.find((w) => w.accounts.some((a) => a.address === owner)) ?? wallets[0] ?? null;
 
+/** Broadcasts a transaction the wallet signed but didn't send (base64 → Binwise → Solana); returns its signature. */
+export type Relay = (signed: Uint8Array) => Promise<string>;
+
 /**
- * Asks the wallet to sign and send `tx` (a serialized transaction) from `owner`, the signed-in address:
- * Wallet Standard first, then the wallet's classic API. Returns the signature (base58). A "no", an open
- * request or the wallet being on another account stops right there.
+ * Asks the wallet to sign and send `tx` (a serialized transaction) from `owner`, the signed-in address,
+ * one way at a time, each only when the one before failed by itself:
+ *
+ * 1. Sign and send through Wallet Standard.
+ * 2. Sign only, and `relay` sends it: Phantom's own sending can fail with "Unexpected error" (-32603).
+ * 3. and 4. The same two through the wallet's classic API.
+ *
+ * Returns the signature (base58). A "no", an open request, the wallet being on another account or a
+ * Binwise error (the relay refusing) stops right there.
  */
-export async function sendWithWallet(w: Wallet, owner: string, tx: Uint8Array): Promise<string> {
+export async function sendWithWallet(w: Wallet, owner: string, tx: Uint8Array, relay?: Relay): Promise<string> {
   const tried: string[] = [];
   const wrongAccount = () => new SignInError('account', `Switch ${w.name} to the account you signed in with (${owner.slice(0, 4)}…${owner.slice(-4)}), then try again.`);
-  if (SolanaSignAndSendTransaction in w.features) {
+  const attempt = async (label: string, run: () => Promise<string>): Promise<string | null> => {
     try {
-      const accounts = w.accounts.some((a) => a.address === owner) ? w.accounts : (await (w.features as StandardConnectFeature)[StandardConnect].connect()).accounts;
-      const account = accounts.find((a) => a.address === owner);
-      if (!account) throw wrongAccount();
+      return await run();
+    } catch (e) {
+      if (e instanceof SignInError) throw e;
+      console.error(`[binwise] ${w.name}: ${label} failed`, e);
+      const stop = walletFailure(e);
+      if (stop) throw stop;
+      tried.push(`${label}: ${describe(e)}`);
+      return null;
+    }
+  };
+  const standardAccount = async () => {
+    const accounts = w.accounts.some((a) => a.address === owner) ? w.accounts : (await (w.features as StandardConnectFeature)[StandardConnect].connect()).accounts;
+    const account = accounts.find((a) => a.address === owner);
+    if (!account) throw wrongAccount();
+    return account;
+  };
+  const relayed = (signed: Uint8Array) => binwise(relay!(signed));
+
+  if (SolanaSignAndSendTransaction in w.features) {
+    const sig = await attempt('Send', async () => {
+      const account = await standardAccount();
       const [out] = await (w.features as SolanaSignAndSendTransactionFeature)[SolanaSignAndSendTransaction].signAndSendTransaction({ account, chain: 'solana:mainnet', transaction: tx });
       if (!out) throw new Error('The wallet returned no signature.');
       return bs58.encode(out.signature);
-    } catch (e) {
-      if (e instanceof SignInError) throw e;
-      console.error(`[binwise] ${w.name}: send failed`, e);
-      const stop = walletFailure(e);
-      if (stop) throw stop;
-      tried.push(`Send: ${describe(e)}`);
-    }
+    });
+    if (sig) return sig;
   }
-  const p = injectedFor(w.name);
-  if (p?.signAndSendTransaction && !(/phantom/i.test(w.name) && impostorOf(p))) {
-    try {
-      if ((await connectInjected(p)) !== owner) throw wrongAccount();
-      const { Transaction } = await import('@solana/web3.js');
-      const r = await p.signAndSendTransaction(Transaction.from(tx));
+  if (relay && SolanaSignTransaction in w.features) {
+    const sig = await attempt('Sign', async () => {
+      const account = await standardAccount();
+      const [out] = await (w.features as SolanaSignTransactionFeature)[SolanaSignTransaction].signTransaction({ account, chain: 'solana:mainnet', transaction: tx });
+      if (!out) throw new Error('The wallet returned no signed transaction.');
+      return relayed(out.signedTransaction);
+    });
+    if (sig) return sig;
+  }
+  const injected = injectedFor(w.name);
+  const p = injected && !(/phantom/i.test(w.name) && impostorOf(injected)) ? injected : null;
+  const classic = async () => {
+    if ((await connectInjected(p!)) !== owner) throw wrongAccount();
+    const { Transaction } = await import('@solana/web3.js');
+    return Transaction.from(tx);
+  };
+  if (p?.signAndSendTransaction) {
+    const sig = await attempt('Classic send', async () => {
+      const r = await p.signAndSendTransaction!(await classic());
       return typeof r === 'string' ? r : r.signature;
-    } catch (e) {
-      if (e instanceof SignInError) throw e;
-      console.error(`[binwise] ${w.name}: classic send failed`, e);
-      const stop = walletFailure(e);
-      if (stop) throw stop;
-      tried.push(`Classic send: ${describe(e)}`);
-    }
+    });
+    if (sig) return sig;
   }
-  throw new SignInError('wallet', tried.length ? tried.join('\n') : `${w.name} can't send transactions from this page.`, tried);
+  if (relay && p?.signTransaction) {
+    const sig = await attempt('Classic sign', async () => relayed((await p.signTransaction!(await classic())).serialize()));
+    if (sig) return sig;
+  }
+  console.error(`[binwise] ${w.name} could not send:`, tried, '|', phantomDiagnostics());
+  // Phantom's catch-all: an outdated app, Testnet mode, or another wallet extension in the way.
+  const internal = tried.some((t) => /-32603|unexpected error/i.test(t));
+  const help = internal
+    ? `${w.name} hit an internal error. Update ${w.name}, check Testnet mode is off (Settings → Developer Settings) and turn off other wallet extensions, then try again.\n`
+    : '';
+  throw new SignInError('wallet', tried.length ? help + tried.join('\n') : `${w.name} can't send transactions from this page.`, tried);
 }

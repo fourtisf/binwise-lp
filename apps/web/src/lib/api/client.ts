@@ -78,6 +78,8 @@ export interface BinwiseClient {
   deploy(poolId: string, usd: number, override: boolean, opts?: { shape?: LiquidityShape; range?: CustomRange }): Promise<{ queued: boolean; pair: string }>;
   /** Live: an unsigned SOL transfer from the owner's wallet to the vault wallet (base64), for the wallet to approve */
   depositTx(sol: number): Promise<{ tx: string; lamports: number; to: string }>;
+  /** Live: broadcast that transfer once the wallet signed it but couldn't send it (base64); returns its signature */
+  depositSend(tx: string): Promise<{ signature: string }>;
   /** Live: record a transfer the owner's wallet sent to the vault (checked on-chain) */
   depositLive(signature: string): Promise<VaultOverview>;
   telegramLink(): Promise<{ url: string | null; code: string }>;

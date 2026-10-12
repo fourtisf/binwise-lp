@@ -58,6 +58,7 @@ const amount = (n: number) =>
 const price = (n: number) => (n >= 1000 ? n.toLocaleString('en-US', { maximumFractionDigits: 2 }) : String(Number(n.toPrecision(6))));
 const pctFrom = (p: number, ref: number) => `${p >= ref ? '+' : '−'}${Math.abs((p / ref - 1) * 100).toFixed(1)}%`;
 const fromBase64 = (b64: string) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+const toBase64 = (bytes: Uint8Array) => btoa(Array.from(bytes, (b) => String.fromCharCode(b)).join(''));
 
 const label = { display: 'block', fontSize: 12.5, color: 'var(--muted)', margin: '16px 0 7px' } as const;
 const segFull = { display: 'flex', width: '100%' } as const;
@@ -313,7 +314,8 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
   /** Sends `sol` from the owner's wallet to the vault and waits until the API has checked it on-chain. */
   const sendSol = async (sol: number, w: NonNullable<ReturnType<typeof walletFor>>): Promise<boolean> => {
     const { tx } = await client!.depositTx(sol);
-    const signature = await sendWithWallet(w, me!.wallet, fromBase64(tx));
+    // If the wallet can sign but not send (Phantom's "Unexpected error"), Binwise sends it: only this transfer to the vault.
+    const signature = await sendWithWallet(w, me!.wallet, fromBase64(tx), async (signed) => (await client!.depositSend(toBase64(signed))).signature);
     // Solana confirms in a few seconds; the API checks the transfer on-chain before counting it.
     for (let i = 0; i < 15; i++) {
       try {
@@ -518,7 +520,7 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
             You approve the transfer in your wallet. The vault keeps {VAULT_RESERVE_SOL} SOL for network fees{reserveShort > 0 ? ' (not there yet)' : ''}; the rest can go into LP.
           </p>
           {moveErr && (
-            <p className="down" style={{ fontSize: 12.5, lineHeight: 1.5, marginTop: 8 }}>
+            <p className="down" style={{ fontSize: 12.5, lineHeight: 1.5, marginTop: 8, whiteSpace: 'pre-line' }}>
               {moveErr}
             </p>
           )}
@@ -677,7 +679,7 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
             </p>
           )}
           {moveErr && (
-            <p className="down" style={{ fontSize: 12.5, lineHeight: 1.5, marginTop: 8 }}>
+            <p className="down" style={{ fontSize: 12.5, lineHeight: 1.5, marginTop: 8, whiteSpace: 'pre-line' }}>
               {moveErr}
             </p>
           )}

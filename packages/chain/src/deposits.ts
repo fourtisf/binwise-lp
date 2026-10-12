@@ -1,4 +1,4 @@
-import type { ParsedTransactionWithMeta } from '@solana/web3.js';
+import { ComputeBudgetProgram, SystemInstruction, SystemProgram, type ParsedTransactionWithMeta, type Transaction } from '@solana/web3.js';
 
 export const SOL_MINT = 'So11111111111111111111111111111111111111112';
 
@@ -35,4 +35,24 @@ export function parseDeposit(tx: ParsedTransactionWithMeta, owner: string, agent
     }
   }
   return credited;
+}
+
+/** Instructions a wallet may add to a transfer it signs: priority fees and Lighthouse's balance guards. */
+const WALLET_ADDED = new Set([ComputeBudgetProgram.programId.toBase58(), 'L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95']);
+
+export class NotADeposit extends Error {}
+
+/**
+ * Lamports a transfer signed by the owner's wallet moves into the agent wallet, before Binwise broadcasts
+ * it on the wallet's behalf. Only one plain SOL transfer from the owner (also the fee payer) to the agent
+ * passes, beside what wallets add on their own; anything else throws NotADeposit.
+ */
+export function depositTransferLamports(tx: Transaction, owner: string, agent: string): number {
+  if (tx.feePayer?.toBase58() !== owner) throw new NotADeposit('The network fee is not paid by your wallet.');
+  const own = tx.instructions.filter((ix) => !WALLET_ADDED.has(ix.programId.toBase58()));
+  if (own.length !== 1 || !own[0].programId.equals(SystemProgram.programId) || SystemInstruction.decodeInstructionType(own[0]) !== 'Transfer')
+    throw new NotADeposit('Only a SOL transfer to the vault can be sent.');
+  const { fromPubkey, toPubkey, lamports } = SystemInstruction.decodeTransfer(own[0]);
+  if (fromPubkey.toBase58() !== owner || toPubkey.toBase58() !== agent) throw new NotADeposit('Only a transfer from your wallet to this vault can be sent.');
+  return Number(lamports);
 }

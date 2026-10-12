@@ -8,6 +8,8 @@ export interface InjectedSolana {
   signMessage(message: Uint8Array, display?: 'utf8' | 'hex'): Promise<{ signature: Uint8Array } | Uint8Array>;
   /** Takes a @solana/web3.js Transaction */
   signAndSendTransaction?(tx: unknown): Promise<{ signature: string } | string>;
+  /** Same, signed but not sent */
+  signTransaction?(tx: unknown): Promise<{ serialize(): Uint8Array }>;
 }
 
 type W = Record<string, unknown> & {

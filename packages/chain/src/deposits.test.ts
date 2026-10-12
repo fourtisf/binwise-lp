@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { Keypair, type ParsedTransactionWithMeta } from '@solana/web3.js';
-import { SOL_MINT, parseDeposit } from './deposits';
+import { ComputeBudgetProgram, Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction, type ParsedTransactionWithMeta } from '@solana/web3.js';
+import { NotADeposit, SOL_MINT, depositTransferLamports, parseDeposit } from './deposits';
 
 const owner = Keypair.generate().publicKey;
 const agent = Keypair.generate().publicKey;
@@ -44,5 +44,31 @@ describe('parseDeposit', () => {
     expect(parseDeposit(tx([ix], meta), a, a)).toEqual({ [USDC]: 25 });
     // A plain transfer doesn't count for website vaults (only the registered wallet, via transferChecked).
     expect(parseDeposit(tx([{ ...ix, parsed: { ...ix.parsed, info: { ...ix.parsed.info, authority: owner.toBase58() } } }], meta), owner.toBase58(), a)).toEqual({});
+  });
+});
+
+describe('depositTransferLamports', () => {
+  const [o, a] = [owner.toBase58(), agent.toBase58()];
+  const transfer = (from = owner, to = agent, lamports = 2.5e9) => SystemProgram.transfer({ fromPubkey: from, toPubkey: to, lamports });
+  const build = (...ixs: TransactionInstruction[]) => new Transaction({ feePayer: owner, blockhash: stranger.toBase58(), lastValidBlockHeight: 1 }).add(...ixs);
+  const lighthouse = new TransactionInstruction({ programId: new PublicKey('L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95'), keys: [], data: Buffer.from([1]) });
+
+  it('passes the owner-to-vault transfer, with the priority fee and guard instructions wallets add', () => {
+    expect(depositTransferLamports(build(transfer()), o, a)).toBe(2.5e9);
+    expect(depositTransferLamports(build(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }), transfer(), lighthouse), o, a)).toBe(2.5e9);
+  });
+  it('refuses a transfer anywhere else, from anyone else, or paid by another wallet', () => {
+    expect(() => depositTransferLamports(build(transfer(owner, stranger)), o, a)).toThrow(NotADeposit);
+    expect(() => depositTransferLamports(build(transfer(stranger)), o, a)).toThrow(NotADeposit);
+    const tx = build(transfer());
+    tx.feePayer = stranger;
+    expect(() => depositTransferLamports(tx, o, a)).toThrow(NotADeposit);
+  });
+  it('refuses anything beside the one transfer', () => {
+    expect(() => depositTransferLamports(build(transfer(), transfer()), o, a)).toThrow(NotADeposit);
+    expect(() => depositTransferLamports(build(transfer(), transfer(owner, stranger, 1)), o, a)).toThrow(NotADeposit);
+    expect(() => depositTransferLamports(build(SystemProgram.assign({ accountPubkey: owner, programId: stranger })), o, a)).toThrow(NotADeposit);
+    const other = new TransactionInstruction({ programId: stranger, keys: [], data: Buffer.alloc(0) });
+    expect(() => depositTransferLamports(build(transfer(), other), o, a)).toThrow(NotADeposit);
   });
 });

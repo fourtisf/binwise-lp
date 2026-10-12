@@ -6,7 +6,7 @@ import WebSocket from 'ws';
 import { Redis } from 'ioredis';
 import type { FastifyInstance } from 'fastify';
 import { REDIS_KEYS, DEFAULT_STRATEGY } from '@binwise/core';
-import { SystemInstruction, Transaction } from '@solana/web3.js';
+import { Keypair, PublicKey, SystemInstruction, SystemProgram, Transaction } from '@solana/web3.js';
 import { createVault, ensureUser, getDb } from '@binwise/db';
 import { buildDbApp } from './db-app';
 
@@ -21,7 +21,12 @@ const USDC = 'USDCmint111111111111111111111111111111111111';
 function wallet() {
   const { publicKey, privateKey } = generateKeyPairSync('ed25519');
   const raw = publicKey.export({ format: 'jwk' }).x!;
-  return { address: bs58.encode(Buffer.from(raw, 'base64url')), signMsg: (m: string) => bs58.encode(sign(null, Buffer.from(m), privateKey)) };
+  return {
+    address: bs58.encode(Buffer.from(raw, 'base64url')),
+    signMsg: (m: string) => bs58.encode(sign(null, Buffer.from(m), privateKey)),
+    /** The same key as a Solana keypair, to sign transactions. */
+    keypair: () => Keypair.fromSeed(Buffer.from(privateKey.export({ format: 'jwk' }).d!, 'base64url')),
+  };
 }
 
 /** `remoteAddress`: sign in from another address, so a test doesn't spend the others' sign-in rate limit. */
@@ -575,6 +580,7 @@ describe('add LP by hand: options and funding from the wallet', () => {
       getBalance: async (pk: { toBase58(): string }) => (pk.toBase58() === owner.address ? 3 : 0.4) * 1e9,
       getLatestBlockhash: async () => ({ blockhash, lastValidBlockHeight: 1000 }),
       getParsedTokenAccountsByOwner: async () => ({ value: [] }),
+      simulateTransaction: async () => ({ value: { err: null, logs: [] } }),
     };
     const sub2 = new Redis(process.env.REDIS_URL!);
     const liveApp = await buildDbApp({ db, redis, sub: sub2, domain: 'test.binwise', rpc: () => conn as never });
@@ -603,6 +609,90 @@ describe('add LP by hand: options and funding from the wallet', () => {
       expect((await liveApp.inject({ method: 'POST', url: `/vaults/${v.id}/deposit/tx`, headers, payload: { sol: 3 } })).json().error).toBe('insufficient_balance');
       expect((await liveApp.inject({ method: 'POST', url: `/vaults/${v.id}/deposit/tx`, headers, payload: { sol: 0 } })).statusCode).toBe(400);
       expect((await liveApp.inject({ method: 'POST', url: `/vaults/${v.id}/deposit/tx`, payload: { sol: 1 } })).statusCode).toBe(401);
+    } finally {
+      await liveApp.close(); // also closes sub2
+    }
+  });
+
+  it('sends a deposit the wallet only signed: just the owner-to-vault transfer, simulated, and only once', async () => {
+    const owner = wallet();
+    const kp = owner.keypair();
+    expect(kp.publicKey.toBase58()).toBe(owner.address);
+    const agent = wallet().address;
+    const blockhash = wallet().address;
+    const sent: Buffer[] = [];
+    let simErr: unknown = null;
+    let landed: { signature: string; parsed: object } | null = null;
+    const conn = {
+      getBalance: async () => 3e9,
+      getLatestBlockhash: async () => ({ blockhash, lastValidBlockHeight: 1000 }),
+      simulateTransaction: async () => ({ value: { err: simErr, logs: [] } }),
+      getSignaturesForAddress: async () => (landed ? [{ signature: landed.signature, err: null, blockTime: Math.floor(Date.now() / 1000) }] : []),
+      getParsedTransaction: async () => landed?.parsed ?? null,
+      sendRawTransaction: async (raw: Buffer) => {
+        sent.push(Buffer.from(raw));
+        return 'RELAYED';
+      },
+    };
+    const sub2 = new Redis(process.env.REDIS_URL!);
+    const liveApp = await buildDbApp({ db, redis, sub: sub2, domain: 'test.binwise', rpc: () => conn as never });
+    try {
+      const user = await ensureUser(db, owner.address);
+      const v = await createVault(db, user.id, { live: { agentPubkey: agent, encSecret: new Uint8Array(8) } });
+      const ip = { remoteAddress: '10.9.9.4' };
+      const nonce = (await liveApp.inject({ url: `/auth/nonce?wallet=${owner.address}`, ...ip })).json();
+      const login = await liveApp.inject({ method: 'POST', url: '/auth/verify', ...ip, payload: { wallet: owner.address, message: nonce.message, signature: owner.signMsg(nonce.message) } });
+      const headers = { cookie: `bw_session=${login.cookies.find((c) => c.name === 'bw_session')!.value}` };
+      const unsigned = async () => (await liveApp.inject({ method: 'POST', url: `/vaults/${v.id}/deposit/tx`, headers, payload: { sol: 1.5 } })).json().tx as string;
+      const signed = async () => {
+        const tx = Transaction.from(Buffer.from(await unsigned(), 'base64'));
+        tx.sign(kp);
+        return tx.serialize();
+      };
+      const relay = (tx: string | Buffer) => liveApp.inject({ method: 'POST', url: `/vaults/${v.id}/deposit/send`, headers, payload: { tx: typeof tx === 'string' ? tx : tx.toString('base64') } });
+
+      // Signed by the owner: sent exactly as signed.
+      const raw = await signed();
+      const ok = await relay(raw);
+      expect(ok.statusCode).toBe(200);
+      expect(ok.json()).toEqual({ signature: 'RELAYED' });
+      expect(sent).toEqual([raw]);
+
+      // Unsigned, or a transfer anywhere else (even signed by the owner): nothing goes out.
+      expect((await relay(await unsigned())).json().error).toBe('unsigned');
+      const elsewhere = new Transaction({ feePayer: kp.publicKey, blockhash, lastValidBlockHeight: 1000 }).add(
+        SystemProgram.transfer({ fromPubkey: kp.publicKey, toPubkey: new PublicKey(wallet().address), lamports: 1e9 }),
+      );
+      elsewhere.sign(kp);
+      expect((await relay(elsewhere.serialize())).json().error).toBe('bad_tx');
+      expect((await relay('bm90IGEgdHJhbnNhY3Rpb24=')).json().error).toBe('bad_tx');
+      expect((await liveApp.inject({ method: 'POST', url: `/vaults/${v.id}/deposit/send`, payload: { tx: raw.toString('base64') } })).statusCode).toBe(401);
+      expect(sent).toHaveLength(1);
+
+      // The wallet's own send landed after all (same blockhash, same amount): its signature, no second transfer.
+      const again = await signed();
+      const transfer = { program: 'system', parsed: { type: 'transfer', info: { source: owner.address, destination: agent, lamports: 1_500_000_000 } } };
+      landed = { signature: 'EARLIER', parsed: { meta: { err: null }, transaction: { message: { recentBlockhash: blockhash, instructions: [transfer], accountKeys: [] } } } };
+      expect((await relay(again)).json()).toEqual({ signature: 'EARLIER' });
+      expect(sent).toHaveLength(1);
+      // An earlier deposit of the same size (another blockhash) is not this one.
+      landed = { signature: 'OLDER', parsed: { meta: { err: null }, transaction: { message: { recentBlockhash: wallet().address, instructions: [transfer], accountKeys: [] } } } };
+      expect((await relay(again)).json()).toEqual({ signature: 'RELAYED' });
+      expect(sent).toHaveLength(2);
+      landed = null;
+
+      // Solana refuses it: a plain reason, nothing sent.
+      const late = await signed();
+      simErr = 'BlockhashNotFound';
+      expect((await relay(late)).json().error).toBe('expired');
+      expect(sent).toHaveLength(2);
+      // Before the wallet even asks, a transfer Solana would refuse says why.
+      simErr = { InsufficientFundsForRent: { account_index: 0 } };
+      const rent = (await liveApp.inject({ method: 'POST', url: `/vaults/${v.id}/deposit/tx`, headers, payload: { sol: 1.5 } })).json();
+      expect(rent.error).toBe('insufficient_balance');
+      expect(rent.message).toMatch(/0\.001 SOL/);
+      simErr = { InsufficientFundsForRent: { account_index: 1 } };
+      expect((await liveApp.inject({ method: 'POST', url: `/vaults/${v.id}/deposit/tx`, headers, payload: { sol: 0.0005 } })).json().error).toBe('too_small');
     } finally {
       await liveApp.close(); // also closes sub2
     }
