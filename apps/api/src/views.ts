@@ -43,12 +43,14 @@ const BUNDLED: Record<string, string> = {
   '2zMMhcVQEXDtdE6vsFS7S7D5oUodfJHE8vd1gnBouauv': '/tokens/PENGU.png',
   '4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R': '/tokens/RAY.png',
   '7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr': '/tokens/POPCAT.png',
+  pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn: '/tokens/PUMP.png',
 };
 
 export function tokenRef(symbol: string, token?: Pick<Token, 'mint' | 'logoUrl'> | null): TokenRef {
   let h = 0;
   for (const c of symbol) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-  const logo = token?.logoUrl ?? (token ? BUNDLED[token.mint] : undefined);
+  // Our own copies first: some remote logos (IPFS gateways, hotlink-protected hosts) don't load in the browser.
+  const logo = (token ? BUNDLED[token.mint] : undefined) ?? token?.logoUrl;
   return {
     symbol,
     letter: (symbol[0] ?? '?').toUpperCase(),

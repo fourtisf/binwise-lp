@@ -31,7 +31,7 @@ class FundingProbe extends LiveExecutor {
   }
 }
 
-const prices = { JUP: 0.5, SOL: 150, USDC: 1 };
+const prices = { JUP: 0.5, SOL: 150, USDC: 1, MET: 1.2 };
 
 describe('LiveExecutor funding', () => {
   it('swaps idle USDC into both pool tokens for a JUP/SOL position', async () => {
@@ -41,6 +41,16 @@ describe('LiveExecutor funding', () => {
     expect(ex.bal.JUP * 0.5).toBeGreaterThanOrEqual(399);
     expect(ex.bal.SOL * 150).toBeGreaterThanOrEqual(399);
     expect(ex.swaps.every((s) => s.from === 'USDC')).toBe(true);
+  });
+
+  it('swaps SOL into both tokens of a pool without SOL (MET/JUP) when the vault holds only SOL', async () => {
+    const ex = new FundingProbe({ SOL: 2 }); // $300
+    await ex.fund('MET', 100, prices, ['JUP']);
+    await ex.fund('JUP', 100, prices, ['MET']);
+    expect(ex.bal.MET * 1.2).toBeGreaterThanOrEqual(99);
+    expect(ex.bal.JUP * 0.5).toBeGreaterThanOrEqual(99);
+    expect(ex.swaps.map((s) => `${s.from}->${s.to}`)).toEqual(['SOL->MET', 'SOL->JUP']);
+    expect(ex.bal.SOL * 150).toBeGreaterThan(95); // the rest stays in SOL
   });
 
   it('does nothing when the vault already holds enough', async () => {

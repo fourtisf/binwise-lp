@@ -20,6 +20,7 @@ import { useAppData } from '@/lib/store';
 import { useUi } from '@/lib/ui';
 import { SignInError, sendWithWallet, walletFor } from '@/lib/wallets';
 import { Icon } from '../Sprite';
+import { Tok } from '../Tokens';
 import { LpRecommend, RecDot } from './LpRecommend';
 import { LpShape } from './LpShape';
 import { useSolanaWallets } from './Wallet';
@@ -42,6 +43,8 @@ const VAULT_RESERVE_SOL = 0.25;
 const WALLET_FEE_SOL = 0.005;
 
 type Side = 'both' | 'x' | 'y';
+/** One Jupiter swap the vault makes before adding liquidity */
+type Swap = { from: string; fromMint: string; to: string; toMint: string; usd: number };
 /** 'agent': the agent's own width; a number: ±% around the price; 'max': the widest one position holds. */
 type RangeMode = 'agent' | number | 'max' | 'custom';
 /** Bins each side the widest position holds (69 bins in all). */
@@ -205,44 +208,72 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
 
   // ---- swaps the vault makes first: what the range needs of each token, from what sits idle (largest first)
   const plannedUsd = want > 0 ? Math.min(want, lim?.maxUsd ?? want) : (lim?.maxUsd ?? 0);
+  /** Share of the position's value in token A at today's price, for this shape and range. */
+  const shareA = useMemo(() => {
+    if (!lp || !range || rangeErr) return null;
+    const c = composition(openPosition(1000, lp.price, lp.binStep, 0, shape === 'agent' ? lp.shape : shape, 'both', range), lp.price);
+    return (c.x * lp.price) / (c.x * lp.price + c.y || 1);
+  }, [lp, range, rangeErr, shape]);
+  const mintA = x.tokenA.mint ?? symA;
+  const mintB = x.tokenB.mint ?? symB;
   const swaps = useMemo(() => {
-    if (!lp || !range || rangeErr || !bal || plannedUsd < 1) return null;
-    const pos = openPosition(1000, lp.price, lp.binStep, 0, shape === 'agent' ? lp.shape : shape, 'both', range);
-    const c = composition(pos, lp.price);
-    const shareA = (c.x * lp.price) / (c.x * lp.price + c.y || 1);
-    const need: Record<string, number> = { [x.tokenA.mint ?? symA]: plannedUsd * shareA, [x.tokenB.mint ?? symB]: plannedUsd * (1 - shareA) };
+    if (shareA == null || !bal || plannedUsd < 1) return null;
+    const need: Record<string, number> = { [mintA]: plannedUsd * shareA, [mintB]: plannedUsd * (1 - shareA) };
     const idle = Object.fromEntries(bal.assets.map((a) => [a.mint, a.usd]));
-    const symbolOf = (m: string) => bal.assets.find((a) => a.mint === m)?.symbol ?? (m === x.tokenA.mint ? symA : m === x.tokenB.mint ? symB : m.slice(0, 4));
-    const out: { from: string; to: string; usd: number }[] = [];
+    const symbolOf = (m: string) => bal.assets.find((a) => a.mint === m)?.symbol ?? (m === mintA ? symA : m === mintB ? symB : m.slice(0, 4));
+    const out: Swap[] = [];
     let short = 0;
     for (const [target, sym] of [
-      [x.tokenA.mint ?? symA, symA],
-      [x.tokenB.mint ?? symB, symB],
+      [mintA, symA],
+      [mintB, symB],
     ] as const) {
       let missing = need[target] - (idle[target] ?? 0);
       if (missing <= Math.max(1, need[target] * 0.02)) continue;
-      const otherPool = target === (x.tokenA.mint ?? symA) ? (x.tokenB.mint ?? symB) : (x.tokenA.mint ?? symA);
+      const otherPool = target === mintA ? mintB : mintA;
       const sources = bal.assets.filter((a) => a.mint !== target && a.mint !== otherPool).sort((p, q) => q.usd - p.usd);
-      for (const s of sources) {
+      for (const src of sources) {
         if (missing <= 1) break;
-        const take = Math.min(idle[s.mint] ?? 0, missing);
+        const take = Math.min(idle[src.mint] ?? 0, missing);
         if (take < 1) continue;
-        out.push({ from: s.symbol, to: sym, usd: take });
-        idle[s.mint] = (idle[s.mint] ?? 0) - take;
+        out.push({ from: src.symbol, fromMint: src.mint, to: sym, toMint: target, usd: take });
+        idle[src.mint] = (idle[src.mint] ?? 0) - take;
         missing -= take;
       }
       // Then the other pool token, beyond what the position needs of it.
       const spare = (idle[otherPool] ?? 0) - need[otherPool];
       if (missing > 1 && spare > 1) {
         const take = Math.min(spare, missing);
-        out.push({ from: symbolOf(otherPool), to: sym, usd: take });
+        out.push({ from: symbolOf(otherPool), fromMint: otherPool, to: sym, toMint: target, usd: take });
         idle[otherPool] = (idle[otherPool] ?? 0) - take;
         missing -= take;
       }
       if (missing > 1) short += missing;
     }
     return { out, short };
-  }, [lp, range, rangeErr, bal, plannedUsd, shape, x, symA, symB]);
+  }, [shareA, bal, plannedUsd, mintA, mintB, symA, symB]);
+  // An empty vault: what the SOL moved in becomes, for the amount typed (a pool token that is SOL needs no swap).
+  const emptyVault = !!bal && bal.availableUsd < 1;
+  const solSwaps: Swap[] =
+    emptyVault && shareA != null && want > 0
+      ? (
+          [
+            [mintA, symA, want * shareA],
+            [mintB, symB, want * (1 - shareA)],
+          ] as const
+        )
+          .filter(([m, , u]) => m !== SOL_MINT && u >= 1)
+          .map(([m, sym, u]) => ({ from: 'SOL', fromMint: SOL_MINT, to: sym, toMint: m, usd: u }))
+      : [];
+
+  /** Logo and letter for a token in a swap row: the pool's own tokens, SOL, or an idle token by mint. */
+  const tokenOf = (mint: string, symbol: string) =>
+    mint === x.tokenA.mint
+      ? x.tokenA
+      : mint === x.tokenB.mint
+        ? x.tokenB
+        : mint === SOL_MINT
+          ? { symbol: 'SOL', letter: 'S', color: '#1b1d27', logo: '/tokens/SOL.png', mint }
+          : { symbol, letter: (symbol[0] ?? '?').toUpperCase(), color: '#2a2c38', mint };
 
   // ---- moving SOL in from the owner's own wallet
   const wallet = bal?.wallet;
@@ -571,21 +602,51 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
         </p>
       )}
 
-      {swaps && !blocked && (
-        <div style={{ marginTop: 14, fontSize: 12.5, lineHeight: 1.6 }} id="dSwaps">
-          <span className="muted">Swaps first (Jupiter, in the vault): </span>
-          {swaps.out.length ? (
-            swaps.out.map((s, i) => (
-              <span key={i}>
-                {i > 0 && ', '}
-                <b className="num">≈ {usd(s.usd, 2)}</b> {s.from} → {s.to}
-              </span>
-            ))
-          ) : (
-            <span>none, the vault already holds both tokens.</span>
-          )}
-          {swaps.short > 1 && <span className="muted"> Not enough idle funds for all of it: the agent sizes the position down.</span>}
-        </div>
+      {lp && !hardBlocked && bal && (
+        <>
+          <span style={label}>Swap</span>
+          <div id="dSwaps" style={{ padding: '10px 14px 12px', borderRadius: 11, background: 'rgba(255,255,255,.025)', border: '1px solid var(--line)' }}>
+            {(() => {
+              // From the vault's idle funds, or (empty vault) from the SOL the owner moves in.
+              const rows = emptyVault ? solSwaps : swaps && !blocked ? swaps.out : [];
+              const holdBoth = !emptyVault && !!swaps && !blocked && swaps.out.length === 0;
+              return (
+                <>
+                  {rows.map((r, i) => (
+                    <div key={i} className="num" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '5px 0', fontSize: 13 }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                        <span className="toks">
+                          <Tok t={tokenOf(r.fromMint, r.from)} />
+                        </span>
+                        {r.from}
+                        <span className="dim">→</span>
+                        <span className="toks">
+                          <Tok t={tokenOf(r.toMint, r.to)} />
+                        </span>
+                        {r.to}
+                      </span>
+                      <b>≈ {usd(r.usd, 2)}</b>
+                    </div>
+                  ))}
+                  <p className="muted" style={{ fontSize: 12, lineHeight: 1.5, marginTop: rows.length ? 6 : 2 }}>
+                    {holdBoth
+                      ? `No swap needed: the vault already holds ${symA} and ${symB}.`
+                      : emptyVault
+                        ? want > 0
+                          ? `Estimate for ${usd(want, 2)}. Move SOL into the vault above; when you add LP, the vault swaps it through Jupiter (at most 0.5% slippage). You don't need to hold ${symA} or ${symB}.`
+                          : `You don't need to hold ${symA} or ${symB}. Move SOL into the vault above and enter an amount: the vault swaps the SOL into both through Jupiter when you add LP.`
+                        : rows.length
+                          ? `Through Jupiter, inside your vault, right before the LP opens (at most 0.5% slippage). You don't need to hold ${symA} or ${symB} yourself.`
+                          : rangeErr
+                            ? 'Pick a valid price range to see the swaps.'
+                            : `The vault swaps its idle funds into ${symA} and ${symB} through Jupiter when you add LP.`}
+                    {!emptyVault && swaps && swaps.short > 1 && ' Not enough idle funds for all of it: the agent sizes the position down.'}
+                  </p>
+                </>
+              );
+            })()}
+          </div>
+        </>
       )}
 
       {x.call !== 'in' && (
