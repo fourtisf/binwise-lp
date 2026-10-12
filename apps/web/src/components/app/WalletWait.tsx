@@ -33,7 +33,20 @@ function useSeconds() {
  * under their toolbar icon (the number on the icon) instead of opening a window, or open the window behind
  * the browser; the page can't bring it forward, so it says where to look.
  */
-export function WalletWaiting({ wallet, what, onStop, onSendYourself }: { wallet: Wallet; what: string; onStop: () => void; onSendYourself?: () => void }) {
+export function WalletWaiting({
+  wallet,
+  what,
+  confirming,
+  onStop,
+  onSendYourself,
+}: {
+  wallet: Wallet;
+  what: string;
+  /** Approved in the wallet: Solana is confirming the transfer, nothing more to do there */
+  confirming?: boolean;
+  onStop: () => void;
+  onSendYourself?: () => void;
+}) {
   const secs = useSeconds();
   const ref = useShown();
   const [phone, setPhone] = useState(false);
@@ -46,7 +59,7 @@ export function WalletWaiting({ wallet, what, onStop, onSendYourself }: { wallet
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, fontSize: 13.5 }}>
         <b style={{ fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: 7 }}>
           {icon(16)}
-          Approve in {wallet.name}
+          {confirming ? `Approved in ${wallet.name}` : `Approve in ${wallet.name}`}
         </b>
         <span className="pill watch live num">
           <span className="d" />
@@ -54,10 +67,13 @@ export function WalletWaiting({ wallet, what, onStop, onSendYourself }: { wallet
         </span>
       </div>
       <p className="muted" style={{ marginTop: 6 }}>
-        {what} If it asks to connect to this site first, approve that too.
+        {what}
+        {confirming ? '' : ' If it asks to connect to this site first, approve that too.'}
       </p>
       <p style={{ marginTop: 8, color: 'var(--soft)' }}>
-        {phone ? (
+        {confirming ? (
+          'Solana usually confirms it in a few seconds, a minute or two when the network is busy. Keep this page open.'
+        ) : phone ? (
           `Switch to ${wallet.name} if it didn't open by itself.`
         ) : (
           <>
@@ -66,7 +82,7 @@ export function WalletWaiting({ wallet, what, onStop, onSendYourself }: { wallet
           </>
         )}
       </p>
-      {secs >= 60 && (
+      {secs >= 60 && !confirming && (
         <p className="muted" style={{ marginTop: 8 }}>
           Over a minute: Solana may no longer take this transfer. If the wallet says it failed, nothing was sent. Stop waiting and try again.
         </p>
@@ -75,7 +91,8 @@ export function WalletWaiting({ wallet, what, onStop, onSendYourself }: { wallet
         <button style={link} onClick={onStop}>
           Stop waiting
         </button>
-        {onSendYourself && (
+        {/* Once approved the SOL is on its way: sending it by hand too would send it twice. */}
+        {onSendYourself && !confirming && (
           <button style={link} onClick={onSendYourself}>
             Send the SOL yourself instead
           </button>

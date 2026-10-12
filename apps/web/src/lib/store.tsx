@@ -143,6 +143,8 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
           break;
         case 'decision':
           setDecisions((ds) => (ds.some((d) => d.id === e.decision.id) ? ds : [e.decision, ...ds].slice(0, 60)));
+          // A request the agent couldn't carry out (Add LP, Claim, Close): say why now, not only in Activity.
+          if (e.decision.type === 'skip' && e.decision.title.startsWith('Couldn')) toast(`${e.decision.title}: ${e.decision.reason}`, 9000);
           // Deploys, exits and rebalances change the position list.
           if (e.decision.type !== 'scan') void reloadPositions(c);
           break;
@@ -151,7 +153,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
           break;
       }
     },
-    [applyCycle, reloadPositions],
+    [applyCycle, reloadPositions, toast],
   );
 
   useEffect(() => {

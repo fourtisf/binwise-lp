@@ -92,7 +92,9 @@ async function manualActions() {
         } catch (e) {
           error = (e as Error).message;
           const verb = req.action === 'deploy' ? 'add LP' : req.action === 'proposal' ? 'carry out the approved trade' : req.action;
-          await db.decision.create({ data: { vaultId, poolId: req.poolId ?? null, type: 'skip', title: `Couldn't ${verb}`, reason: error, inputs: { manual: true } } });
+          const d = await db.decision.create({ data: { vaultId, poolId: req.poolId ?? null, type: 'skip', title: `Couldn't ${verb}`, reason: error, inputs: { manual: true } } });
+          // The app shows why right away (not only in Activity after a reload).
+          await publish(redis, vaultId, { type: 'decision', decision: { id: d.id, vaultId, poolId: d.poolId ?? undefined, ts: d.ts.getTime(), type: 'skip', title: d.title, reason: d.reason } });
         }
         if (req.chatId && telegram) await telegram.send(req.chatId, resultMessage(result, error)).catch((e) => console.error(`[telegram] ${(e as Error).message}`));
       }

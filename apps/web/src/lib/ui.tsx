@@ -17,7 +17,8 @@ interface UiContext {
   closeLayers: () => void;
   toastText: string;
   toastOn: boolean;
-  toast: (text: string) => void;
+  /** A short notice; `ms`: how long it stays (longer for something to read, like why an action failed) */
+  toast: (text: string, ms?: number) => void;
   /** Card to scroll to after navigating to Positions. */
   scrollTarget: React.MutableRefObject<string | null>;
 }
@@ -33,11 +34,11 @@ export function UiProvider({ children }: { children: ReactNode }) {
   const toastTimer = useRef<ReturnType<typeof setTimeout>>();
   const scrollTarget = useRef<string | null>(null);
 
-  const toast = useCallback((text: string) => {
+  const toast = useCallback((text: string, ms = 2000) => {
     setToastText(text);
     setToastOn(true);
     clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToastOn(false), 2000);
+    toastTimer.current = setTimeout(() => setToastOn(false), ms);
   }, []);
 
   const value = useMemo<UiContext>(

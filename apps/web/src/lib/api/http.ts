@@ -36,7 +36,8 @@ export function createHttpClient(api: string, ws: string): BinwiseClient {
       body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
     });
     const json = await res.json().catch(() => null);
-    if (!res.ok) throw new ApiError(json?.error ?? 'http_' + res.status, json?.message ?? 'Something went wrong.');
+    // 429: the API's rate limit (its body says "Too Many Requests"); callers that poll wait and ask again.
+    if (!res.ok) throw new ApiError(res.status === 429 ? 'rate_limited' : (json?.error ?? 'http_' + res.status), json?.message ?? 'Something went wrong.');
     return json as T;
   };
   const post = <T>(path: string, body: unknown = {}) => req<T>(path, { method: 'POST', body });

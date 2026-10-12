@@ -42,6 +42,8 @@ const SOL_MINT = 'So11111111111111111111111111111111111111112';
 const VAULT_RESERVE_SOL = 0.25;
 /** SOL left in the owner's wallet for the transfer's own fee. */
 const WALLET_FEE_SOL = 0.005;
+/** Seconds between asks whether Solana confirmed a transfer: about 3 minutes, at most 9 asks in any minute. */
+const CONFIRM_WAITS_S = [1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30, 30];
 
 type Side = 'both' | 'x' | 'y';
 /** What SOL from the owner's wallet is for: just moving it into the vault, or paying for this LP */
@@ -93,8 +95,8 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
   /** Only when the wallet the owner signed in with can't be found or fails: they pick it among those installed */
   const [picking, setPicking] = useState(false);
   const [walletPick, setWalletPick] = useState<string | null>(null);
-  /** The wallet asked to approve right now, and for what */
-  const [asking, setAsking] = useState<{ wallet: Wallet; flow: Flow; sol: number } | null>(null);
+  /** The wallet asked to approve right now, and for what; 'confirm': approved, Solana is confirming the transfer */
+  const [asking, setAsking] = useState<{ wallet: Wallet; flow: Flow; sol: number; phase?: 'confirm' } | null>(null);
   /** Bumped by "Stop waiting": a wallet answer that comes later no longer continues the Add LP. */
   const run = useRef(0);
   /** Sending the SOL by hand to the vault address (the wallet won't approve here); lpUsd: the LP planned with it */
@@ -339,18 +341,25 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
       async (signed) => (await client!.depositSend(toBase64(signed))).signature,
       () => !live(),
     );
-    // Solana confirms in a few seconds; the API checks the transfer on-chain before counting it.
-    for (let i = 0; i < 15; i++) {
+    if (live()) setAsking((a) => a && { ...a, phase: 'confirm' });
+    // The API checks the transfer on-chain before counting it. Solana confirms in seconds, a minute or two when
+    // busy: ask until then, slower and slower, under the API's limit (10 a minute); a "too many" is only a wait.
+    for (const s of CONFIRM_WAITS_S) {
+      await new Promise((r) => setTimeout(r, s * 1000));
       try {
         await client!.depositLive(signature);
         return true;
       } catch (e) {
-        if (!(e instanceof ApiError) || e.code !== 'tx_not_found') throw e;
-        await new Promise((r) => setTimeout(r, 2000));
+        if (!(e instanceof ApiError) || (e.code !== 'tx_not_found' && e.code !== 'rate_limited')) throw e;
       }
     }
     return false;
   };
+  /** Sent, but Solana hadn't confirmed it after about 3 minutes: where it will show, and not to send it twice. */
+  const notConfirmed = (sol: number) =>
+    setMoveErr(
+      `Your wallet sent ${amount(sol)} SOL, but Solana hasn't confirmed it after 3 minutes. If it lands, it shows in your vault (Portfolio) within a few minutes: then add LP. Check there before sending again.`,
+    );
   const walletError = (e: unknown, name: string) =>
     e instanceof SignInError
       ? e.kind === 'rejected'
@@ -410,6 +419,7 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
     run.current++;
     setMoving(false);
     setAsking(null);
+    if (a?.phase === 'confirm') return setMoveErr(`Stopped waiting. The ${amount(a.sol)} SOL is on its way: it shows in your vault (Portfolio) once Solana confirms it. Then add LP.`);
     if (a && lpUsd != null && vaultAddress) return setManual({ sol: a.sol, flow: a.flow, lpUsd });
     setMoveErr(`Stopped waiting. If ${a?.wallet.name ?? 'your wallet'} still shows the request, reject it there: nothing is sent unless you approve it.`);
   };
@@ -451,7 +461,8 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
     withWallet(Number(moveS), 'move', async (w, live) => {
       const sol = Number(moveS);
       const recorded = await sendSol(sol, w, live);
-      toast(recorded ? `Moved ${amount(sol)} SOL to your vault` : 'Sent. It shows in the vault once Solana confirms it.');
+      if (recorded) toast(`Moved ${amount(sol)} SOL to your vault`);
+      else notConfirmed(sol);
       if (live()) setMoveS('');
       reload();
     });
@@ -492,7 +503,7 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
     withWallet(paySol, 'add', async (w, live) => {
       const sol = paySol;
       if (!(await sendSol(sol, w, live))) {
-        toast('Sent. Add LP once Solana confirms the transfer.');
+        notConfirmed(sol);
         return reload();
       }
       // Approved after "Stop waiting": the SOL is in, but the owner may have moved on, so no LP by itself.
@@ -627,8 +638,10 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
           {approveIn}
           {asking?.flow === 'move' && (
             <WalletWaiting
+              key={asking.phase ?? 'approve'}
               wallet={asking.wallet}
-              what={`It asks you to send ${amount(asking.sol)} SOL from your wallet to your vault.`}
+              confirming={asking.phase === 'confirm'}
+              what={asking.phase === 'confirm' ? `Sending ${amount(asking.sol)} SOL to your vault.` : `It asks you to send ${amount(asking.sol)} SOL from your wallet to your vault.`}
               onStop={() => stopWaiting()}
               onSendYourself={vaultAddress ? () => stopWaiting(0) : undefined}
             />
@@ -639,7 +652,7 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
             </p>
           )}
           <button className="btn btn-dark btn-sm" style={{ width: '100%', marginTop: 10 }} disabled={moving || !(Number(moveS) > 0)} onClick={move}>
-            {moving ? (asking ? `Approve in ${asking.wallet.name}…` : 'Finding your wallet…') : `Move ${Number(moveS) > 0 ? amount(Number(moveS)) + ' ' : ''}SOL to the vault`}
+            {moving ? (asking?.phase === 'confirm' ? 'Confirming on Solana…' : asking ? `Approve in ${asking.wallet.name}…` : 'Finding your wallet…') : `Move ${Number(moveS) > 0 ? amount(Number(moveS)) + ' ' : ''}SOL to the vault`}
           </button>
           {!moving && !manual && vaultAddress && (
             <button className="muted" style={{ fontSize: 12.5, marginTop: 8, textDecoration: 'underline', textAlign: 'left' }} onClick={() => sendYourself(Number(moveS), 'move', 0)}>
@@ -954,9 +967,11 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
         <Icon id="i-plus" />
         {payMode
           ? moving
-            ? asking
-              ? `Approve in ${asking.wallet.name}…`
-              : 'Finding your wallet…'
+            ? asking?.phase === 'confirm'
+              ? 'Confirming on Solana…'
+              : asking
+                ? `Approve in ${asking.wallet.name}…`
+                : 'Finding your wallet…'
             : `Swap & add LP${paySol > 0 ? ` with ${amount(paySol)} SOL` : ''}`
           : swaps && !blocked && swaps.out.length
             ? `Swap & add LP to ${x.pair}`
@@ -964,8 +979,14 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
       </button>
       {asking?.flow === 'add' && (
         <WalletWaiting
+          key={asking.phase ?? 'approve'}
           wallet={asking.wallet}
-          what={`It asks you to send ${amount(asking.sol)} SOL from your wallet to your vault. Then the vault swaps it and adds the LP by itself: nothing more to approve.`}
+          confirming={asking.phase === 'confirm'}
+          what={
+            asking.phase === 'confirm'
+              ? `Sending ${amount(asking.sol)} SOL to your vault. Then the vault swaps it and adds the LP by itself: nothing more to approve.`
+              : `It asks you to send ${amount(asking.sol)} SOL from your wallet to your vault. Then the vault swaps it and adds the LP by itself: nothing more to approve.`
+          }
           onStop={() => stopWaiting()}
           onSendYourself={vaultAddress ? () => stopWaiting(payLpUsd) : undefined}
         />
