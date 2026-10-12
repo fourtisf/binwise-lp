@@ -66,7 +66,25 @@ export interface PoolDetail extends PoolRow {
    * For Add LP by hand: the pool's price (second token per first token), bin step, and what the agent
    * itself would pick for this vault (shape, bins each side of the price).
    */
-  lp?: { price: number; binStep: number; shape: LiquidityShape; binsEachSide: number; maxBins: number };
+  /**
+   * For Add LP by hand: the price and bins, and what the agent itself would do here (its recommendation):
+   * the shape, width and side (null: the pool is trending down and the agent adds nothing), and why.
+   */
+  lp?: {
+    price: number;
+    binStep: number;
+    shape: LiquidityShape;
+    binsEachSide: number;
+    maxBins: number;
+    side: 'both' | 'x' | 'y' | null;
+    /** The risky token's market regime the side comes from */
+    regime: 'range' | 'up' | 'down';
+    /** Daily volatility, percent */
+    volatility: number;
+    profile: RiskProfile;
+    /** Both tokens are stablecoins */
+    stable: boolean;
+  };
 }
 
 export interface DepositAsset {

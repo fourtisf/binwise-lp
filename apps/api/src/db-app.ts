@@ -16,6 +16,7 @@ import {
   customRangeError,
   rangeHalfWidth,
   shapeFor,
+  sideForRegime,
   isBridgedSymbol,
   manualDeployLimit,
   pairKey,
@@ -51,6 +52,7 @@ import {
   ProposalError,
   activeParams,
   approveProposal,
+  assessmentInput,
   createVault,
   ensureUser,
   pendingProposals,
@@ -471,6 +473,9 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     const stablePair = !!a && !!b && isStable(a) && isStable(b);
     const profile = strategy ? strategySettingsOf(strategy).profile : DEFAULT_STRATEGY.profile;
     const params = await activeParams(db);
+    // The side the agent picks from the risky token's regime (one-sided in an uptrend, nothing in a downtrend).
+    const { regime } = await assessmentInput(snap, a, b, params);
+    const riskyIsY = !!a && !!b && isStable(a) && !isStable(b);
     return {
       ...row,
       lp: {
@@ -479,6 +484,11 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
         shape: shapeFor(profile, stablePair, snap.volatility),
         binsEachSide: Math.min(MAX_BINS_EACH_SIDE, binsForHalfWidth(rangeHalfWidth(profile, snap.volatility, stablePair, params), snap.pool.binStep)),
         maxBins: MAX_POSITION_BINS,
+        side: sideForRegime(regime, params, riskyIsY),
+        regime,
+        volatility: snap.volatility,
+        profile,
+        stable: stablePair,
       },
     };
   });

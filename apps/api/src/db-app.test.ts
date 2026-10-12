@@ -542,6 +542,14 @@ describe('add LP by hand: options and funding from the wallet', () => {
     expect(detail.lp).toMatchObject({ price: 150, binStep: 25, maxBins: 69 });
     expect(['spot', 'curve', 'bidask']).toContain(detail.lp.shape);
     expect(detail.lp.binsEachSide).toBeGreaterThan(0);
+    // The agent's own recommendation: a ranging market (no trend data) means both tokens.
+    expect(detail.lp).toMatchObject({ side: 'both', regime: 'range', volatility: 3, profile: 'balanced', stable: false });
+    // An efficient move up above EMA50: one-sided in SOL above the price. Down: the agent adds nothing (null).
+    await db.poolSnapshot.create({ data: { poolId: 'PL1', tvl: 1e6, volume24h: 2e6, price: 156, volatility: 3, score: 70, scoreBreakdown: [], call: 'in', callLabel: 'Enter', reason: 'ok', efficiency: 0.8, change24hPct: 4, aboveEma50: true } });
+    expect((await app.inject({ url: `/pools/PL1?vault=${id}`, headers })).json().lp).toMatchObject({ side: 'x', regime: 'up' });
+    await db.poolSnapshot.create({ data: { poolId: 'PL1', tvl: 1e6, volume24h: 2e6, price: 144, volatility: 3, score: 70, scoreBreakdown: [], call: 'in', callLabel: 'Enter', reason: 'ok', efficiency: 0.8, change24hPct: -4, aboveEma50: false } });
+    expect((await app.inject({ url: `/pools/PL1?vault=${id}`, headers })).json().lp).toMatchObject({ side: null, regime: 'down' });
+    await db.poolSnapshot.create({ data: { poolId: 'PL1', tvl: 1e6, volume24h: 2e6, price: 150, volatility: 3, score: 70, scoreBreakdown: [], call: 'in', callLabel: 'Enter', reason: 'ok' } });
     // Mints come along even for tokens missing from the token table: the app searches pools by contract address.
     const NEW = 'NewTokenMint11111111111111111111111111111111';
     await db.pool.create({ data: { id: 'PL9', name: 'NEW-USDC', tokenA: 'NEW', tokenB: 'USDC', mintA: NEW, mintB: USDC, binStep: 25, baseFee: 0.1 } });

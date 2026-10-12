@@ -20,6 +20,7 @@ import { useAppData } from '@/lib/store';
 import { useUi } from '@/lib/ui';
 import { SignInError, sendWithWallet, walletFor } from '@/lib/wallets';
 import { Icon } from '../Sprite';
+import { LpRecommend, RecDot } from './LpRecommend';
 import { LpShape } from './LpShape';
 import { useSolanaWallets } from './Wallet';
 
@@ -82,17 +83,21 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
   const [moveErr, setMoveErr] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
 
+  // A new pool starts on the recommendation; the side is set once its Add LP data arrives.
+  const hasLp = !!x.lp;
   useEffect(() => {
     setAmt('');
     setRisk(false);
     setBal(null);
     setBalErr(false);
     setShape('agent');
-    setSide('both');
+    setSide(x.lp?.side ?? 'both');
     setMode('agent');
     setMoveS('');
     setMoveErr(null);
-  }, [x.id]);
+    // Not on every refresh of the recommended side: that would undo the user's own choice mid-edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [x.id, hasLp]);
 
   // The vault's idle funds and the most Add LP puts into this pool: on open, every 20s, when positions change, after a move.
   useEffect(() => {
@@ -117,6 +122,8 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
   const reload = useCallback(() => setTick((n) => n + 1), []);
 
   const lp = x.lp;
+  // The agent's own side here; null (a downtrend) leaves "Both tokens" as the starting point.
+  const recSide: Side = lp?.side ?? 'both';
   const want = Number(amt) || 0;
   const lim = bal?.pool;
   const symA = x.tokenA.symbol;
@@ -173,7 +180,21 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
   };
 
   // Options are sent only when changed: with everything on "Agent", the agent picks (and may go one-sided in a trend).
-  const custom = side !== 'both' || mode !== 'agent';
+  const custom = side !== recSide || mode !== 'agent';
+  // What the agent itself would do here, and whether the form is on it.
+  const recRange: CustomRange | null = !lp
+    ? null
+    : recSide === 'both'
+      ? { below: lp.binsEachSide, above: lp.binsEachSide }
+      : recSide === 'x'
+        ? { below: 0, above: 2 * lp.binsEachSide }
+        : { below: 2 * lp.binsEachSide, above: 0 };
+  const onRec = !!lp && lp.side !== null && (shape === 'agent' || shape === lp.shape) && side === recSide && mode === 'agent';
+  const useRec = () => {
+    setShape('agent');
+    setSide(recSide);
+    setMode('agent');
+  };
   const opts = { ...(shape !== 'agent' ? { shape } : {}), ...(custom && range ? { range } : {}) };
 
   // ---- limits
@@ -402,10 +423,30 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
 
       {lp && !hardBlocked && (
         <>
+          {recRange && (
+            <LpRecommend
+              lp={lp}
+              symA={symA}
+              symB={symB}
+              lo={price(binPrice(active0 - recRange.below, lp.binStep))}
+              hi={price(binPrice(active0 + recRange.above + 1, lp.binStep))}
+              width={
+                recSide === 'both'
+                  ? `±${((binPrice(lp.binsEachSide, lp.binStep) - 1) * 100).toFixed(1)}%`
+                  : recSide === 'x'
+                    ? `+${((binPrice(2 * lp.binsEachSide + 1, lp.binStep) - 1) * 100).toFixed(1)}%`
+                    : `−${((1 - binPrice(-2 * lp.binsEachSide, lp.binStep)) * 100).toFixed(1)}%`
+              }
+              inUse={onRec}
+              onUse={useRec}
+            />
+          )}
+
           <span style={label}>Strategy</span>
           <div className="seg" style={segFull} role="group" aria-label="Strategy shape">
             {(['agent', 'spot', 'curve', 'bidask'] as const).map((k) => (
               <button key={k} style={segBtn} aria-pressed={shape === k} onClick={() => setShape(k)}>
+                {k === lp.shape && <RecDot />}
                 {k === 'agent' ? `Agent (${SHAPE_NAME[lp.shape]})` : SHAPE_NAME[k]}
               </button>
             ))}
@@ -434,6 +475,7 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
               ] as const
             ).map(([k, t]) => (
               <button key={k} style={segBtn} aria-pressed={side === k} onClick={() => setSide(k)}>
+                {k === lp.side && <RecDot />}
                 {t}
               </button>
             ))}
@@ -450,6 +492,7 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
           <div className="seg" style={segFull} role="group" aria-label="Price range">
             {(['agent', ...presets, 'custom'] as RangeMode[]).map((k) => (
               <button key={String(k)} style={segBtn} aria-pressed={mode === k} onClick={() => pickMode(k)}>
+                {k === 'agent' && lp.side !== null && <RecDot />}
                 {k === 'agent' ? 'Agent' : k === 'custom' ? 'Custom' : k === 'max' ? `Max ±${maxPct}%` : `±${k}%`}
               </button>
             ))}
