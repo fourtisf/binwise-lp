@@ -367,22 +367,30 @@ export function signsVersioned(w: Wallet): boolean {
 }
 
 /**
- * Asks the wallet to sign every transaction of a plan (serialized, in order) in one approval, without
- * sending them: Binwise sends them one after the other, each once the one before landed. Tries:
+ * Asks the wallet to sign every transaction of a plan (serialized, in order) without sending them: Binwise
+ * sends them one after the other, each once the one before landed. All in one request first (one approval in
+ * Phantom, Solflare, Backpack and most others). A wallet that signs fewer than asked (one per request, like
+ * Bitget) is asked for the rest one at a time through the same API: what it signed is kept and never asked
+ * for again, so each transaction needs exactly one approval. `onSigned(n, total)` after each answer.
  *
- * 1. Wallet Standard signTransaction with all of them in one request (one approval in Phantom, Solflare,
- *    Backpack and most others).
- * 2. The classic signAllTransactions (one approval).
- * 3. The classic signTransaction, one approval per transaction.
- *
- * Returns the signed transactions, in the same order. Stops like sendWithWallet: a "no", an open request,
+ * Wallet Standard first, then the classic injected API (signAllTransactions, then signTransaction), the
+ * classic one only if the wallet signed nothing yet. Stops like sendWithWallet: a "no", an open request,
  * another account, or `stopped()` turning true.
  */
-export async function signAllWithWallet(w: Wallet, owner: string, txs: Uint8Array[], stopped?: () => boolean): Promise<Uint8Array[]> {
+export async function signAllWithWallet(
+  w: Wallet,
+  owner: string,
+  txs: Uint8Array[],
+  stopped?: () => boolean,
+  onSigned?: (n: number, total: number) => void,
+): Promise<Uint8Array[]> {
   const tried: string[] = [];
   const wrongAccount = () => new SignInError('account', `Switch ${w.name} to the account you signed in with (${owner.slice(0, 4)}…${owner.slice(-4)}), then try again.`);
-  const attempt = async <T,>(label: string, run: () => Promise<T>): Promise<T | null> => {
+  const stillWaiting = () => {
     if (stopped?.()) throw new SignInError('stopped', 'Stopped waiting for the wallet.', tried);
+  };
+  const attempt = async <T,>(label: string, run: () => Promise<T>): Promise<T | null> => {
+    stillWaiting();
     try {
       return await run();
     } catch (e) {
@@ -394,10 +402,16 @@ export async function signAllWithWallet(w: Wallet, owner: string, txs: Uint8Arra
       return null;
     }
   };
-  const all = <T,>(out: readonly T[]) => {
-    if (out.length !== txs.length) throw new Error(`The wallet returned ${out.length} of ${txs.length} transactions.`);
-    return out;
+  /** Signed so far, in order. */
+  const out: Uint8Array[] = [];
+  const got = (signed: Uint8Array[]) => {
+    if (!signed.length) throw new Error('The wallet returned no signed transaction.');
+    out.push(...signed);
+    onSigned?.(out.length, txs.length);
   };
+  /** Some were signed (approved), then the wallet failed: asking again another way would ask for those again. */
+  const partly = () =>
+    new SignInError('wallet', `${w.name} signed ${out.length} of ${txs.length} transactions, then failed (${tried.at(-1) ?? 'no details'}). Nothing was sent; try again.`, tried);
 
   if (SolanaSignTransaction in w.features) {
     const connector = (w.features as StandardConnectFeature)[StandardConnect];
@@ -411,13 +425,31 @@ export async function signAllWithWallet(w: Wallet, owner: string, txs: Uint8Arra
       return found;
     });
     if (account) {
-      const signed = await attempt('Sign', async () => {
-        const out = await (w.features as SolanaSignTransactionFeature)[SolanaSignTransaction].signTransaction(
-          ...txs.map((transaction) => ({ account, chain: mainnetOf(account), transaction })),
-        );
-        return all(out).map((o) => o.signedTransaction);
+      const feature = (w.features as SolanaSignTransactionFeature)[SolanaSignTransaction];
+      const done = await attempt('Sign', async () => {
+        let batch = txs.length > 1;
+        while (out.length < txs.length) {
+          stillWaiting();
+          const ask = batch ? txs.slice(out.length) : [txs[out.length]];
+          let res: readonly { signedTransaction: Uint8Array }[];
+          try {
+            res = await feature.signTransaction(...ask.map((transaction) => ({ account, chain: mainnetOf(account), transaction })));
+          } catch (e) {
+            // A wallet that can't take several at once (not the user saying no): one at a time instead.
+            if (batch && !out.length && !walletFailure(e)) {
+              tried.push(`Sign all at once: ${describe(e)}`);
+              batch = false;
+              continue;
+            }
+            throw e;
+          }
+          batch = false;
+          got(res.slice(0, ask.length).map((o) => o.signedTransaction));
+        }
+        return true;
       });
-      if (signed) return signed;
+      if (done) return out;
+      if (out.length) throw partly();
     }
   }
 
@@ -432,29 +464,30 @@ export async function signAllWithWallet(w: Wallet, owner: string, txs: Uint8Arra
       : null;
   if (web3 && p) {
     // A fresh @solana/web3.js object per request, legacy or versioned as built.
-    const objects = () =>
-      txs.map((t) => {
-        const v = web3.VersionedTransaction.deserialize(t);
-        return v.version === 'legacy' ? web3.Transaction.from(t) : v;
-      });
+    const object = (t: Uint8Array) => {
+      const v = web3.VersionedTransaction.deserialize(t);
+      return v.version === 'legacy' ? web3.Transaction.from(t) : v;
+    };
     // The position's own signature is already on it: serialize without asking for every signature again.
     const bytes = (t: { serialize(opts?: object): Uint8Array }) => Uint8Array.from(t.serialize({ requireAllSignatures: false, verifySignatures: false }));
     if (p.signAllTransactions) {
-      const signed = await attempt('Classic sign all', async () => all(await p.signAllTransactions!(objects())).map(bytes));
-      if (signed) return signed;
+      const rest = txs.slice(out.length);
+      await attempt('Classic sign all', async () => got((await p.signAllTransactions!(rest.map(object))).slice(0, rest.length).map(bytes)));
+      if (out.length === txs.length) return out;
     }
+    // One at a time: the rest of what signAllTransactions didn't sign, or all of them.
     if (p.signTransaction) {
-      const signed = await attempt('Classic sign', async () => {
-        const out: Uint8Array[] = [];
-        for (const t of objects()) {
-          if (stopped?.()) throw new SignInError('stopped', 'Stopped waiting for the wallet.', tried);
-          out.push(bytes(await p.signTransaction!(t)));
+      const done = await attempt('Classic sign', async () => {
+        while (out.length < txs.length) {
+          stillWaiting();
+          got([bytes(await p.signTransaction!(object(txs[out.length])))]);
         }
-        return out;
+        return true;
       });
-      if (signed) return signed;
+      if (done) return out;
     }
   }
+  if (out.length) throw partly();
   console.error(`[binwise] ${w.name} could not sign:`, tried, '|', phantomDiagnostics());
   throw new SignInError('wallet', tried.length ? tried.join('\n') : `${w.name} can't sign transactions from this page.`, tried);
 }

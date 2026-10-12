@@ -59,7 +59,11 @@ export function WalletTaskCard() {
         <WalletWaiting
           key="approve"
           wallet={t.wallet}
-          what={`${p.summary.join(' ')} ${steps(p.steps)}, one approval. Nothing moves until you approve, and everything stays in your wallet.`}
+          what={
+            p.signed
+              ? `Approved ${p.signed} of ${p.steps}. ${t.wallet.name} asks once per transaction: approve the next one (${p.signed + 1} of ${p.steps}). Nothing is sent until all are approved.`
+              : `${p.summary.join(' ')} ${steps(p.steps)}${p.steps > 1 ? ' (some wallets ask once for each)' : ''}. Nothing moves until you approve, and everything stays in your wallet.`
+          }
           onStop={stopWalletTask}
         />
       )}

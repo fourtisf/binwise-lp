@@ -4,7 +4,8 @@ import { SignInError, signAllWithWallet, signsVersioned, type Wallet } from './w
 /** Where a plan is: being built, waiting for the wallet's approval, sending step `step` of `steps`, being recorded. */
 export type PlanPhase =
   | { phase: 'prepare' }
-  | { phase: 'approve'; steps: number; summary: string[] }
+  /** signed: how many the wallet signed so far (wallets that ask once per transaction) */
+  | { phase: 'approve'; steps: number; summary: string[]; signed?: number }
   | { phase: 'send'; step: number; steps: number; label: string }
   | { phase: 'record' };
 
@@ -60,6 +61,7 @@ export async function runWalletPlan(o: {
       o.owner,
       plan.steps.map((s) => fromBase64(s.tx)),
       o.stopped,
+      (n, total) => n < total && o.onPhase({ phase: 'approve', steps: total, summary: plan.summary, signed: n }),
     );
   } catch (e) {
     // Nothing signed reaches Solana without this page: the plan is dead, so another can be prepared right away.
