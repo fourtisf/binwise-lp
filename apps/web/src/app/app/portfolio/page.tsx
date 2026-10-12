@@ -40,8 +40,10 @@ function Address({ address, onCopy }: { address: string; onCopy: () => void }) {
 
 /** The owner's portfolio: holdings, net vs hold since the start, fees, closed positions, money in and out. */
 export default function PortfolioPage() {
-  const { client, me, ready, overview } = useAppData();
-  const { openConnect, toast, scrollTarget } = useUi();
+  const { client, me, ready, overview, decisions } = useAppData();
+  const { openConnect, openWithdraw, toast, scrollTarget } = useUi();
+  /** The newest activity: a deposit, withdrawal or trade changes what the vault holds, so it reloads. */
+  const lastDecision = decisions[0]?.id;
   const router = useRouter();
   const [p, setP] = useState<Portfolio | null>(null);
   const [failed, setFailed] = useState(false);
@@ -49,7 +51,7 @@ export default function PortfolioPage() {
   const [allOwn, setAllOwn] = useState(false);
   const api = client?.kind === 'http';
 
-  // On open, then every 30s (the agent revalues the vault every minute).
+  // On open, after any new activity (money in or out, a trade), and every 30s (the agent revalues the vault every minute).
   useEffect(() => {
     if (!api || !client || !me || !overview?.id) return;
     let live = true;
@@ -68,7 +70,7 @@ export default function PortfolioPage() {
       live = false;
       clearInterval(t);
     };
-  }, [api, client, me, overview?.id]);
+  }, [api, client, me, overview?.id, lastDecision]);
 
   if (ready && (!api || !me))
     return (
@@ -266,6 +268,12 @@ export default function PortfolioPage() {
               <h3>Holdings</h3>
               <p>What your vault holds now</p>
             </div>
+            {p?.mode === 'live' && p.vaultWallet && (
+              <button className="btn btn-dark btn-sm" id="pfWithdraw" onClick={openWithdraw}>
+                <Icon id="i-down" />
+                Withdraw
+              </button>
+            )}
           </div>
           <div className="tbl">
             <table>

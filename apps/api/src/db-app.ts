@@ -33,10 +33,16 @@ import {
   type StreamEvent,
   type TokenRef,
   type VaultBalance,
+  type Withdrawable,
 } from '@binwise/core';
 import {
   JupiterClient,
   LiveExecutor,
+  DuplicateAction,
+  PolicyViolation,
+  SimulationFailed,
+  TradingHalted,
+  TxFailed,
   SOL_RESERVE,
   isLiveWallet,
   liveLimits,
@@ -886,6 +892,25 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     });
   });
 
+  /**
+   * A withdrawal the executor stopped, in plain words, saying whether anything left the vault. Only a
+   * transfer sent but not yet confirmed is uncertain: the owner checks before trying again.
+   */
+  function withdrawRefusal(e: unknown): Error {
+    const m = (e as Error)?.message ?? '';
+    if (e instanceof SimulationFailed)
+      return /InsufficientFundsForRent|insufficient/i.test(`${m} ${(e.logs ?? []).join(' ')}`)
+        ? new ApiError(400, 'insufficient_balance', 'Solana needs a little more SOL to stay in the vault for this withdrawal. Nothing was sent; try a slightly smaller amount.')
+        : new ApiError(400, 'sim_failed', `Solana would reject this withdrawal (${m.replace(/^Simulation failed: /, '')}). Nothing was sent.`);
+    if (e instanceof PolicyViolation) return new ApiError(400, 'blocked', `Binwise's safety check stopped this withdrawal: ${m}. Nothing was sent.`);
+    if (e instanceof TradingHalted) return new ApiError(423, 'kill_switch', 'Trading is halted right now. Nothing was sent; try again later.');
+    if (e instanceof DuplicateAction) return new ApiError(409, 'duplicate', 'This withdrawal already ran. Check Activity.');
+    // Failed on-chain or expired before landing: nothing moved.
+    if (e instanceof TxFailed) return new ApiError(502, 'tx_failed', 'Solana did not take the withdrawal, so nothing left the vault. Try again.');
+    if (/still unconfirmed/.test(m)) return new ApiError(504, 'unconfirmed', 'The withdrawal was sent but is not confirmed yet. Check Activity or your wallet in a minute before trying again.');
+    return e as Error;
+  }
+
   /** Why Solana would refuse a SOL transfer from the owner's wallet, in plain words. */
   function transferRefusal(err: unknown, logs: string[] | null | undefined): ApiError {
     const text = `${JSON.stringify(err)} ${(logs ?? []).join(' ')}`;
@@ -980,6 +1005,36 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     return credited;
   }
 
+  /**
+   * Live: what the owner can withdraw to their own wallet now, by token, with the same rule POST /withdraw
+   * applies: SOL keeps 0.001 for the transfer's fee when no position is open, the fee reserve while one is.
+   */
+  app.get<VP>('/vaults/:id/withdrawable', async (req): Promise<Withdrawable> => {
+    const v = await writable(req, req.params.id);
+    if (v.mode !== 'live' || !v.agentPubkey) throw new ApiError(400, 'not_live', 'Only a live vault holds funds on Solana.');
+    if (v.user.wallet === v.agentPubkey) throw new ApiError(400, 'same_wallet', 'This vault wallet is your own wallet: use 💸 Withdraw in the Telegram bot to send funds elsewhere.');
+    const conn = chain();
+    const openPositions = await db.position.count({ where: { vaultId: v.id, status: 'open' } });
+    const [lamports, held] = await Promise.all([conn.getBalance(new PublicKey(v.agentPubkey)), walletTokens(conn, v.agentPubkey)]).catch(() => {
+      throw new ApiError(502, 'rpc_unavailable', 'Could not reach Solana right now. Try again in a moment.');
+    });
+    const keptSol = openPositions ? SOL_RESERVE : 0.001;
+    // Native SOL only (what a SOL withdrawal sends); wrapped SOL isn't sent as SOL.
+    const amounts = [
+      { mint: SOL_MINT, amount: Math.max(0, lamports / 1e9 - keptSol), decimals: 9 },
+      ...held.filter((t) => t.mint !== SOL_MINT && t.amount > 0),
+    ];
+    const info = await tokenInfo(amounts.map((t) => t.mint));
+    const tokens = amounts
+      .map(({ mint, amount, decimals }) => {
+        const i = info.get(mint);
+        const symbol = mint === SOL_MINT ? 'SOL' : (i?.ref.symbol ?? `${mint.slice(0, 4)}…`);
+        return { mint, symbol, amount, decimals, usd: amount * (i?.priceUsd ?? 0), token: i?.ref ?? tokenRef(symbol, { mint, logoUrl: null }) };
+      })
+      .sort((a, b) => (a.mint === SOL_MINT ? -1 : b.mint === SOL_MINT ? 1 : b.usd - a.usd));
+    return { to: v.user.wallet, openPositions, keptSol, tokens };
+  });
+
   app.post<VP & { Body: { token?: string; mint?: string; amount?: number } }>('/vaults/:id/withdraw', moneyLimit, async (req) => {
     const id = (await writable(req, req.params.id)).id;
     const amount = Number(req.body?.amount);
@@ -1009,6 +1064,8 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
       // Deliberately not gated on LIVE_TRADING_ENABLED, so turning live trading off never traps funds.
       // The kill switch does block it (CLAUDE.md: checked before every transaction).
       if (v.mode !== 'live') throw new ApiError(400, 'not_live', 'This vault is not in live mode.');
+      // A wallet made in Telegram is the vault itself: "to your wallet" would send it to itself.
+      if (v.user.wallet === v.agentPubkey) throw new ApiError(400, 'same_wallet', 'This vault wallet is your own wallet: use 💸 Withdraw in the Telegram bot to send funds elsewhere.');
       if (await killed()) throw new ApiError(423, 'kill_switch', 'Trading is halted right now. Try again later.');
       if (!v.encSecret) throw new ApiError(400, 'no_agent', 'This vault has no agent wallet.');
       const ex = new LiveExecutor({
@@ -1033,11 +1090,16 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
       const have =
         mint === SOL_MINT ? await ex.withdrawableSol(!(await db.position.count({ where: { vaultId: v.id, status: 'open' } }))) : (holdings[mint] ?? 0);
       if (amount > have) throw new ApiError(400, 'insufficient_balance', `Only ${fmt(have)} ${symbol || 'of that token'} is idle in the vault.`);
-      const sig = await ex.withdraw(mint, amount, `withdraw:${v.id}:${randomUUID()}`);
+      const sig = await ex.withdraw(mint, amount, `withdraw:${v.id}:${randomUUID()}`).catch((e: unknown) => {
+        throw withdrawRefusal(e);
+      });
       const flowUsd = await usdValue({ [mint]: amount });
       await db.vault.update({ where: { id: v.id }, data: { deposits: await shrinkDeposits(deposits, flowUsd) } });
-      await logDecision(v.id, 'exit', `Withdrew ${fmt(amount)} ${symbol || mint.slice(0, 4)}`, 'Sent to your registered wallet.', { txSig: sig, inputs: { flowUsd: -flowUsd } });
-      return overview(db, v.id, { readOnly: false });
+      // Small amounts keep their digits (0.999 SOL, not 1.00), like deposits.
+      const shown = amount.toLocaleString('en-US', { maximumFractionDigits: 4 });
+      await logDecision(v.id, 'exit', `Withdrew ${shown} ${symbol || mint.slice(0, 4)}`, 'Sent to your registered wallet.', { txSig: sig, inputs: { flowUsd: -flowUsd } });
+      // The signature, so the page can link the transfer on Solscan.
+      return { ...(await overview(db, v.id, { readOnly: false })), signature: sig };
     });
   });
 

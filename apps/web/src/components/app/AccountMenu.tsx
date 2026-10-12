@@ -11,7 +11,7 @@ import { shortWallet } from './Wallet';
 /** The avatar in the top bar: who is signed in, and a menu (portfolio, copy address, Solscan, Telegram, sign out). */
 export function AccountMenu() {
   const { me, client, overview, reload } = useAppData();
-  const { toast } = useUi();
+  const { toast, openWithdraw } = useUi();
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
@@ -100,6 +100,19 @@ export function AccountMenu() {
           <Icon id="i-wallet" />
           Portfolio
         </Link>
+        {overview?.mode === 'live' && !overview.readOnly && (
+          <button
+            role="menuitem"
+            tabIndex={open ? 0 : -1}
+            onClick={() => {
+              close();
+              openWithdraw();
+            }}
+          >
+            <Icon id="i-down" />
+            Withdraw to wallet
+          </button>
+        )}
         <button role="menuitem" tabIndex={open ? 0 : -1} onClick={copy}>
           <Icon id="i-copy" />
           Copy wallet address

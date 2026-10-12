@@ -747,6 +747,60 @@ describe('add LP by hand: options and funding from the wallet', () => {
   });
 });
 
+describe('withdraw (live)', () => {
+  it('says what can come out to the owner: SOL keeps 0.001, or the fee reserve while a position is open', async () => {
+    const owner = wallet();
+    const agent = wallet().address;
+    const TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+    const conn = {
+      getBalance: async (pk: { toBase58(): string }) => (pk.toBase58() === agent ? 1.2 : 5) * 1e9,
+      getParsedTokenAccountsByOwner: async (_pk: unknown, f: { programId: { toBase58(): string } }) => ({
+        value: f.programId.toBase58() === TOKEN_PROGRAM ? [{ account: { data: { parsed: { info: { mint: USDC, tokenAmount: { uiAmount: 40, decimals: 6 } } } } } }] : [],
+      }),
+    };
+    const sub2 = new Redis(process.env.REDIS_URL!);
+    const liveApp = await buildDbApp({ db, redis, sub: sub2, domain: 'test.binwise', rpc: () => conn as never });
+    const login = async (w: ReturnType<typeof wallet>, remoteAddress: string) => {
+      const nonce = (await liveApp.inject({ url: `/auth/nonce?wallet=${w.address}`, remoteAddress })).json();
+      const r = await liveApp.inject({ method: 'POST', url: '/auth/verify', remoteAddress, payload: { wallet: w.address, message: nonce.message, signature: w.signMsg(nonce.message) } });
+      return { cookie: `bw_session=${r.cookies.find((c) => c.name === 'bw_session')!.value}` };
+    };
+    try {
+      const v = await createVault(db, (await ensureUser(db, owner.address)).id, { live: { agentPubkey: agent, encSecret: new Uint8Array(8) } });
+      const headers = await login(owner, '10.9.9.6');
+      const read = async () => (await liveApp.inject({ url: `/vaults/${v.id}/withdrawable`, headers })).json();
+
+      const idle = await read();
+      expect(idle).toMatchObject({ to: owner.address, openPositions: 0, keptSol: 0.001 });
+      expect(idle.tokens.map((t: { symbol: string; amount: number; decimals: number }) => [t.symbol, t.amount, t.decimals])).toEqual([
+        ['SOL', 1.199, 9],
+        ['USDC', 40, 6],
+      ]);
+      expect(idle.tokens[1].usd).toBe(40);
+
+      // An open position: the fee reserve stays.
+      await db.pool.create({ data: { id: 'PLW', name: 'SOL-USDC', tokenA: 'SOL', tokenB: 'USDC', mintA: SOL, mintB: USDC, binStep: 25, baseFee: 0.1 } });
+      await db.position.create({
+        data: { vaultId: v.id, poolId: 'PLW', binStep: 25, lowerBin: -10, upperBin: 10, shape: 'spot', entryAmountA: 1, entryAmountB: 100, entryPriceA: 150, entryPriceB: 1, entryValueUsd: 250, price: 150, valueUsd: 250 },
+      });
+      const busy = await read();
+      expect(busy).toMatchObject({ openPositions: 1, keptSol: 0.25 });
+      expect(busy.tokens[0].amount).toBeCloseTo(0.95);
+
+      expect((await liveApp.inject({ url: `/vaults/${v.id}/withdrawable` })).statusCode).toBe(401);
+
+      // A wallet made in Telegram is the vault itself: "to your wallet" would go nowhere.
+      const self = wallet();
+      const own = await createVault(db, (await ensureUser(db, self.address)).id, { live: { agentPubkey: self.address, encSecret: new Uint8Array(8) } });
+      const selfHeaders = await login(self, '10.9.9.7');
+      expect((await liveApp.inject({ url: `/vaults/${own.id}/withdrawable`, headers: selfHeaders })).json().error).toBe('same_wallet');
+      expect((await liveApp.inject({ method: 'POST', url: `/vaults/${own.id}/withdraw`, headers: selfHeaders, payload: { token: 'SOL', amount: 0.1 } })).json().error).toBe('same_wallet');
+    } finally {
+      await liveApp.close(); // also closes sub2
+    }
+  });
+});
+
 describe('realtime', () => {
   it('forwards agent events to the vault stream', async () => {
     const addr = app.server.address() as { port: number };

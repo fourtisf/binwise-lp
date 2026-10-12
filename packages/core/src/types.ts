@@ -149,6 +149,17 @@ export interface VaultBalance {
   vaultSol?: number;
 }
 
+/** GET /vaults/:id/withdrawable: what the owner can take out of a live vault to their own wallet now. */
+export interface Withdrawable {
+  /** The owner's registered wallet: the only place a withdrawal goes */
+  to: string;
+  openPositions: number;
+  /** SOL that stays in the vault: 0.001 for the transfer's fee with nothing deployed, the fee reserve while positions are open */
+  keptSol: number;
+  /** SOL first, then by value; tokens with no known price too (they are still the owner's) */
+  tokens: { mint: string; symbol: string; amount: number; decimals: number; usd: number; token: TokenRef }[];
+}
+
 /** One line of a portfolio: an idle token, or an open position (value includes unclaimed fees). */
 export type PortfolioHolding =
   | {

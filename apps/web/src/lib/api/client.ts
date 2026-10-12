@@ -20,6 +20,7 @@ import type {
   VaultBalance,
   VaultMode,
   VaultOverview,
+  Withdrawable,
 } from '@binwise/core';
 
 export class ApiError extends Error {
@@ -84,6 +85,10 @@ export interface BinwiseClient {
   depositLive(signature: string): Promise<VaultOverview>;
   /** Live: record transfers the owner sent to the vault address by hand (found on-chain); what it recorded now, by mint */
   depositScan(): Promise<{ recorded: Record<string, number> }>;
+  /** Live: what can be withdrawn to the owner's own wallet now, by token */
+  withdrawable(): Promise<Withdrawable>;
+  /** Live: sends `amount` of a token from the vault to the owner's registered wallet; returns the transfer's signature */
+  withdraw(mint: string, symbol: string, amount: number): Promise<{ signature?: string }>;
   telegramLink(): Promise<{ url: string | null; code: string }>;
   /** Manual mode: trades waiting for the owner's approval */
   proposals(): Promise<Proposal[]>;

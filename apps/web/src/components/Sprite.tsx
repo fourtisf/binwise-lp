@@ -26,6 +26,7 @@ export function Sprite() {
       <symbol id="i-wallet" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><rect x="2.5" y="5.5" width="15" height="11" rx="2"/><path d="M17.5 9.5h-3.5a1.5 1.5 0 000 3h3.5M5 5.5l7.5-2.5.8 2.5"/></symbol>
       <symbol id="i-copy" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"><rect x="5.5" y="5.5" width="8" height="8" rx="1.8"/><path d="M10.5 5.5V4a1.5 1.5 0 00-1.5-1.5H4A1.5 1.5 0 002.5 4v5A1.5 1.5 0 004 10.5h1.5"/></symbol>
       <symbol id="i-ext" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M9 3h4v4M13 3L7.5 8.5M11.5 9.5v3a1 1 0 01-1 1h-7a1 1 0 01-1-1v-7a1 1 0 011-1h3"/></symbol>
+      <symbol id="i-down" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M8 2.5v7.5M4.8 7l3.2 3.2L11.2 7M2.5 11v1.5a1 1 0 001 1h9a1 1 0 001-1V11"/></symbol>
       <symbol id="i-send" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"><path d="M14 2.5L2 7.3l4.6 1.8L14 2.5zM14 2.5l-2.4 11L6.6 9.1"/></symbol>
       <symbol id="i-xlogo" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></symbol>
       </svg>
@@ -35,7 +36,7 @@ export function Sprite() {
 export type IconId =
   | 'i-mark' | 'i-home' | 'i-pools' | 'i-pos' | 'i-strat' | 'i-act' | 'i-check' | 'i-spin' | 'i-dot'
   | 'i-plus' | 'i-swap' | 'i-exit' | 'i-comp' | 'i-search' | 'i-x' | 'i-pause' | 'i-play' | 'i-chev'
-  | 'i-updown' | 'i-lock' | 'i-bolt' | 'i-copy' | 'i-ext' | 'i-send' | 'i-wallet' | 'i-xlogo';
+  | 'i-updown' | 'i-lock' | 'i-bolt' | 'i-copy' | 'i-ext' | 'i-send' | 'i-down' | 'i-wallet' | 'i-xlogo';
 
 export function Icon({ id, className }: { id: IconId; className?: string }) {
   return (

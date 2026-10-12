@@ -21,7 +21,7 @@ interface Cmd {
 
 /** ⌘K command menu: jump to pages, run actions, open a pool. */
 export function Palette() {
-  const { layer, closeLayers, openPool, openPalette, openConnect, toast } = useUi();
+  const { layer, closeLayers, openPool, openPalette, openConnect, openWithdraw, toast } = useUi();
   const { overview, pools, togglePause, setMode, client, me, reload } = useAppData();
   const router = useRouter();
   const [q, setQ] = useState('');
@@ -51,6 +51,9 @@ export function Palette() {
             },
           ]),
       { group: 'Actions', label: 'Backtest report', icon: 'i-act', run: () => router.push('/app/report') },
+      ...(client?.kind === 'http' && me && overview?.mode === 'live' && !overview.readOnly
+        ? [{ group: 'Actions', label: 'Withdraw to your wallet', icon: 'i-down' as IconId, run: openWithdraw }]
+        : []),
       ...(client?.kind === 'http' && WALLET_LOGIN
         ? [
             me
@@ -81,7 +84,7 @@ export function Palette() {
     ];
     const s = q.toLowerCase().trim();
     return cmds.filter((c) => !s || (c.match ? c.match(q) : c.label.toLowerCase().includes(s)) || c.group.toLowerCase().includes(s));
-  }, [q, pools, paused, paper, router, openPool, togglePause, setMode, client, me, reload, toast, openConnect]);
+  }, [q, pools, paused, paper, router, openPool, togglePause, setMode, client, me, reload, toast, openConnect, openWithdraw, overview?.mode, overview?.readOnly]);
 
   useEffect(() => {
     if (!on) return;

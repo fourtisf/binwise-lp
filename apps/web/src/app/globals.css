@@ -452,6 +452,19 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border:0;border-radiu
 
 .modal{position:fixed;left:50%;top:50%;transform:translate(-50%,-47%) scale(.98);width:min(420px,calc(100% - 32px));background:var(--card2);border:1px solid var(--line2);border-radius:18px;padding:22px;z-index:61;opacity:0;pointer-events:none;transition:.25s cubic-bezier(.2,.8,.2,1);box-shadow:0 40px 100px -20px rgba(0,0,0,.8)}
 .modal.on{opacity:1;pointer-events:auto;transform:translate(-50%,-50%)}
+.amt{padding:16px;border-radius:14px;background:rgba(0,0,0,.25);border:1px solid var(--line)}
+.amt .top{display:flex;justify-content:space-between;font-size:12.5px;color:var(--muted)}
+.amt .mid{display:flex;align-items:center;gap:12px;margin-top:8px}
+.amt input{flex:1;min-width:0;background:none;border:0;outline:0;font-size:36px;font-weight:600;letter-spacing:-.04em}
+.tsel{display:inline-flex;gap:2px;padding:3px;border-radius:10px;background:rgba(255,255,255,.04);border:1px solid var(--line)}
+.tsel button{display:inline-flex;align-items:center;gap:6px;padding:5px 9px;border-radius:7px;font-weight:500;font-size:13.5px;color:var(--muted)}
+.tsel button[aria-pressed=true]{background:rgba(255,255,255,.09);color:var(--text)}
+.tsel .tok{width:16px;height:16px;font-size:6.5px}
+/* Several tokens to pick from (withdraw): wrap instead of pushing the page sideways (addition to the prototype) */
+.tsel{flex-wrap:wrap;justify-content:flex-end;max-width:62%}
+.quick{display:flex;gap:6px;margin-top:12px}
+.quick button{flex:1;height:30px;border-radius:7px;border:1px solid var(--line);font-size:12.5px;font-weight:500;color:var(--muted)}
+.quick button:hover{color:var(--text);border-color:var(--line2)}
 .modal .rows{margin-top:14px}
 .modal .rows div{padding:10px 0;font-size:13.5px}
 .modal .btn[disabled],.drawer .btn[disabled]{opacity:.45;cursor:not-allowed}

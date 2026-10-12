@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from 'react';
 
-export type Layer = 'drawer' | 'palette' | 'connect' | 'confirmLive' | null;
+export type Layer = 'drawer' | 'palette' | 'connect' | 'confirmLive' | 'withdraw' | null;
 
 interface UiContext {
   layer: Layer;
@@ -14,6 +14,8 @@ interface UiContext {
   openConnect: () => void;
   /** "Real funds will be used" confirmation before live mode */
   openConfirmLive: () => void;
+  /** Withdraw from the vault to the owner's own wallet */
+  openWithdraw: () => void;
   closeLayers: () => void;
   toastText: string;
   toastOn: boolean;
@@ -52,6 +54,7 @@ export function UiProvider({ children }: { children: ReactNode }) {
       openPalette: () => setLayer('palette'),
       openConnect: () => setLayer('connect'),
       openConfirmLive: () => setLayer('confirmLive'),
+      openWithdraw: () => setLayer('withdraw'),
       closeLayers: () => setLayer(null),
       toastText,
       toastOn,

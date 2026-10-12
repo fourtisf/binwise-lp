@@ -557,7 +557,12 @@ export class LiveExecutor implements Executor {
     let ixs: TransactionInstruction[];
     let policyExtra: Partial<TxPolicy>;
     if (mint === NATIVE_MINT.toBase58()) {
-      ixs = [SystemProgram.transfer({ fromPubkey: this.me, toPubkey: owner, lamports: Math.floor(uiAmount * 1e9) })];
+      ixs = [
+        // A plain transfer uses ~450 compute units. Without a limit the priority fee is paid on 200,000, which on a
+        // busy network can eat into the 0.001 SOL a full withdrawal leaves and break the vault's rent minimum.
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 3_000 }),
+        SystemProgram.transfer({ fromPubkey: this.me, toPubkey: owner, lamports: Math.floor(uiAmount * 1e9) }),
+      ];
       policyExtra = { transferDestinations: new Set([owner.toBase58()]) };
     } else {
       const mintPk = new PublicKey(mint);
