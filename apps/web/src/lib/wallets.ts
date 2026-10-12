@@ -187,28 +187,57 @@ export async function signInWithWallet(w: Wallet, api: SignInApi, onTry?: (n: nu
 }
 
 const REMEMBERED = 'binwise:wallet';
-/** The wallet the user signed in with, so later approvals (moving SOL to the vault) go to the same one. */
-export const rememberWallet = (name: string) => {
+/** The wallet `address` signed in with, so later approvals (moving SOL to the vault) go to the same one. */
+export const rememberWallet = (name: string, address: string) => {
   try {
-    localStorage.setItem(REMEMBERED, name);
+    localStorage.setItem(`${REMEMBERED}:${address}`, name);
   } catch {
-    /* private mode: we'll ask the first wallet that has the account */
+    /* private mode: findWalletFor asks the wallets again next time */
   }
 };
-const remembered = () => {
+const remembered = (address: string) => {
   try {
-    return localStorage.getItem(REMEMBERED);
+    return localStorage.getItem(`${REMEMBERED}:${address}`);
   } catch {
     return null;
   }
 };
 
+/** The wallet holding `owner` when that's known without asking: remembered, showing the account, or the only one. */
+const knownWalletFor = (wallets: Wallet[], owner: string) =>
+  wallets.find((w) => w.name === remembered(owner)) ?? wallets.find((w) => w.accounts.some((a) => a.address === owner)) ?? (wallets.length === 1 ? wallets[0] : null);
+
+/** A wallet's answer to a silent request; one that never answers counts as no. */
+const quietly = <T,>(p: Promise<T>): Promise<T> => Promise.race([p, new Promise<T>((_, no) => setTimeout(() => no(new Error('no answer')), 2500))]);
+
 /**
- * The wallet to ask for `owner`'s approval: the one used to sign in, else one already showing that account,
- * else the only one installed. Null when several are installed and none of that is known: the user picks.
+ * The wallet `owner` signed in with, found without bothering the user: remembered from sign-in, already
+ * showing the account, or else every installed wallet asked silently whether this site is connected to
+ * that account. First the classic `connect({ onlyIfTrusted })` (Phantom, Bitget, Solflare, Trust, OKX…),
+ * then Wallet Standard's silent connect; both answer without a popup, and only for a site the wallet
+ * already trusts. Remembers what it finds. Null if no wallet claims the account.
  */
-export const walletFor = (wallets: Wallet[], owner: string) =>
-  wallets.find((w) => w.name === remembered()) ?? wallets.find((w) => w.accounts.some((a) => a.address === owner)) ?? (wallets.length === 1 ? wallets[0] : null);
+export async function findWalletFor(wallets: Wallet[], owner: string): Promise<Wallet | null> {
+  const known = knownWalletFor(wallets, owner);
+  if (known) return known;
+  const classic = async (w: Wallet) => {
+    const p = injectedFor(w.name);
+    if (!p || (/phantom/i.test(w.name) && impostorOf(p))) return false;
+    const r = await quietly(p.connect({ onlyIfTrusted: true }));
+    return ((r && 'publicKey' in r ? r.publicKey : null) ?? p.publicKey)?.toBase58() === owner;
+  };
+  const standard = async (w: Wallet) => (await quietly((w.features as StandardConnectFeature)[StandardConnect].connect({ silent: true }))).accounts.some((a) => a.address === owner);
+  for (const ask of [classic, standard]) {
+    // One silent request per wallet, all at once; the first wallet (in install order) that claims the account wins.
+    const yes = await Promise.all(wallets.map((w) => ask(w).catch(() => false)));
+    const w = wallets[yes.indexOf(true)];
+    if (w) {
+      rememberWallet(w.name, owner);
+      return w;
+    }
+  }
+  return null;
+}
 
 /** Broadcasts a transaction the wallet signed but didn't send (base64 → Binwise → Solana); returns its signature. */
 export type Relay = (signed: Uint8Array) => Promise<string>;

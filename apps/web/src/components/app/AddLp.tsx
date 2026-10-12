@@ -18,7 +18,7 @@ import { usd } from '@/lib/format';
 import { BOT_URL } from '@/lib/site';
 import { useAppData } from '@/lib/store';
 import { useUi } from '@/lib/ui';
-import { SignInError, rememberWallet, sendWithWallet, walletFor, type Wallet } from '@/lib/wallets';
+import { SignInError, findWalletFor, rememberWallet, sendWithWallet, type Wallet } from '@/lib/wallets';
 import { Icon } from '../Sprite';
 import { Tok } from '../Tokens';
 import { LpRecommend, RecDot } from './LpRecommend';
@@ -87,8 +87,11 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
   const [payS, setPayS] = useState('');
   const [moving, setMoving] = useState(false);
   const [moveErr, setMoveErr] = useState<string | null>(null);
-  /** The wallet the owner picked to approve transfers in, when several are installed */
+  /** Only when the wallet the owner signed in with can't be found or fails: they pick it among those installed */
+  const [picking, setPicking] = useState(false);
   const [walletPick, setWalletPick] = useState<string | null>(null);
+  /** The wallet asked to approve right now */
+  const [asking, setAsking] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
 
   // A new pool starts on the recommendation; the side is set once its Add LP data arrives.
@@ -342,16 +345,37 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
       : e instanceof ApiError
         ? e.message
         : 'Something went wrong. Nothing was sent; try again.';
-  /** Where transfers are approved: the wallet picked here, else the one used to sign in (see walletFor). */
-  const approver = wallets.find((w) => w.name === walletPick) ?? (me ? walletFor(wallets, me.wallet) : null);
-  /** The wallet to approve with, or why there is none. */
-  const pickWallet = (sol: number) => {
+  /** The wallet to approve in: the one the owner signed in with, found on its own (see findWalletFor). */
+  const pickWallet = async (sol: number): Promise<Wallet | string> => {
     if (!(sol > 0) || sol > movable) return `Enter up to ${amount(movable)} SOL (a little stays for the network fee).`;
     if (!wallets.length) return 'No wallet found in this browser. Open this page where you signed in (Phantom, Solflare, Backpack or Bitget).';
-    return approver ?? 'Pick the wallet you signed in with under “Approve in”.';
+    const w = wallets.find((x) => x.name === walletPick) ?? (await findWalletFor(wallets, me!.wallet));
+    if (w) return w;
+    setPicking(true);
+    return 'Pick the wallet you signed in with under “Approve in”.';
   };
-  /** With several wallets installed: which one approves the transfer (the one holding the signed-in account). */
-  const approveIn = wallets.length > 1 && me && (
+  /** Runs `fn` with the owner's wallet; a failure shows under the amount, and offers the other wallets if it was the wallet. */
+  const withWallet = async (sol: number, fn: (w: Wallet) => Promise<unknown>) => {
+    setMoveErr(null);
+    if (!client || !me || !wallet) return;
+    setMoving(true);
+    let name = 'your wallet';
+    try {
+      const w = await pickWallet(sol);
+      if (typeof w === 'string') return setMoveErr(w);
+      name = w.name;
+      setAsking(w.name);
+      await fn(w);
+    } catch (e) {
+      if (e instanceof SignInError && e.kind === 'wallet' && wallets.length > 1) setPicking(true);
+      setMoveErr(walletError(e, name));
+    } finally {
+      setMoving(false);
+      setAsking(null);
+    }
+  };
+  /** Shown only when the signed-in wallet wasn't found or failed and several are installed. */
+  const approveIn = picking && wallets.length > 1 && me && (
     <>
       <span style={label}>Approve in</span>
       <div className="seg" style={{ ...segFull, flexWrap: 'wrap' }} role="group" aria-label="Wallet to approve in">
@@ -359,11 +383,11 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
           <button
             key={w.name}
             style={{ ...segBtn, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, whiteSpace: 'nowrap' }}
-            aria-pressed={approver?.name === w.name}
+            aria-pressed={walletPick === w.name}
             disabled={moving}
             onClick={() => {
               setWalletPick(w.name);
-              rememberWallet(w.name);
+              rememberWallet(w.name, me.wallet);
               setMoveErr(null);
             }}
           >
@@ -374,28 +398,18 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
         ))}
       </div>
       <p className="muted" style={{ fontSize: 12, lineHeight: 1.5, marginTop: 6 }}>
-        The wallet you signed in with ({me.wallet.slice(0, 4)}…{me.wallet.slice(-4)}).
+        The wallet you signed in with ({me.wallet.slice(0, 4)}…{me.wallet.slice(-4)}). Binwise remembers it.
       </p>
     </>
   );
-  const move = async () => {
-    const sol = Number(moveS);
-    setMoveErr(null);
-    if (!client || !me || !wallet) return;
-    const w = pickWallet(sol);
-    if (typeof w === 'string') return setMoveErr(w);
-    setMoving(true);
-    try {
+  const move = () =>
+    withWallet(Number(moveS), async (w) => {
+      const sol = Number(moveS);
       const recorded = await sendSol(sol, w);
       toast(recorded ? `Moved ${amount(sol)} SOL to your vault` : 'Sent. It shows in the vault once Solana confirms it.');
       setMoveS('');
       reload();
-    } catch (e) {
-      setMoveErr(walletError(e, w.name));
-    } finally {
-      setMoving(false);
-    }
-  };
+    });
 
   // ---- paying with SOL from the wallet (empty vault): move it in, then the agent swaps and adds LP
   // Also when the vault holds too little to add anything here.
@@ -417,19 +431,14 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
           .map(([m, sym, u]) => ({ from: 'SOL', fromMint: SOL_MINT, to: sym, toMint: m, usd: u }))
       : [];
   const payTooSmall = paySol > 0 && !!lim && payLpUsd < lim.minUsd;
-  const payAndAdd = async () => {
-    setMoveErr(null);
-    if (!client || !me || !wallet) return;
-    const w = pickWallet(paySol);
-    if (typeof w === 'string') return setMoveErr(w);
-    setMoving(true);
-    try {
+  const payAndAdd = () =>
+    withWallet(paySol, async (w) => {
       if (!(await sendSol(paySol, w))) {
         toast('Sent. Add LP once Solana confirms the transfer.');
         return reload();
       }
       // Size it from the vault as it is now that the SOL is in.
-      const fresh = await client.balance(x.id);
+      const fresh = await client!.balance(x.id);
       const size = Math.min(payLpUsd, fresh.pool?.maxUsd ?? 0);
       if (!fresh.pool || size < fresh.pool.minUsd) {
         setMoveErr(`Moved ${amount(paySol)} SOL to your vault, but this pool can't take enough of it right now. Try a smaller amount or another pool.`);
@@ -438,12 +447,7 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
       deploy(x.id, size, x.call !== 'in', opts);
       setPayS('');
       reload();
-    } catch (e) {
-      setMoveErr(walletError(e, w.name));
-    } finally {
-      setMoving(false);
-    }
-  };
+    });
 
   const disabled = payMode
     ? (x.call !== 'in' && !risk) || moving || !(paySol > 0) || payTooSmall || (custom && !!rangeErr)
@@ -561,7 +565,7 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
             </p>
           )}
           <button className="btn btn-dark btn-sm" style={{ width: '100%', marginTop: 10 }} disabled={moving || !(Number(moveS) > 0)} onClick={move}>
-            {moving ? `Approve in ${approver?.name ?? 'your wallet'}…` : `Move ${Number(moveS) > 0 ? amount(Number(moveS)) + ' ' : ''}SOL to the vault`}
+            {moving ? `Approve in ${asking ?? 'your wallet'}…` : `Move ${Number(moveS) > 0 ? amount(Number(moveS)) + ' ' : ''}SOL to the vault`}
           </button>
         </div>
       )}
@@ -861,7 +865,7 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
         <Icon id="i-plus" />
         {payMode
           ? moving
-            ? `Approve in ${approver?.name ?? 'your wallet'}…`
+            ? `Approve in ${asking ?? 'your wallet'}…`
             : `Swap & add LP${paySol > 0 ? ` with ${amount(paySol)} SOL` : ''}`
           : swaps && !blocked && swaps.out.length
             ? `Swap & add LP to ${x.pair}`

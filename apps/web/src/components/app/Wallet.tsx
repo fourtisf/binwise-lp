@@ -132,7 +132,7 @@ export function ConnectModal() {
         (n) => run.current === id && setTryN(n),
       );
       // Signed in (the session cookie is set) even if the user pressed Cancel meanwhile.
-      rememberWallet(w.name);
+      rememberWallet(w.name, address);
       closeLayers();
       toast(`Signed in as ${shortWallet(address)}`);
       reload();
