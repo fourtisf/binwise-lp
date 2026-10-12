@@ -64,7 +64,8 @@ export function lineChart(
   const mn = ticks[0];
   const mx = ticks[ticks.length - 1];
   const n = labels.length;
-  const X = (i: number) => pad.l + ((W - pad.l - pad.r) * i) / (n - 1);
+  // One point (a brand-new vault) sits in the middle instead of dividing by zero.
+  const X = (i: number) => pad.l + (n > 1 ? ((W - pad.l - pad.r) * i) / (n - 1) : (W - pad.l - pad.r) / 2);
   const Y = (v: number) => pad.t + (H - pad.t - pad.b) * (1 - (v - mn) / (mx - mn));
   const gid = 'lg' + uid++;
   let g = '';
@@ -76,10 +77,10 @@ export function lineChart(
   const xt = Math.min(W < 500 ? 3 : 5, n);
   const shown = new Set<string>();
   for (let k = 0; k < xt; k++) {
-    const i = Math.round(((n - 1) * k) / (xt - 1));
+    const i = xt > 1 ? Math.round(((n - 1) * k) / (xt - 1)) : 0;
     if (shown.has(labels[i])) continue;
     shown.add(labels[i]);
-    g += `<text x="${X(i)}" y="${H - 6}" text-anchor="${k == 0 ? 'start' : k == xt - 1 ? 'end' : 'middle'}">${labels[i]}</text>`;
+    g += `<text x="${X(i)}" y="${H - 6}" text-anchor="${xt == 1 ? 'middle' : k == 0 ? 'start' : k == xt - 1 ? 'end' : 'middle'}">${labels[i]}</text>`;
   }
   let paths = '';
   series
@@ -141,7 +142,7 @@ export function sparkPath(vals: number[], w: number, h: number): string {
   const mx = Math.max(...vals);
   const n = vals.length;
   return vals
-    .map((v, i) => (i ? 'L' : 'M') + ((i / (n - 1)) * w).toFixed(1) + ' ' + (h - 2 - ((v - mn) / (mx - mn || 1)) * (h - 4)).toFixed(1))
+    .map((v, i) => (i ? 'L' : 'M') + ((n > 1 ? i / (n - 1) : 0.5) * w).toFixed(1) + ' ' + (h - 2 - ((v - mn) / (mx - mn || 1)) * (h - 4)).toFixed(1))
     .join('');
 }
 

@@ -184,7 +184,8 @@ export class LiveChart {
     const ymin = this.ymin;
     const ymax = this.ymax;
     const Y = (v: number) => pad.t + (H - pad.t - pad.b) * (1 - (v - ymin) / (ymax - ymin));
-    const step = (plotR - pad.l) / (n - 3);
+    // A new position has only a few prices: never divide by zero (the line would be NaN).
+    const step = (plotR - pad.l) / Math.max(1, n - 3);
     const X = (i: number) => plotR - (n - 1 - i) * step + (1 - e) * step;
     let dp = '';
     for (let i = 0; i < n; i++) dp += (i ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(d[i]).toFixed(1);

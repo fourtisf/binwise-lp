@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { AppDataProvider } from '@/lib/store';
+import { ErrorBoundary } from '../ErrorBoundary';
 import { UiProvider, useUi } from '@/lib/ui';
 import { Icon } from '../Sprite';
 import { Palette } from './Palette';
@@ -22,14 +23,21 @@ function Shell({ children }: { children: ReactNode }) {
     <>
       <div id="app">
         <div className="shell">
-          <Sidebar current={page.key} />
+          <ErrorBoundary area="sidebar">
+            <Sidebar current={page.key} />
+          </ErrorBoundary>
           <div className="main">
-            <Topbar title={page.title} />
+            <ErrorBoundary area="top bar">
+              <Topbar title={page.title} />
+            </ErrorBoundary>
             <div className="phead">
               <h1 id="pgTitle">{page.title}</h1>
               <p id="pgSub">{page.sub}</p>
             </div>
-            {children}
+            {/* A new page starts without the last page's error. */}
+            <ErrorBoundary area={page.title} key={page.key}>
+              {children}
+            </ErrorBoundary>
           </div>
         </div>
         <nav className="bnav" aria-label="App">
@@ -43,10 +51,20 @@ function Shell({ children }: { children: ReactNode }) {
       </div>
       <div className={`scrim${layer ? ' on' : ''}`} id="scrim" onClick={closeLayers}></div>
       <PoolDrawer />
-      {WALLET_LOGIN && <ConnectModal />}
-      <ConfirmLiveModal />
-      <Palette />
-      <Toast />
+      {WALLET_LOGIN && (
+        <ErrorBoundary area="wallet sign-in">
+          <ConnectModal />
+        </ErrorBoundary>
+      )}
+      <ErrorBoundary area="live mode" fallback="quiet">
+        <ConfirmLiveModal />
+      </ErrorBoundary>
+      <ErrorBoundary area="search" fallback="quiet">
+        <Palette />
+      </ErrorBoundary>
+      <ErrorBoundary area="notice" fallback="quiet">
+        <Toast />
+      </ErrorBoundary>
     </>
   );
 }
