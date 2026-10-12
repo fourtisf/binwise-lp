@@ -552,6 +552,16 @@ describe('agent cycle (self-custody: the owner\'s wallet signs)', () => {
     expect(await db.proposal.count({ where: { status: 'pending', kind: 'exit' } })).toBe(1);
   });
 
+  it('leaves a position alone while a plan the owner approved is closing or moving it (the website records it)', async () => {
+    await selfCustodyWithPosition();
+    const pos = await db.position.findFirstOrThrow();
+    advance(1);
+    await collect();
+    await runVaultCycle({ ...deps(), executorFor: async () => reader(true), pendingPlanPositions: async () => new Set([pos.id]) }, await vault());
+    expect((await db.position.findUniqueOrThrow({ where: { id: pos.id } })).status).toBe('open');
+    expect(await db.decision.count({ where: { type: 'exit' } })).toBe(0);
+  });
+
   it('records a position closed from the wallet outside Binwise as money leaving the vault', async () => {
     await selfCustodyWithPosition();
     const pos = await db.position.findFirstOrThrow();

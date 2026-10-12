@@ -79,13 +79,50 @@ let walletLamports = 5e9;
 let simulatedSpend: (amountIn: bigint, fromSol: boolean) => bigint = (a, fromSol) => (fromSol ? a : 0n) + 5000n;
 let lastSwapIn = 0n;
 let lastSwapFromSol = false;
+/** What a simulated swap delivers to the owner's account for the output token (raw); null: delivered elsewhere */
+let lastSwapOut: bigint | null = 0n;
+/** The owner's other token accounts (spam and empty ones too), none of them used by the swaps here */
+let otherAccounts = 0;
+/** Simulations asked for, and the accounts each wanted reported */
+const simulated: string[][] = [];
+/** An SPL token account holding `amount` (raw): the amount is the u64 at offset 64. */
+const tokenAccount = (amount: bigint) => {
+  const b = Buffer.alloc(165);
+  b.writeBigUInt64LE(amount, 64);
+  return b.toString('base64');
+};
 const conn = {
   rpcEndpoint: 'http://fake',
   getBalance: async () => walletLamports,
   getLatestBlockhash: async () => ({ blockhash: Keypair.generate().publicKey.toBase58(), lastValidBlockHeight: 100 }),
   getRecentPrioritizationFees: async () => [{ slot: 1, prioritizationFee: 50_000 }],
-  getParsedTokenAccountsByOwner: async () => ({ value: [] }),
-  simulateTransaction: async () => ({ value: { err: null, logs: [], accounts: [{ lamports: walletLamports - Number(simulatedSpend(lastSwapIn, lastSwapFromSol)), data: ['', 'base64'] }] } }),
+  getAccountInfo: async () => ({ owner: new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA') }),
+  getParsedTokenAccountsByOwner: async (_o: unknown, { programId }: { programId: PublicKey }) => ({
+    value:
+      programId.toBase58() === 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'
+        ? Array.from({ length: otherAccounts }, () => ({
+            pubkey: Keypair.generate().publicKey,
+            account: { data: { parsed: { info: { mint: Keypair.generate().publicKey.toBase58(), tokenAmount: { amount: '0' } } } } },
+          }))
+        : [],
+  }),
+  // Like Solana: never more accounts reported than the transaction uses.
+  simulateTransaction: async (tx: VersionedTransaction, o: { accounts: { addresses: string[] } }) => {
+    const addresses = o.accounts.addresses;
+    simulated.push(addresses);
+    if (addresses.length > tx.message.staticAccountKeys.length + 1) throw new Error(`Too many accounts provided; max ${tx.message.staticAccountKeys.length}`);
+    return {
+      value: {
+        err: null,
+        logs: [],
+        accounts: addresses.map((a) =>
+          a === owner.toBase58()
+            ? { lamports: walletLamports - Number(simulatedSpend(lastSwapIn, lastSwapFromSol)), data: ['', 'base64'] }
+            : { lamports: 2_039_280, data: [tokenAccount(lastSwapOut ?? 0n), 'base64'] },
+        ),
+      },
+    };
+  },
 };
 
 /** Jupiter stand-in: fair quotes at `rate` (out per in, UI) with a 0.5% floor, and a swap tx paid by the user. */
@@ -97,6 +134,7 @@ const jupiter = {
     lastSwapFromSol = inputMint === SOL;
     const outUi = (Number(amountRaw) / 10 ** decimals[inputMint]) * rate[`${inputMint}>${outputMint}`];
     const out = Math.floor(outUi * 10 ** decimals[outputMint]);
+    lastSwapOut = BigInt(out);
     return { inputMint, outputMint, inAmount: amountRaw, outAmount: String(out), otherAmountThreshold: String(Math.floor(out * 0.995)), swapMode: 'ExactIn', slippageBps: 50, priceImpactPct: '0', routePlan: [] };
   },
   swap: async (_q: unknown, user: string) => {
@@ -116,7 +154,9 @@ beforeEach(() => {
   held = { x: 200_000_000, y: 30_000_000 };
   fillRatio = 0.15;
   simulatedSpend = (a, fromSol) => (fromSol ? a : 0n) + 5000n;
-  rate = { [`${SOL}>${CARDS}`]: 1000, [`${SOL}>${USDC}`]: 150, [`${CARDS}>${USDC}`]: 0.15, [`${USDC}>${CARDS}`]: 1 / 0.15 };
+  rate = { [`${SOL}>${CARDS}`]: 1000, [`${SOL}>${USDC}`]: 150, [`${CARDS}>${USDC}`]: 0.15, [`${USDC}>${CARDS}`]: 1 / 0.15, [`${USDC}>${SOL}`]: 1 / 150 };
+  otherAccounts = 0;
+  simulated.length = 0;
 });
 
 describe('planOpen (self-custody)', () => {
@@ -172,7 +212,28 @@ describe('checkSwapEffects', () => {
   it('refuses a swap paid by another wallet', async () => {
     const msg = new TransactionMessage({ payerKey: stranger, recentBlockhash: Keypair.generate().publicKey.toBase58(), instructions: [] }).compileToV0Message();
     const b64 = Buffer.from(new VersionedTransaction(msg).serialize()).toString('base64');
-    await expect(checkSwapEffects(conn as never, owner, b64, SOL, USDC, 1n, 1n)).rejects.toThrow(/not paid by your wallet/);
+    await expect(checkSwapEffects(conn as never, owner, VersionedTransaction.deserialize(Buffer.from(b64, 'base64')), { from: SOL, to: USDC, amountIn: '1', minOut: '1' })).rejects.toThrow(
+      /not paid by your wallet/,
+    );
+  });
+
+  it('watches only the accounts the swap uses, so a wallet full of token accounts can still swap', async () => {
+    otherAccounts = 120;
+    const p = await planOpen(d, { owner: owner.toBase58(), pool, budget: { [SOL]: 1 }, prices, shape: 'spot', side: 'both', binsEachSide: 10 });
+    expect(p.swaps).toHaveLength(2);
+    // The owner's account for the output, and the owner: none of the 120 others.
+    expect(simulated.map((a) => a.length)).toEqual([2, 2]);
+  });
+
+  it("refuses a swap whose output wouldn't reach the owner's account for it (a new one included)", async () => {
+    const swap = await jupiter.swap(null, owner.toBase58());
+    lastSwapIn = 1_000_000n;
+    lastSwapFromSol = true;
+    lastSwapOut = null;
+    const tx = VersionedTransaction.deserialize(Buffer.from(swap.swapTransaction, 'base64'));
+    await expect(checkSwapEffects(conn as never, owner, tx, { from: SOL, to: USDC, amountIn: '1000000', minOut: '100' })).rejects.toThrow(/output wouldn't arrive/);
+    lastSwapOut = 150n;
+    await expect(checkSwapEffects(conn as never, owner, tx, { from: SOL, to: USDC, amountIn: '1000000', minOut: '100' })).resolves.toBeUndefined();
   });
 });
 
@@ -185,6 +246,9 @@ describe('planClose / planRebalance (self-custody)', () => {
     expect(p.out).toEqual({ [CARDS]: 201, [USDC]: 30.5 });
     expect(p.steps.map((s) => s.label)).toEqual(['Close the position', 'Swap CARDS → USDC']);
     expect(p.swaps[0].inUi).toBeCloseTo(200.799, 3);
+    // The CARDS are still in the position until the close lands: the swap is checked when it is sent, not now.
+    expect(simulated).toHaveLength(0);
+    expect(p.steps[1].check).toMatchObject({ from: CARDS, to: USDC, amountIn: '200799000' });
   });
 
   it("refuses a position the owner doesn't own", async () => {
@@ -204,6 +268,19 @@ describe('planClose / planRebalance (self-custody)', () => {
     expect(p.open.swaps[0].inUi).toBeLessThan(31);
     // Never more than came back.
     expect(p.open.position.amountX * 0.15 + p.open.position.amountY).toBeLessThanOrEqual(60.65);
+  });
+
+  it('counts the SOL coming back from the close when the new range needs SOL', async () => {
+    // A SOL pool, all SOL after a rise (0.4 SOL); the wallet itself holds only enough for the new position's rent.
+    const solPool = { ...pool, mintX: SOL, decimalsX: 9, usdX: 150, price: 150 };
+    held = { x: 400_000_000, y: 0 };
+    fillRatio = 150 / 1000; // USDC (6 decimals) per lamport-scaled SOL at 150
+    walletLamports = 0.09e9;
+    const p = await planRebalance(d, { owner: owner.toBase58(), pool: solPool, position: Keypair.generate().publicKey.toBase58(), prices, shape: 'spot', side: 'both', binsEachSide: 10 });
+    expect(p.steps.map((s) => s.kind)).toEqual(['close', 'swap', 'open']);
+    expect(p.open.swaps[0]).toMatchObject({ from: SOL, to: USDC });
+    // The swap spends SOL that only arrives with the close: checked at send time.
+    expect(simulated).toHaveLength(0);
   });
 
   it('rebalances a balanced position without swapping', async () => {

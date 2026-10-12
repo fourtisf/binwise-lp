@@ -49,6 +49,7 @@ export function createMockClient(): BinwiseClient {
     deploy: unsupported,
     walletPrepare: unsupported,
     walletSend: unsupported,
+    walletCancel: unsupported,
     walletTx: unsupported,
     walletPending: () => Promise.resolve([]),
     walletDone: unsupported,

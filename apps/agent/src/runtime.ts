@@ -1,4 +1,4 @@
-import { DEFAULT_COSTS } from '@binwise/core';
+import { DEFAULT_COSTS, REDIS_KEYS } from '@binwise/core';
 import {
   JitoClient,
   LiveExecutor,
@@ -46,6 +46,11 @@ export function makeAgentDeps(redis: Redis, db: PrismaClient = getDb(), telegram
         await new Promise((res) => setTimeout(res, 500));
       }
       throw new Error('Timed out waiting for other live deploys to finish.');
+    },
+    pendingPlanPositions: async (vaultId) => {
+      const ids = await redis.smembers(REDIS_KEYS.walletPlans(vaultId));
+      const plans = await Promise.all(ids.map((id) => redis.get(REDIS_KEYS.walletPlan(id))));
+      return new Set(plans.flatMap((raw) => (raw ? [(JSON.parse(raw) as { positionId?: string }).positionId ?? ''] : [])).filter(Boolean));
     },
     // Manual mode: each new proposal goes to the owner's chat with Approve / Reject buttons.
     onProposal: telegram

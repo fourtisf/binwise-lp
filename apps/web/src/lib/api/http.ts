@@ -81,7 +81,10 @@ export function createHttpClient(api: string, ws: string): BinwiseClient {
     close: (id) => post(`/positions/${encodeURIComponent(id)}/close`),
     deploy: (poolId, usd, override, opts) => post(`/vaults/${vault}/deploy`, { poolId, usd, override, ...opts }),
     walletPrepare: (action, legacyOnly) => post(`${v()}/wallet/prepare`, { ...action, legacyOnly }),
-    walletSend: (tx) => post(`${v()}/wallet/send`, { tx }),
+    walletSend: (tx, planId, step) => post(`${v()}/wallet/send`, { tx, planId, step }),
+    walletCancel: async (planId) => {
+      await post(`${v()}/wallet/plans/${encodeURIComponent(planId)}/cancel`);
+    },
     walletTx: (sig) => req(`${v()}/wallet/tx/${encodeURIComponent(sig)}`),
     walletPending: () => req(`${v()}/wallet/pending`),
     walletDone: (planId, signatures) => post(`${v()}/wallet/plans/${encodeURIComponent(planId)}/done`, { signatures }),

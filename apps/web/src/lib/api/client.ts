@@ -102,8 +102,10 @@ export interface BinwiseClient {
    * everything). legacyOnly: for a wallet that can't sign versioned transactions.
    */
   walletPrepare(action: WalletAction, legacyOnly: boolean): Promise<WalletPlan>;
-  /** Self-custody: sends one transaction the owner's wallet signed (base64) and waits a little for Solana */
-  walletSend(tx: string): Promise<WalletTxStatus & { signature: string }>;
+  /** Self-custody: sends step `step` of a plan, as the owner's wallet signed it (base64), and waits a little for Solana */
+  walletSend(tx: string, planId: string, step: number): Promise<WalletTxStatus & { signature: string }>;
+  /** Self-custody: drops a plan the wallet never carried out (rejected, or stopped before anything was sent) */
+  walletCancel(planId: string): Promise<void>;
   walletTx(signature: string): Promise<WalletTxStatus>;
   /** Self-custody: plans prepared but not recorded yet (finished after a reload) */
   walletPending(): Promise<{ planId: string; action: string; pair: string; createdAt: number }[]>;

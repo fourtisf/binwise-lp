@@ -38,12 +38,19 @@ export async function runWalletPlan(o: {
   const plan = await o.client.walletPrepare(o.action, !signsVersioned(o.wallet));
   if (o.stopped()) throw new SignInError('stopped', 'Stopped waiting for the wallet.');
   o.onPhase({ phase: 'approve', steps: plan.steps.length, summary: plan.summary });
-  const signed = await signAllWithWallet(
-    o.wallet,
-    o.owner,
-    plan.steps.map((s) => fromBase64(s.tx)),
-    o.stopped,
-  );
+  let signed: Uint8Array[];
+  try {
+    signed = await signAllWithWallet(
+      o.wallet,
+      o.owner,
+      plan.steps.map((s) => fromBase64(s.tx)),
+      o.stopped,
+    );
+  } catch (e) {
+    // Nothing signed reaches Solana without this page: the plan is dead, so another can be prepared right away.
+    void o.client.walletCancel(plan.planId).catch(() => {});
+    throw e;
+  }
 
   const sigs: string[] = [];
   /** Stopped at step `i`: what went through before it, and that everything is still in the owner's wallet. */
@@ -59,8 +66,11 @@ export async function runWalletPlan(o: {
     o.onPhase({ phase: 'send', step: i + 1, steps: signed.length, label: plan.steps[i].label });
     let r: WalletTxStatus;
     try {
-      r = await o.client.walletSend(toBase64(signed[i]));
+      r = await o.client.walletSend(toBase64(signed[i]), plan.planId, i);
     } catch (e) {
+      // The first step refused before it was sent (Solana's simulation, a checked swap, a switch): nothing of the plan can land.
+      if (i === 0 && e instanceof ApiError && ['sim_failed', 'swap_refused', 'unsigned', 'bad_tx', 'kill_switch', 'live_disabled'].includes(e.code))
+        void o.client.walletCancel(plan.planId).catch(() => {});
       throw stoppedAt(i, e instanceof ApiError ? e.message : 'Could not reach Binwise.');
     }
     const sig = r.signature!;
@@ -81,7 +91,8 @@ export async function runWalletPlan(o: {
       const d = await o.client.walletDone(plan.planId, sigs);
       return { title: d.title ?? 'Done' };
     } catch (e) {
-      if (!(e instanceof ApiError) || (e.code !== 'not_yet' && e.code !== 'rate_limited')) throw e;
+      // Not on Solana yet, or the agent is busy with this vault for a moment: ask again.
+      if (!(e instanceof ApiError) || !['not_yet', 'rate_limited', 'vault_busy'].includes(e.code)) throw e;
     }
   }
   // Landed, not readable yet: the app records it on its next load (finishPendingPlans).

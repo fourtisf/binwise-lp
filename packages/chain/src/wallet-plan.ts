@@ -1,7 +1,7 @@
 import type DLMMClass from '@meteora-ag/dlmm';
 import type { LbPosition } from '@meteora-ag/dlmm';
 import { ComputeBudgetProgram, Keypair, PublicKey, VersionedTransaction, type Connection, type Transaction } from '@solana/web3.js';
-import { NATIVE_MINT, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from '@solana/spl-token';
+import { NATIVE_MINT, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID, getAssociatedTokenAddressSync } from '@solana/spl-token';
 import BN from 'bn.js';
 import { DEFAULT_COSTS, composition, openPosition, type CostModel, type CustomRange, type LiquidityShape, type LiquiditySide } from '@binwise/core';
 import type { ActionResult, Executor, Holdings, MarkResult, OpenResult, PoolCtx, PositionRef } from './executor';
@@ -37,6 +37,16 @@ export interface WalletStep {
   tx: string;
   /** 'swap' steps can be checked before signing; later steps rely on them */
   kind: 'swap' | 'open' | 'add' | 'close' | 'claim';
+  /** A swap: what it may take and must deliver, checked again right before it is sent (raw amounts) */
+  check?: SwapCheck;
+}
+
+/** What a swap may take from the owner's wallet and the least it must deliver there (raw amounts). */
+export interface SwapCheck {
+  from: string;
+  to: string;
+  amountIn: string;
+  minOut: string;
 }
 
 export interface WalletPlanDeps {
@@ -83,6 +93,11 @@ export interface OpenWalletRequest {
   side: LiquiditySide;
   binsEachSide: number;
   range?: CustomRange;
+  /**
+   * What earlier steps of the same plan bring into the wallet before this one runs (a rebalance's close):
+   * counted as there, and the swaps are checked when they are sent instead of now.
+   */
+  incoming?: Amounts;
 }
 
 const fromBase64 = (b64: string) => Buffer.from(b64, 'base64');
@@ -139,7 +154,17 @@ async function ownerTokenAccounts(conn: Connection, owner: PublicKey) {
  * against the owner's accounts shows only the input leaving (by at most its amount, plus fees) and at
  * least the minimum arriving. A bad route never reaches the wallet.
  */
-async function swapStep(d: WalletPlanDeps, owner: PublicKey, from: string, to: string, inUi: number, prices: Amounts, pool?: PoolCtx): Promise<{ step: WalletStep; swap: SwapStep }> {
+async function swapStep(
+  d: WalletPlanDeps,
+  owner: PublicKey,
+  from: string,
+  to: string,
+  inUi: number,
+  prices: Amounts,
+  pool?: PoolCtx,
+  /** False when an earlier step must land first (the tokens are still in a position): checked at send time only */
+  precheck = true,
+): Promise<{ step: WalletStep; swap: SwapStep }> {
   const [decIn, decOut] = await Promise.all([decimalsOf(d.conn, from, pool), decimalsOf(d.conn, to, pool)]);
   const amountRaw = raw(inUi, decIn).toString();
   if (amountRaw === '0') throw new Error('Swap amount is too small.');
@@ -152,32 +177,53 @@ async function swapStep(d: WalletPlanDeps, owner: PublicKey, from: string, to: s
   if (outUsd < inUsd * (1 - MAX_SWAP_LOSS))
     throw new Error(`Swapping would return about $${outUsd.toFixed(2)} for $${inUsd.toFixed(2)}, more than ${MAX_SWAP_LOSS * 100}% below market. Try a smaller amount or another pool.`);
   const { swapTransaction } = await d.jupiter.swap(quote, owner.toBase58(), 200_000, d.legacyOnly);
-  await checkSwapEffects(d.conn, owner, swapTransaction, from, to, BigInt(amountRaw), BigInt(quote.otherAmountThreshold));
-  return { step: { label: `Swap ${symbolOf(d, from)} → ${symbolOf(d, to)}`, tx: swapTransaction, kind: 'swap' }, swap: { from, to, inUi: ui(amountRaw, decIn), minOutUi } };
+  const check: SwapCheck = { from, to, amountIn: amountRaw, minOut: quote.otherAmountThreshold };
+  if (precheck) await checkSwapEffects(d.conn, owner, VersionedTransaction.deserialize(fromBase64(swapTransaction)), check);
+  return { step: { label: `Swap ${symbolOf(d, from)} → ${symbolOf(d, to)}`, tx: swapTransaction, kind: 'swap', check }, swap: { from, to, inUi: ui(amountRaw, decIn), minOutUi } };
 }
 
 /** Lamports a swap may use besides its input: network fee, priority fee, new token accounts. */
 const SWAP_SOL_TOLERANCE = 10_000_000n;
 
-/** Simulates an unsigned swap for the owner and refuses it unless it only does what was asked. */
-export async function checkSwapEffects(conn: Connection, owner: PublicKey, txB64: string, from: string, to: string, amountIn: bigint, minOut: bigint) {
-  const tx = VersionedTransaction.deserialize(fromBase64(txB64));
+/**
+ * Simulates a swap for the owner and refuses it unless it only does what was asked: only `from` leaves the
+ * wallet (at most its amount, plus fees) and at least the minimum of `to` arrives in the owner's own account
+ * for it. Unsigned before the wallet sees it (`signed` false), or as signed right before it is sent.
+ *
+ * Only accounts the transaction itself uses can change, and Solana reports at most that many, so the check
+ * watches the owner's token accounts among them, the owner's account for `to`, and the owner's SOL.
+ */
+export async function checkSwapEffects(conn: Connection, owner: PublicKey, tx: VersionedTransaction, c: SwapCheck, signed = false) {
   if (!tx.message.staticAccountKeys[0]?.equals(owner)) throw new PolicyViolation('The swap is not paid by your wallet.');
-  const before = await ownerTokenAccounts(conn, owner);
+  const tables = await Promise.all(
+    tx.message.addressTableLookups.map(async (l) => {
+      const t = (await withRetry(() => conn.getAddressLookupTable(l.accountKey), 3, 'getAddressLookupTable')).value;
+      if (!t) throw new Error("Couldn't read the swap's route right now. Nothing was sent; try again.");
+      return t;
+    }),
+  );
+  const inTx = new Set(tx.message.getAccountKeys({ addressLookupTableAccounts: tables }).keySegments().flat().map((k) => k.toBase58()));
+  const watch = (await ownerTokenAccounts(conn, owner)).filter((a) => inTx.has(a.address));
+  if (c.to !== SOL) {
+    // Where the output must land: the owner's associated account for it (made by the swap if new).
+    const mintInfo = await withRetry(() => conn.getAccountInfo(new PublicKey(c.to)), 2, 'getAccountInfo');
+    const ata = getAssociatedTokenAddressSync(new PublicKey(c.to), owner, true, mintInfo?.owner ?? TOKEN_PROGRAM_ID).toBase58();
+    if (!watch.some((a) => a.address === ata)) watch.push({ address: ata, mint: c.to, amount: 0n });
+  }
   const lamportsBefore = BigInt(await withRetry(() => conn.getBalance(owner), 3, 'getBalance'));
-  const watch = [...before];
   const r = await withRetry(
     () =>
       conn.simulateTransaction(tx, {
-        sigVerify: false,
-        replaceRecentBlockhash: true,
+        sigVerify: signed,
+        // A signed transaction keeps its blockhash (Solana can't verify signatures on a replaced one).
+        replaceRecentBlockhash: !signed,
         commitment: 'processed',
         accounts: { encoding: 'base64', addresses: [...watch.map((a) => a.address), owner.toBase58()] },
       }),
     2,
     'simulateTransaction',
   );
-  if (r.value.err) throw new Error(`The swap wouldn't go through right now (${JSON.stringify(r.value.err)}). Nothing was sent; try again.`);
+  if (r.value.err) throw new SwapRefused(r.value.err, r.value.logs);
   const post = r.value.accounts ?? [];
   const delta = new Map<string, bigint>();
   watch.forEach((a, i) => {
@@ -189,11 +235,22 @@ export async function checkSwapEffects(conn: Connection, owner: PublicKey, txB64
   });
   const lamportsAfter = BigInt(post[watch.length]?.lamports ?? 0);
   const solDelta = lamportsAfter - lamportsBefore + (delta.get(SOL) ?? 0n); // native + wrapped
-  for (const [mint, dl] of delta) if (dl < 0n && mint !== from && mint !== SOL) throw new PolicyViolation(`The swap would move another token (${mint.slice(0, 4)}…) out of your wallet.`);
-  if (from === SOL ? -solDelta > amountIn + SWAP_SOL_TOLERANCE : -(delta.get(from) ?? 0n) > amountIn) throw new PolicyViolation('The swap would take more than asked.');
-  if (from !== SOL && -solDelta > SWAP_SOL_TOLERANCE) throw new PolicyViolation('The swap would spend too much SOL.');
-  // A new output token account isn't in `watch`; its arrival then can't be checked here and the wallet's own preview shows it.
-  if (to === SOL ? solDelta < minOut - SWAP_SOL_TOLERANCE : delta.has(to) && (delta.get(to) ?? 0n) < minOut) throw new PolicyViolation("The swap's output wouldn't arrive in your wallet.");
+  const amountIn = BigInt(c.amountIn);
+  const minOut = BigInt(c.minOut);
+  for (const [mint, dl] of delta) if (dl < 0n && mint !== c.from && mint !== SOL) throw new PolicyViolation(`The swap would move another token (${mint.slice(0, 4)}…) out of your wallet.`);
+  if (c.from === SOL ? -solDelta > amountIn + SWAP_SOL_TOLERANCE : -(delta.get(c.from) ?? 0n) > amountIn) throw new PolicyViolation('The swap would take more than asked.');
+  if (c.from !== SOL && -solDelta > SWAP_SOL_TOLERANCE) throw new PolicyViolation('The swap would spend too much SOL.');
+  if (c.to === SOL ? solDelta < minOut - SWAP_SOL_TOLERANCE : (delta.get(c.to) ?? 0n) < minOut) throw new PolicyViolation("The swap's output wouldn't arrive in your wallet.");
+}
+
+/** Solana would refuse the swap (not a policy problem): its error and logs, for a plain answer. */
+export class SwapRefused extends Error {
+  constructor(
+    readonly err: unknown,
+    readonly logs: string[] | null | undefined,
+  ) {
+    super(`The swap wouldn't go through right now (${JSON.stringify(err)}). Nothing was sent; try again.`);
+  }
 }
 
 /** The position's bins for the request, around the active bin. */
@@ -220,11 +277,11 @@ export async function planOpen(d: WalletPlanDeps, req: OpenWalletRequest): Promi
   const usd = (m: string) => priced(prices, m);
   const valueUsd = Object.entries(req.budget).reduce((s, [m, a]) => s + a * usd(m), 0);
   if (!(valueUsd > 0)) throw new Error('Nothing to add.');
-  // The wallet pays the budget and, on top, the rent and fees.
-  const nativeSol = (await withRetry(() => d.conn.getBalance(owner), 3, 'getBalance')) / 1e9;
+  // The wallet pays the budget and, on top, the rent and fees (counting what earlier steps bring in).
+  const nativeSol = (await withRetry(() => d.conn.getBalance(owner), 3, 'getBalance')) / 1e9 + (req.incoming?.[SOL] ?? 0);
   const solSpent = req.budget[SOL] ?? 0;
   if (nativeSol < solSpent + rentSol)
-    throw new Error(`Your wallet needs about ${(solSpent + rentSol).toFixed(3)} SOL for this: ${solSpent ? `${solSpent} SOL into the LP and ` : ''}${rentSol.toFixed(3)} SOL for the position's rent and fees (the rent comes back when it closes). It has ${nativeSol.toFixed(3)}.`);
+    throw new Error(`Your wallet needs about ${(solSpent + rentSol).toFixed(3)} SOL for this: ${solSpent ? `${Number(solSpent.toFixed(4))} SOL into the LP and ` : ''}${rentSol.toFixed(3)} SOL for the position's rent and fees (the rent comes back when it closes). It has ${nativeSol.toFixed(3)}.`);
 
   // What the range needs of each token, in USD.
   const mix = req.range ? composition(openPosition(valueUsd / pool.usdY, pool.price, pool.binStep, 0, req.shape, req.side, req.range), pool.price) : null;
@@ -251,7 +308,7 @@ export async function planOpen(d: WalletPlanDeps, req: OpenWalletRequest): Promi
       const takeUsd = Math.min(spendableUsd, missing);
       if (takeUsd < 0.5) continue;
       const inUi = Math.min(have[src], takeUsd / usd(src));
-      const s = await swapStep(d, owner, src, target, inUi, prices, pool);
+      const s = await swapStep(d, owner, src, target, inUi, prices, pool, !req.incoming);
       steps.push(s.step);
       swaps.push(s.swap);
       have[src] -= s.swap.inUi;
@@ -342,7 +399,8 @@ export async function planClose(
   const risky = req.stepAside?.risky;
   if (risky && req.stepAside && (out[risky] ?? 0) > 0) {
     // A hair less than came back, so rounding never asks for more than the wallet holds.
-    const s = await swapStep(d, owner, risky, req.stepAside.quote, out[risky] * 0.999, req.prices, pool);
+    // Its tokens are still in the position until the close lands: checked when it is sent.
+    const s = await swapStep(d, owner, risky, req.stepAside.quote, out[risky] * 0.999, req.prices, pool, false);
     steps.push(s.step);
     swaps.push(s.swap);
   }
@@ -395,7 +453,7 @@ export async function planRebalance(
 ): Promise<{ close: ClosePlan; open: OpenPlan; steps: WalletStep[] }> {
   const close = await planClose(d, req);
   const budget = Object.fromEntries(Object.entries(close.out).map(([m, a]) => [m, a * 0.999]).filter(([, a]) => (a as number) > 0));
-  const open = await planOpen(d, { owner: req.owner, pool: req.pool, budget, prices: req.prices, shape: req.shape, side: req.side, binsEachSide: req.binsEachSide, range: req.range });
+  const open = await planOpen(d, { owner: req.owner, pool: req.pool, budget, prices: req.prices, shape: req.shape, side: req.side, binsEachSide: req.binsEachSide, range: req.range, incoming: close.out });
   return { close, open, steps: [...close.steps, ...open.steps] };
 }
 

@@ -91,6 +91,11 @@ export interface AgentDeps {
   params?: () => Promise<AgentParams>;
   /** Runs `fn` under one lock shared by all vaults (live deploys and the LIVE_MAX_TOTAL_USD check) */
   liveCapacityLock?: <T>(fn: () => Promise<T>) => Promise<T>;
+  /**
+   * Self-custody: positions a plan prepared for the owner's wallet is changing right now (closing, moving).
+   * The website records those once they land; the agent leaves them alone meanwhile.
+   */
+  pendingPlanPositions?: (vaultId: string) => Promise<Set<string>>;
   /** Manual mode: a new proposal needs the owner's approval (e.g. a Telegram message with buttons) */
   onProposal?: (vault: VaultWithStrategy, proposal: ProposalRow) => Promise<void>;
 }
@@ -279,6 +284,7 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
   const selfCustody = isSelfCustody(vault);
   const custodyClosing = keyHeldHere(vault);
   const executor = await deps.executorFor(vault);
+  const inPlans = selfCustody && deps.pendingPlanPositions ? await deps.pendingPlanPositions(vault.id).catch(() => new Set<string>()) : new Set<string>();
   if (executor.mode === 'live' && cycle % 5 === 0)
     await reconcileLive(deps, vault, executor, now).catch((e) => log(`[agent] vault ${vault.id} reconcile: ${(e as Error).message}`));
   /** Open positions with their current USD value in X and Y (for the exposure cap) */
@@ -297,6 +303,11 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
     } catch (e) {
       // One unreadable position must not stop exits and the loss stop for the others.
       log(`[agent] vault ${vault.id} mark ${p.id} failed: ${(e as Error).message}`);
+      marked.push({ pos: p, view: null, xUsd: 0, yUsd: 0 });
+      continue;
+    }
+    if (m.gone && inPlans.has(p.id)) {
+      // Closed or moved by a plan the owner just approved: the website records it once Solana shows it.
       marked.push({ pos: p, view: null, xUsd: 0, yUsd: 0 });
       continue;
     }

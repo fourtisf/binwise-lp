@@ -792,7 +792,8 @@ describe('self-custody: the owner\'s wallet signs, Binwise holds nothing', () =>
       expect((await done(close.planId, ['SIG2'])).json().error).toBe('not_yet');
       chainPositions[POS] = null;
       expect((await done(close.planId, ['SIG2'])).json()).toMatchObject({ ok: true, title: 'Closed SOL / USDC' });
-      expect(await db.position.findUniqueOrThrow({ where: { id: pos.id } })).toMatchObject({ status: 'closed', valueUsd: 151 });
+      // Like the agent's own closes: the position's value without its fees ($1), the fees counted as claimed.
+      expect(await db.position.findUniqueOrThrow({ where: { id: pos.id } })).toMatchObject({ status: 'closed', valueUsd: 150, feesClaimedUsd: 3 });
       expect((await db.decision.findUnique({ where: { idempotencyKey: `wplan:${close.planId}` } }))?.inputs).toMatchObject({ flowUsd: -151 });
 
       // A plan the wallet never carried out: after a few minutes nothing can land any more, so it is dropped.
@@ -822,6 +823,118 @@ describe('self-custody: the owner\'s wallet signs, Binwise holds nothing', () =>
       process.env.LIVE_TRADING_ENABLED = prev;
       if (prev === undefined) delete process.env.LIVE_TRADING_ENABLED;
       await redis.del(REDIS_KEYS.kill);
+      await scApp.close(); // also closes sub2
+    }
+  });
+});
+
+describe('self-custody: checks before anything is sent, and recording once', () => {
+  it('checks a swap again as signed, refuses a second Add LP into the same pool, and never records a close twice', async () => {
+    const owner = wallet();
+    const kp = owner.keypair();
+    const POS = Keypair.generate().publicKey.toBase58();
+    const TOKEN_PROGRAM = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+    const REAL_USDC = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+    const sent: Buffer[] = [];
+    /** What the simulated swap delivers to the owner's USDC account (raw) */
+    let deliver = 0n;
+    const tokenAccount = (amount: bigint) => {
+      const b = Buffer.alloc(165);
+      b.writeBigUInt64LE(amount, 64);
+      return b.toString('base64');
+    };
+    const conn = {
+      getBalance: async () => 5e9,
+      getAccountInfo: async () => ({ owner: TOKEN_PROGRAM }),
+      getParsedTokenAccountsByOwner: async () => ({ value: [] }),
+      getLatestBlockhash: async () => ({ blockhash: Keypair.generate().publicKey.toBase58(), lastValidBlockHeight: 100 }),
+      simulateTransaction: async (_tx: unknown, o?: { accounts?: { addresses: string[] } }) => ({
+        value: {
+          err: null,
+          logs: [],
+          accounts: (o?.accounts?.addresses ?? []).map((a) => (a === owner.address ? { lamports: 4.5e9, data: ['', 'base64'] } : { lamports: 2_039_280, data: [tokenAccount(deliver), 'base64'] })),
+        },
+      }),
+      sendRawTransaction: async (raw: Buffer) => {
+        sent.push(Buffer.from(raw));
+        return `SIG${sent.length}`;
+      },
+      getSignatureStatuses: async () => ({ value: [{ confirmationStatus: 'confirmed', err: null }] }),
+    };
+    const v0 = (instructions = [ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 })]) =>
+      new VersionedTransaction(new TransactionMessage({ payerKey: kp.publicKey, recentBlockhash: Keypair.generate().publicKey.toBase58(), instructions }).compileToV0Message());
+    const swapTx = v0();
+    const onChain: Record<string, object | null> = {};
+    const planner = {
+      open: async () => ({
+        steps: [
+          { label: 'Swap SOL → USDC', tx: Buffer.from(swapTx.serialize()).toString('base64'), kind: 'swap', check: { from: SOL, to: REAL_USDC, amountIn: '500000000', minOut: '70000000' } },
+          { label: 'Open', tx: 'AQ==', kind: 'open' },
+        ],
+        swaps: [],
+        position: { address: POS, lowerBin: -10, upperBin: 10, amountX: 0.5, amountY: 75 },
+        rentSol: 0.06,
+        newBinArrays: 0,
+      }),
+      close: async () => ({ steps: [{ label: 'close', tx: 'AQ==', kind: 'close' }], swaps: [], out: { [SOL]: 0.5, [USDC]: 76 }, feesUsd: 1 }),
+      claim: async () => ({ steps: [], feesUsd: 0 }),
+      compound: async () => ({ steps: [], feesUsd: 0 }),
+      rebalance: async () => ({ steps: [] }),
+      read: async (_c: unknown, _p: unknown, address: string) => onChain[address] ?? null,
+    };
+    const sub2 = new Redis(process.env.REDIS_URL!);
+    const scApp = await buildDbApp({ db, redis, sub: sub2, domain: 'test.binwise', rpc: () => conn as never, planner: planner as never });
+    const prev = process.env.LIVE_TRADING_ENABLED;
+    process.env.LIVE_TRADING_ENABLED = 'true';
+    try {
+      const user = await ensureUser(db, owner.address);
+      const v = await createVault(db, user.id, { selfCustody: true });
+      const ip = { remoteAddress: '10.9.9.12' };
+      const nonce = (await scApp.inject({ url: `/auth/nonce?wallet=${owner.address}`, ...ip })).json();
+      const login = await scApp.inject({ method: 'POST', url: '/auth/verify', ...ip, payload: { wallet: owner.address, message: nonce.message, signature: owner.signMsg(nonce.message) } });
+      const headers = { cookie: `bw_session=${login.cookies.find((c) => c.name === 'bw_session')!.value}` };
+      await db.pool.upsert({ where: { id: 'PS2' }, update: {}, create: { id: 'PS2', name: 'SOL-USDC', tokenA: 'SOL', tokenB: 'USDC', mintA: SOL, mintB: USDC, binStep: 25, baseFee: 0.1 } });
+      await db.poolSnapshot.create({ data: { poolId: 'PS2', tvl: 1e6, volume24h: 2e6, price: 150, volatility: 3, score: 70, scoreBreakdown: [], call: 'in', callLabel: 'Enter', reason: 'ok' } });
+      const prepare = (payload: object) => scApp.inject({ method: 'POST', url: `/vaults/${v.id}/wallet/prepare`, headers, payload });
+      const send = (tx: VersionedTransaction, extra: object = {}) =>
+        scApp.inject({ method: 'POST', url: `/vaults/${v.id}/wallet/send`, headers, payload: { tx: Buffer.from(tx.serialize()).toString('base64'), ...extra } });
+
+      const plan = (await prepare({ action: 'open', poolId: 'PS2', sol: 1, override: true })).json();
+      expect(plan.steps).toHaveLength(2);
+      // A second Add LP into the same pool while this one may still be signed: refused, until it is cancelled.
+      expect((await prepare({ action: 'open', poolId: 'PS2', sol: 1, override: true })).json().error).toBe('pending');
+
+      // The swap, as signed: its output must reach the owner's USDC account, else nothing is sent.
+      swapTx.sign([kp]);
+      deliver = 0n;
+      const bad = await send(swapTx, { planId: plan.planId, step: 0 });
+      expect(bad.json()).toMatchObject({ error: 'swap_refused' });
+      expect(sent).toHaveLength(0);
+      // Found by its blockhash too, when the page doesn't say which step it is.
+      expect((await send(swapTx)).json().error).toBe('swap_refused');
+      deliver = 75_000_000n;
+      expect((await send(swapTx, { planId: plan.planId, step: 0 })).json()).toEqual({ signature: 'SIG1', status: 'confirmed' });
+
+      // Rejected in the wallet: the page drops the plan, and a new Add LP can be prepared at once.
+      await scApp.inject({ method: 'POST', url: `/vaults/${v.id}/wallet/plans/${plan.planId}/cancel`, headers });
+      const again = (await prepare({ action: 'open', poolId: 'PS2', sol: 1, override: true })).json();
+      expect(again.planId).toBeTruthy();
+      onChain[POS] = { owner: owner.address, lowerBin: -10, upperBin: 10, amountX: 0.5, amountY: 75, feesUsd: 0 };
+      expect((await scApp.inject({ method: 'POST', url: `/vaults/${v.id}/wallet/plans/${again.planId}/done`, headers, payload: { signatures: [] } })).json()).toMatchObject({ ok: true });
+      const pos = await db.position.findFirstOrThrow({ where: { vaultId: v.id } });
+
+      // Close: the agent saw it gone first and counted the money back; the plan then records nothing twice.
+      const close = (await prepare({ action: 'close', positionId: pos.id })).json();
+      onChain[POS] = null;
+      await db.position.update({ where: { id: pos.id }, data: { status: 'closed', closedAt: new Date() } });
+      const depositsBefore = (await db.vault.findUniqueOrThrow({ where: { id: v.id } })).deposits;
+      expect((await scApp.inject({ method: 'POST', url: `/vaults/${v.id}/wallet/plans/${close.planId}/done`, headers, payload: { signatures: [] } })).json()).toMatchObject({ ok: true, already: true });
+      expect((await db.vault.findUniqueOrThrow({ where: { id: v.id } })).deposits).toEqual(depositsBefore);
+      expect(await db.decision.count({ where: { vaultId: v.id, type: 'exit' } })).toBe(0);
+      expect((await scApp.inject({ url: `/vaults/${v.id}/wallet/pending`, headers })).json()).toEqual([]);
+    } finally {
+      process.env.LIVE_TRADING_ENABLED = prev;
+      if (prev === undefined) delete process.env.LIVE_TRADING_ENABLED;
       await scApp.close(); // also closes sub2
     }
   });

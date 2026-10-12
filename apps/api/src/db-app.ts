@@ -84,6 +84,8 @@ import { decisionView, overview, performance, poolRows, positionViews, tokenMap,
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 const TYPES: DecisionType[] = ['scan', 'deploy', 'rebalance', 'exit', 'compound', 'hold', 'skip'];
 const CYCLE_MS = 60_000;
+const TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+const TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
 /** SOL a vault wallet may still hold when its key is deleted: what a withdrawal leaves behind */
 const RELEASE_DUST_SOL = 0.003;
 
@@ -1041,13 +1043,17 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
         const names = left.map((t) => `${t.amount.toLocaleString('en-US', { maximumFractionDigits: 4 })} ${t.mint === SOL_MINT ? 'SOL' : (info.get(t.mint)?.ref.symbol ?? `${t.mint.slice(0, 4)}…`)}`).join(', ');
         throw new ApiError(409, 'funds_left', `Withdraw the ${names} still in the vault wallet first (Withdraw to wallet).`);
       }
-      const dust = held.find((t) => t.mint === SOL_MINT)?.amount ?? 0;
+      // Left behind for good: SOL dust, and the rent in empty token accounts (about 0.002 SOL each).
+      const empty = await Promise.all(
+        [TOKEN_PROGRAM, TOKEN_2022_PROGRAM].map((programId) => conn.getParsedTokenAccountsByOwner(new PublicKey(v.agentPubkey!), { programId: new PublicKey(programId) }).then((r) => r.value.length, () => 0)),
+      );
+      const dust = (held.find((t) => t.mint === SOL_MINT)?.amount ?? 0) + (empty[0] + empty[1]) * 0.00203928;
       await db.vault.update({ where: { id: v.id }, data: { custody: 'wallet', agentPubkey: null, encSecret: null, cash: {} } });
       await logDecision(
         v.id,
         'hold',
         'Switched to your own wallet',
-        `Binwise deleted this vault's key. Your funds stay in your own wallet now, and you approve every change there.${dust > 0 ? ` ${dust.toLocaleString('en-US', { maximumFractionDigits: 4 })} SOL, too little to send, stays at the old vault address.` : ''}`,
+        `Binwise deleted this vault's key. Your funds stay in your own wallet now, and you approve every change there.${dust > 0 ? ` About ${dust.toLocaleString('en-US', { maximumFractionDigits: 4 })} SOL of dust and account rent, too little to recover, stays at the old vault address.` : ''}`,
       );
     });
     return overview(db, id, { readOnly: false });
@@ -1171,6 +1177,7 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     publish,
     jupiter: o.swaps ?? new JupiterClient(),
     planner: o.planner,
+    withVaultLock,
     poolAdvice: async (poolId, strategy) => {
       const d = await poolDetail(poolId, strategy);
       if (!d?.lp) return null;

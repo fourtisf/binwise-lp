@@ -3,6 +3,7 @@ import type { Redis } from 'ioredis';
 import { randomUUID } from 'node:crypto';
 import { PublicKey, VersionedTransaction, type Connection } from '@solana/web3.js';
 import {
+  REDIS_KEYS,
   customRangeError,
   sideOfRange,
   type CustomRange,
@@ -12,6 +13,9 @@ import {
 } from '@binwise/core';
 import {
   ALLOWED_PROGRAMS,
+  PolicyViolation,
+  SwapRefused,
+  checkSwapEffects,
   planClaim,
   planClose,
   planCompound,
@@ -20,6 +24,7 @@ import {
   readWalletPosition,
   type Amounts,
   type PoolCtx,
+  type SwapCheck,
   type WalletPlanDeps,
   type WalletStep,
 } from '@binwise/chain';
@@ -38,8 +43,8 @@ const PLAN_LANDS_MS = 3 * 60_000;
  * program Phantom may add to a transaction when it signs (github.com/Jac0xb/lighthouse, same id on mainnet).
  */
 const RELAY_PROGRAMS = new Set([...ALLOWED_PROGRAMS, 'L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95']);
-const planKey = (id: string) => `binwise:wplan:${id}`;
-const vaultPlansKey = (vaultId: string) => `binwise:wplan:vault:${vaultId}`;
+const planKey = REDIS_KEYS.walletPlan;
+const vaultPlansKey = REDIS_KEYS.walletPlans;
 
 /** The builders, swappable in tests (the real ones read Meteora pools on Solana). */
 export interface Planner {
@@ -78,6 +83,8 @@ export interface SelfCustodyCtx {
   addLimit(vault: OwnedVault, poolId: string, budgetUsd: number): Promise<{ maxUsd: number; minUsd: number; limit: string; ceilingUsd: number | null }>;
   jupiter: WalletPlanDeps['jupiter'];
   planner?: Planner;
+  /** The vault lock the agent's cycle takes too: recording a plan never interleaves with a cycle */
+  withVaultLock<T>(vaultId: string, ttlMs: number, fn: () => Promise<T>): Promise<T>;
 }
 
 /** A prepared plan, kept until the owner's wallet has carried it out and it is recorded. */
@@ -96,6 +103,10 @@ interface StoredPlan {
   outUsd?: number;
   feesUsd?: number;
   proposalId?: string;
+  /** Per step: what a swap may take and must deliver, checked again right before it is sent */
+  checks?: ((SwapCheck & { blockhash?: string }) | null)[];
+  /** Compound: the position's amounts before, to tell an added-back claim from a claim alone */
+  before?: { amountX: number; amountY: number };
   createdAt: number;
 }
 
@@ -168,6 +179,8 @@ export function registerSelfCustody(app: FastifyInstance, c: SelfCustodyCtx) {
   };
 
   async function store(plan: StoredPlan, steps: WalletStep[], summary: string[]) {
+    // The swap's blockhash too: it tells the swap apart when a page sends it without saying which step it is.
+    plan.checks = steps.map((st) => (st.check ? { ...st.check, blockhash: VersionedTransaction.deserialize(Buffer.from(st.tx, 'base64')).message.recentBlockhash } : null));
     await redis.set(planKey(plan.id), JSON.stringify(plan), 'EX', PLAN_TTL_S);
     await redis.sadd(vaultPlansKey(plan.vaultId), plan.id);
     await redis.expire(vaultPlansKey(plan.vaultId), PLAN_TTL_S);
@@ -218,6 +231,9 @@ export function registerSelfCustody(app: FastifyInstance, c: SelfCustodyCtx) {
       const side = range ? sideOfRange(range) : (advice.side ?? (override ? 'both' : null));
       if (!side) throw new ApiError(409, 'downtrend', 'This pool is in a downtrend. The agent waits for the trend to turn.');
       if (await db.position.count({ where: { vaultId: v.id, poolId, status: 'open' } })) throw new ApiError(409, 'held', 'You already have a position in this pool.');
+      // One Add LP per pool at a time: another one prepared moments ago may still be signed and sent.
+      if ((await pendingPlans(v.id)).some((p) => p.action === 'open' && p.poolId === poolId && Date.now() - p.createdAt < PLAN_LANDS_MS))
+        throw new ApiError(409, 'pending', 'An Add LP for this pool is already waiting in your wallet. Approve or reject it there first.');
       const { ctx, prices, symbols, pair } = await poolCtx(poolId);
       // Sized like the pool drawer shows it: from what the wallet can spend, after rent and fees.
       const lamports = await c
@@ -275,6 +291,7 @@ export function registerSelfCustody(app: FastifyInstance, c: SelfCustodyCtx) {
         ]);
       }
       const plan = await plainly(planner.claim(deps(legacyOnly, symbols), { owner: v.user.wallet, pool: ctx, position: p.address! }));
+      if (plan.feesUsd < 0.01) throw new ApiError(409, 'no_fees', 'No fees to claim yet.');
       return store({ ...base, action: 'claim', poolId: p.poolId, pair, positionId: p.id, feesUsd: plan.feesUsd }, plan.steps, [`About ${usdText(plan.feesUsd)} of fees to your wallet.`]);
     }
 
@@ -320,7 +337,8 @@ export function registerSelfCustody(app: FastifyInstance, c: SelfCustodyCtx) {
       }
       if (pr.kind === 'compound') {
         const r = await plainly(planner.compound(d, { owner: v.user.wallet, pool: ctx, position: p.address!, lowerBin: p.lowerBin, upperBin: p.upperBin, shape: p.shape }));
-        return store({ ...ref, action: 'compound', feesUsd: r.feesUsd }, r.steps, [`Puts about ${usdText(r.feesUsd)} of earned fees back into ${pair}.`]);
+        const now = await plainly(planner.read(c.chain(), ctx, p.address!));
+        return store({ ...ref, action: 'compound', feesUsd: r.feesUsd, ...(now ? { before: { amountX: now.amountX, amountY: now.amountY } } : {}) }, r.steps, [`Puts about ${usdText(r.feesUsd)} of earned fees back into ${pair}.`]);
       }
       throw new ApiError(400, 'unsupported', 'Add LP by hand from the pool instead.');
     }
@@ -332,7 +350,19 @@ export function registerSelfCustody(app: FastifyInstance, c: SelfCustodyCtx) {
    * for Solana to confirm it. Only the owner's own transactions pass: the fee payer is their wallet and its
    * signature checks out (a simulation with signature checks), so nothing else can go through this route.
    */
-  app.post<{ Params: { id: string }; Body: { tx?: string } }>('/vaults/:id/wallet/send', { config: { rateLimit: { max: 40, timeWindow: '1 minute' } } }, async (req) => {
+  /** The swap check of the plan step `tx` is (named by the page, else found by its blockhash), if it is a swap. */
+  async function swapCheckFor(vaultId: string, tx: VersionedTransaction, planId?: string, step?: number) {
+    const plans = planId ? [await redis.get(planKey(planId))].filter((x): x is string => !!x).map((x) => JSON.parse(x) as StoredPlan) : await pendingPlans(vaultId);
+    for (const p of plans.filter((x) => x.vaultId === vaultId)) {
+      const named = planId && step != null ? p.checks?.[step] : null;
+      if (named) return named;
+      const byHash = p.checks?.find((ch) => ch?.blockhash && ch.blockhash === tx.message.recentBlockhash);
+      if (byHash) return byHash;
+    }
+    return null;
+  }
+
+  app.post<{ Params: { id: string }; Body: { tx?: string; planId?: string; step?: number } }>('/vaults/:id/wallet/send', { config: { rateLimit: { max: 40, timeWindow: '1 minute' } } }, async (req) => {
     const v = await selfVault(req, req.params.id);
     await mayTrade('Nothing was sent; try again later.');
     let tx: VersionedTransaction;
@@ -351,8 +381,21 @@ export function registerSelfCustody(app: FastifyInstance, c: SelfCustodyCtx) {
     const unreachable = () => {
       throw new ApiError(502, 'rpc_unavailable', 'Could not reach Solana right now. Nothing was sent; try again in a moment.');
     };
-    const sim = await conn.simulateTransaction(tx, { sigVerify: true, commitment: 'confirmed' }).catch(unreachable);
-    if (sim.value.err) throw new ApiError(400, 'sim_failed', refusal(sim.value.err, sim.value.logs));
+    // A swap is checked again now, as signed and with the wallet as it is after the steps before it: only its
+    // input leaves, at least its minimum arrives. Anything else is simulated as signed.
+    const check = await swapCheckFor(v.id, tx, req.body?.planId ? String(req.body.planId) : undefined, Number.isInteger(req.body?.step) ? Number(req.body!.step) : undefined);
+    if (check) {
+      try {
+        await checkSwapEffects(conn, new PublicKey(v.user.wallet), tx, check, true);
+      } catch (e) {
+        if (e instanceof PolicyViolation) throw new ApiError(400, 'swap_refused', `${e.message} Nothing more was sent.`);
+        if (e instanceof SwapRefused) throw new ApiError(400, 'sim_failed', refusal(e.err, e.logs));
+        unreachable();
+      }
+    } else {
+      const sim = await conn.simulateTransaction(tx, { sigVerify: true, commitment: 'confirmed' }).catch(unreachable);
+      if (sim.value.err) throw new ApiError(400, 'sim_failed', refusal(sim.value.err, sim.value.logs));
+    }
     const signature = await conn.sendRawTransaction(tx.serialize(), { skipPreflight: true, maxRetries: 5 }).catch(unreachable);
     // Confirmations take a few seconds; the page asks again (GET …/tx/:sig) if it takes longer.
     for (let i = 0; i < 20; i++) {
@@ -373,43 +416,61 @@ export function registerSelfCustody(app: FastifyInstance, c: SelfCustodyCtx) {
   });
 
   /** Plans prepared for this vault and not recorded yet (the page finishes them after a reload). */
+  async function pendingPlans(vaultId: string) {
+    const ids = await redis.smembers(vaultPlansKey(vaultId));
+    return (await Promise.all(ids.map((id) => redis.get(planKey(id))))).filter((x): x is string => !!x).map((x) => JSON.parse(x) as StoredPlan);
+  }
+
   app.get<{ Params: { id: string } }>('/vaults/:id/wallet/pending', async (req) => {
     const v = await selfVault(req, req.params.id);
-    const ids = await redis.smembers(vaultPlansKey(v.id));
-    const plans = (await Promise.all(ids.map((id) => redis.get(planKey(id))))).filter((x): x is string => !!x).map((x) => JSON.parse(x) as StoredPlan);
+    const plans = await pendingPlans(v.id);
     return plans.map((p) => ({ planId: p.id, action: p.action, pair: p.pair, createdAt: p.createdAt }));
   });
 
   /**
    * Records what an approved plan did, from what the chain shows now (not from what the page says): a new
    * position must exist in the owner's wallet; a closed one must be gone; claimed fees must have left the
-   * position. Once only per plan. A plan that changed nothing after PLAN_LANDS_MS never will: it is dropped.
+   * position. Once only per plan, and under the vault lock the agent's cycle takes, so the agent never records
+   * the same change. A plan that changed nothing after PLAN_LANDS_MS never will: it is dropped.
    */
   app.post<{ Params: { id: string; planId: string }; Body: { signatures?: string[] } }>('/vaults/:id/wallet/plans/:planId/done', async (req) => {
+    const vaultId = (await selfVault(req, req.params.id)).id;
+    return c.withVaultLock(vaultId, 60_000, () => recordPlan(req, req.params.planId, (req.body?.signatures ?? []).filter((x) => typeof x === 'string').slice(0, 20)));
+  });
+
+  async function recordPlan(req: FastifyRequest<{ Params: { id: string } }>, planId: string, sigs: string[]) {
     const v = await selfVault(req, req.params.id);
-    const raw = await redis.get(planKey(req.params.planId));
-    const key = `wplan:${req.params.planId}`;
+    const key = `wplan:${planId}`;
     if (await db.decision.findUnique({ where: { idempotencyKey: key } })) return { ok: true, already: true };
+    const raw = await redis.get(planKey(planId));
     if (!raw) throw new ApiError(404, 'unknown_plan', 'That plan expired. If your wallet approved it, the agent picks it up on its next check.');
     const plan = JSON.parse(raw) as StoredPlan;
     if (plan.vaultId !== v.id) throw new ApiError(404, 'unknown_plan', 'No such plan.');
-    const sigs = (req.body?.signatures ?? []).filter((s) => typeof s === 'string').slice(0, 20);
     const txSig = sigs.at(-1);
     const { ctx, prices } = await poolCtx(plan.poolId).catch(async () => poolCtxLoose(plan.poolId));
     const late = Date.now() - plan.createdAt > PLAN_LANDS_MS;
     const dropped = new Error('dropped');
-    const notYet = () => (late ? dropped : new ApiError(409, 'not_yet', "Solana hasn't shown the result yet. Trying again in a moment."));
+    const waiting = () => new ApiError(409, 'not_yet', "Solana hasn't shown the result yet. Trying again in a moment.");
+    const notYet = () => (late ? dropped : waiting());
+    const fees = plan.feesUsd ?? 0;
+    const read = (address: string) => planner.read(c.chain(), ctx, address);
     let title = '';
 
-    const recorded = await (async () => {
+    /** The fees left the position (claimed), read from the chain with known prices; the position as it is now. */
+    const feesClaimed = async (address: string) => {
+      // Without prices the fees can't be told apart: wait rather than guess (never dropped for this).
+      if (!(ctx.usdX > 0 && ctx.usdY > 0)) throw waiting();
+      const onChain = await read(address);
+      if (!onChain || onChain.feesUsd > Math.max(0.01, fees * 0.5)) throw notYet();
+      return onChain;
+    };
+
+    const recorded = await (async (): Promise<'agent' | void> => {
       if (plan.action === 'open' && plan.opens) {
-        const onChain = await planner.read(c.chain(), ctx, plan.opens.address);
+        const onChain = await read(plan.opens.address);
         if (!onChain) throw notYet();
         if (onChain.owner !== v.user.wallet) throw new ApiError(400, 'not_yours', 'That position is not in your wallet.');
         const valueUsd = onChain.amountX * ctx.usdX + onChain.amountY * ctx.usdY;
-        const deposits = { ...(v.deposits as Amounts) };
-        deposits[ctx.mintX] = (deposits[ctx.mintX] ?? 0) + onChain.amountX;
-        deposits[ctx.mintY] = (deposits[ctx.mintY] ?? 0) + onChain.amountY;
         title = `Added LP to ${plan.pair}`;
         await db.$transaction([
           db.position.create({
@@ -433,51 +494,64 @@ export function registerSelfCustody(app: FastifyInstance, c: SelfCustodyCtx) {
               valueUsd,
             },
           }),
-          db.vault.update({ where: { id: v.id }, data: { deposits } }),
+          db.vault.update({ where: { id: v.id }, data: { deposits: addDeposits(v.deposits as Amounts, ctx, onChain) } }),
           db.decision.create({
             data: { vaultId: v.id, poolId: plan.poolId, type: 'deploy', title, reason: `${usdText(valueUsd)}, ${plan.opens.shape}, approved in your wallet. The position is yours; the agent watches it and asks before any change.`, inputs: { flowUsd: valueUsd, manual: true, signatures: sigs }, txSig, idempotencyKey: key },
           }),
         ]);
       } else if ((plan.action === 'close' || plan.action === 'exit') && plan.positionId) {
         const pos = await db.position.findUniqueOrThrow({ where: { id: plan.positionId } });
-        if (await planner.read(c.chain(), ctx, pos.address!)) throw notYet();
-        const outUsd = plan.outUsd ?? pos.valueUsd;
         title = `${plan.action === 'exit' ? 'Exited' : 'Closed'} ${plan.pair}`;
+        // The agent already saw it gone and recorded the money coming back: nothing more to count.
+        if (pos.status !== 'open') return 'agent';
+        if (await read(pos.address!)) throw notYet();
+        const outUsd = plan.outUsd ?? pos.valueUsd + fees;
         await db.$transaction([
-          db.position.update({ where: { id: pos.id }, data: { status: 'closed', closedAt: new Date(), valueUsd: outUsd, feesUnclaimedUsd: 0, feesClaimedUsd: { increment: plan.feesUsd ?? 0 } } }),
+          // Like the agent's own closes: the position's value without its fees, the fees as claimed.
+          db.position.update({ where: { id: pos.id }, data: { status: 'closed', closedAt: new Date(), valueUsd: Math.max(0, outUsd - fees), feesUnclaimedUsd: 0, feesClaimedUsd: { increment: fees } } }),
           db.vault.update({ where: { id: v.id }, data: { deposits: await shrinkDeposits(db, v.deposits as Amounts, outUsd) } }),
           db.decision.create({
             data: { vaultId: v.id, poolId: plan.poolId, type: 'exit', title, reason: `About ${usdText(outUsd)} back in your wallet, approved by you.`, inputs: { flowUsd: -outUsd, manual: true, signatures: sigs }, txSig, idempotencyKey: key },
           }),
         ]);
       } else if (plan.action === 'claim' && plan.positionId) {
-        await feesClaimed(plan.positionId);
-        const fees = plan.feesUsd ?? 0;
+        const pos = await db.position.findUniqueOrThrow({ where: { id: plan.positionId } });
+        await feesClaimed(pos.address!);
         title = `Claimed fees from ${plan.pair}`;
-        await db.$transaction([
-          db.position.update({ where: { id: plan.positionId }, data: { feesClaimedUsd: { increment: fees }, feesUnclaimedUsd: 0 } }),
-          db.vault.update({ where: { id: v.id }, data: { deposits: await shrinkDeposits(db, v.deposits as Amounts, fees) } }),
-          db.decision.create({ data: { vaultId: v.id, poolId: plan.poolId, type: 'compound', title, reason: `About ${usdText(fees)} to your wallet.`, inputs: { flowUsd: -fees, manual: true, signatures: sigs }, txSig, idempotencyKey: key } }),
-        ]);
+        await recordClaim(pos.id, `About ${usdText(fees)} to your wallet.`);
       } else if (plan.action === 'compound' && plan.positionId) {
-        await feesClaimed(plan.positionId);
+        const pos = await db.position.findUniqueOrThrow({ where: { id: plan.positionId } });
+        const now = await feesClaimed(pos.address!);
+        // Added back only if the position grew by the fees; else the claim landed without the add.
+        const grewUsd = plan.before ? (now.amountX - plan.before.amountX) * ctx.usdX + (now.amountY - plan.before.amountY) * ctx.usdY : fees;
+        if (grewUsd < fees * 0.5) {
+          if (!late) throw waiting();
+          title = `Claimed fees from ${plan.pair}`;
+          await recordClaim(pos.id, `About ${usdText(fees)} of fees went to your wallet; adding them back didn't go through.`);
+          return;
+        }
         title = `Compounded fees in ${plan.pair}`;
         await db.$transaction([
-          db.position.update({ where: { id: plan.positionId }, data: { feesReinvestedUsd: { increment: plan.feesUsd ?? 0 }, feesUnclaimedUsd: 0 } }),
-          db.decision.create({ data: { vaultId: v.id, poolId: plan.poolId, type: 'compound', title, reason: `About ${usdText(plan.feesUsd ?? 0)} of fees added back, approved by you.`, inputs: { manual: true, signatures: sigs }, txSig, idempotencyKey: key } }),
+          // Like the agent's compounds: claimed, and reinvested into the same range.
+          db.position.update({ where: { id: pos.id }, data: { feesClaimedUsd: { increment: fees }, feesReinvestedUsd: { increment: fees }, feesUnclaimedUsd: 0 } }),
+          db.decision.create({ data: { vaultId: v.id, poolId: plan.poolId, type: 'compound', title, reason: `About ${usdText(fees)} of fees added back, approved by you.`, inputs: { manual: true, signatures: sigs }, txSig, idempotencyKey: key } }),
         ]);
       } else if (plan.action === 'rebalance' && plan.positionId && plan.opens) {
         const pos = await db.position.findUniqueOrThrow({ where: { id: plan.positionId } });
-        const onChain = await planner.read(c.chain(), ctx, plan.opens.address);
-        const old = await planner.read(c.chain(), ctx, pos.address!);
+        // The agent may have recorded the old range's close already (money back in the wallet).
+        const closedByAgent = pos.status !== 'open';
+        const onChain = await read(plan.opens.address);
+        const old = await read(pos.address!);
         if (!onChain && !old && late) {
-          // The old range closed but the new one never opened: what came out is in the owner's wallet.
           title = `Closed ${plan.pair}`;
+          if (closedByAgent) return 'agent';
+          // The old range closed but the new one never opened: what came out is in the owner's wallet.
+          const outUsd = pos.valueUsd + fees;
           await db.$transaction([
-            db.position.update({ where: { id: pos.id }, data: { status: 'closed', closedAt: new Date(), feesUnclaimedUsd: 0, feesClaimedUsd: { increment: plan.feesUsd ?? 0 } } }),
-            db.vault.update({ where: { id: v.id }, data: { deposits: await shrinkDeposits(db, v.deposits as Amounts, pos.valueUsd) } }),
+            db.position.update({ where: { id: pos.id }, data: { status: 'closed', closedAt: new Date(), feesUnclaimedUsd: 0, feesClaimedUsd: { increment: fees } } }),
+            db.vault.update({ where: { id: v.id }, data: { deposits: await shrinkDeposits(db, v.deposits as Amounts, outUsd) } }),
             db.decision.create({
-              data: { vaultId: v.id, poolId: plan.poolId, type: 'exit', title, reason: `The move closed the old range, but the new one didn't open. About ${usdText(pos.valueUsd)} is back in your wallet.`, inputs: { flowUsd: -pos.valueUsd, manual: true, signatures: sigs }, txSig, idempotencyKey: key },
+              data: { vaultId: v.id, poolId: plan.poolId, type: 'exit', title, reason: `The move closed the old range, but the new one didn't open. About ${usdText(outUsd)} is back in your wallet.`, inputs: { flowUsd: -outUsd, manual: true, signatures: sigs }, txSig, idempotencyKey: key },
             }),
           ]);
           return;
@@ -489,6 +563,8 @@ export function registerSelfCustody(app: FastifyInstance, c: SelfCustodyCtx) {
           db.position.update({
             where: { id: pos.id },
             data: {
+              status: 'open',
+              closedAt: null,
               address: plan.opens.address,
               lowerBin: onChain.lowerBin,
               upperBin: onChain.upperBin,
@@ -498,16 +574,31 @@ export function registerSelfCustody(app: FastifyInstance, c: SelfCustodyCtx) {
               ticksOut: 0,
               rebalances: { increment: 1 },
               lastRebalanceAt: new Date(),
-              feesReinvestedUsd: { increment: plan.feesUsd ?? 0 },
+              // Like the agent's rebalances: the fees were claimed and went into the new range.
+              feesClaimedUsd: { increment: fees },
+              feesReinvestedUsd: { increment: fees },
               feesUnclaimedUsd: 0,
             },
           }),
+          // Counted as money out when the agent recorded the close: back in now, in the new range.
+          ...(closedByAgent ? [db.vault.update({ where: { id: v.id }, data: { deposits: addDeposits(v.deposits as Amounts, ctx, onChain) } })] : []),
           db.positionMark.create({
             data: { positionId: pos.id, price: ctx.price, ...rangePrices(onChain, ctx), valueUsd, holdUsd: pos.entryAmountA * ctx.usdX + pos.entryAmountB * ctx.usdY, netVsHold: pos.netVsHold, inRange: true, rebalanced: true },
           }),
-          db.decision.create({ data: { vaultId: v.id, poolId: plan.poolId, type: 'rebalance', title, reason: 'Moved to a new range around the price, approved by you.', inputs: { manual: true, signatures: sigs }, txSig, idempotencyKey: key } }),
+          db.decision.create({
+            data: { vaultId: v.id, poolId: plan.poolId, type: 'rebalance', title, reason: 'Moved to a new range around the price, approved by you.', inputs: { manual: true, signatures: sigs, ...(closedByAgent ? { flowUsd: valueUsd } : {}) }, txSig, idempotencyKey: key },
+          }),
         ]);
       } else throw new ApiError(400, 'invalid_plan', 'That plan cannot be recorded.');
+
+      /** Fees claimed into the owner's wallet: money out of the vault, as the agent counts a withdrawal. */
+      async function recordClaim(positionId: string, reason: string) {
+        await db.$transaction([
+          db.position.update({ where: { id: positionId }, data: { feesClaimedUsd: { increment: fees }, feesUnclaimedUsd: 0 } }),
+          db.vault.update({ where: { id: v.id }, data: { deposits: await shrinkDeposits(db, v.deposits as Amounts, fees) } }),
+          db.decision.create({ data: { vaultId: v.id, poolId: plan.poolId, type: 'compound', title, reason, inputs: { flowUsd: -fees, manual: true, signatures: sigs }, txSig, idempotencyKey: key } }),
+        ]);
+      }
     })().catch((e) => {
       if (e === dropped) return 'dropped' as const;
       // Recorded by a request that ran at the same time: the decision key is unique.
@@ -522,17 +613,23 @@ export function registerSelfCustody(app: FastifyInstance, c: SelfCustodyCtx) {
 
     if (plan.proposalId) await db.proposal.updateMany({ where: { id: plan.proposalId, status: { in: ['pending', 'approved'] } }, data: { status: 'done', decidedAt: new Date(), result: title } });
     await forget(plan);
+    if (recorded === 'agent') return { ok: true, already: true, title };
     const d = await db.decision.findUnique({ where: { idempotencyKey: key } });
     if (d) await c.publish(v.id, { type: 'decision', decision: { id: d.id, vaultId: v.id, poolId: d.poolId ?? undefined, ts: d.ts.getTime(), type: d.type, title: d.title, reason: d.reason, txSig: d.txSig ?? undefined } });
     if (plan.proposalId) await c.publish(v.id, { type: 'proposals', pending: await db.proposal.count({ where: { vaultId: v.id, status: 'pending' } }) });
     return { ok: true, title, prices: Object.keys(prices).length };
+  }
 
-    /** Claimed: the position's unclaimed fees are (nearly) gone. */
-    async function feesClaimed(positionId: string) {
-      const pos = await db.position.findUniqueOrThrow({ where: { id: positionId } });
-      const onChain = await planner.read(c.chain(), ctx, pos.address!);
-      if (!onChain || onChain.feesUsd > Math.max(0.01, (plan.feesUsd ?? 0) * 0.5)) throw notYet();
-    }
+  /**
+   * Drops a plan the owner's wallet never carried out (rejected, or the page stopped before sending anything):
+   * its transactions only reach Solana through the page, so nothing of it can land any more.
+   */
+  app.post<{ Params: { id: string; planId: string } }>('/vaults/:id/wallet/plans/:planId/cancel', async (req) => {
+    const v = await selfVault(req, req.params.id);
+    const raw = await redis.get(planKey(req.params.planId));
+    const plan = raw ? (JSON.parse(raw) as StoredPlan) : null;
+    if (plan?.vaultId === v.id) await forget(plan);
+    return { ok: true };
   });
 
   async function forget(plan: StoredPlan) {
@@ -562,6 +659,14 @@ export function registerSelfCustody(app: FastifyInstance, c: SelfCustodyCtx) {
     };
     return { ctx, prices: { [ctx.mintX]: ctx.usdX, [ctx.mintY]: ctx.usdY } as Amounts };
   }
+}
+
+/** Deposits plus a position's token amounts (money into the vault's view). */
+function addDeposits(deposits: Amounts, ctx: PoolCtx, p: { amountX: number; amountY: number }): Amounts {
+  const out = { ...deposits };
+  out[ctx.mintX] = (out[ctx.mintX] ?? 0) + p.amountX;
+  out[ctx.mintY] = (out[ctx.mintY] ?? 0) + p.amountY;
+  return out;
 }
 
 /** Range bounds in UI price from on-chain bin ids (per-lamport prices), as the agent's rangePrices does. */
