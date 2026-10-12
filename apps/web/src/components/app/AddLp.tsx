@@ -20,6 +20,7 @@ import { useAppData } from '@/lib/store';
 import { useUi } from '@/lib/ui';
 import { SignInError, sendWithWallet, walletFor } from '@/lib/wallets';
 import { Icon } from '../Sprite';
+import { LpShape } from './LpShape';
 import { useSolanaWallets } from './Wallet';
 
 /** Why Add LP can't put more into this pool (VaultBalance.pool.limit), in plain words. */
@@ -145,6 +146,15 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
   const rangeHi = lp && range ? binPrice(active0 + range.above + 1, lp.binStep) : 0;
   const rangeErr = range ? customRangeError(range) : mode === 'custom' ? `Enter a min price below and a max price above the current ${price(lp?.price ?? 0)}.` : null;
   const maxPct = lp ? ((binPrice(MAX_EACH_SIDE, lp.binStep) - 1) * 100).toFixed(1) : '';
+  // The range the shape picture draws: the chosen one, or the agent's width while a typed range is incomplete.
+  const agentRange: CustomRange | null = !lp
+    ? null
+    : side === 'both'
+      ? { below: lp.binsEachSide, above: lp.binsEachSide }
+      : side === 'x'
+        ? { below: 0, above: 2 * lp.binsEachSide }
+        : { below: 2 * lp.binsEachSide, above: 0 };
+  const drawn = lp && range && range.below + range.above + 1 <= 2 * lp.maxBins ? range : agentRange;
   // ±% presets that fit one position at this pool's bin step (narrow steps can't go wide), plus Max when few do.
   const presets: RangeMode[] = useMemo(() => {
     if (!lp) return [];
@@ -400,6 +410,19 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
               </button>
             ))}
           </div>
+          {drawn && (
+            <LpShape
+              shape={shape}
+              agentShape={lp.shape}
+              below={drawn.below}
+              above={drawn.above}
+              symA={symA}
+              symB={symB}
+              lo={price(binPrice(active0 - drawn.below, lp.binStep))}
+              hi={price(binPrice(active0 + drawn.above + 1, lp.binStep))}
+              now={price(lp.price)}
+            />
+          )}
 
           <span style={label}>Deposit</span>
           <div className="seg" style={segFull} role="group" aria-label="Tokens to deposit">
