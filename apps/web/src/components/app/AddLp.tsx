@@ -65,7 +65,7 @@ const segBtn = { flex: 1, padding: '6px 4px' } as const;
  * A live vault whose funds Binwise still holds takes no new LP: its owner withdraws to their wallet.
  */
 export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }) {
-  const { client, overview, positions, deploy, selfCustody, walletTask, inWallet } = useAppData();
+  const { client, overview, positions, deploy, selfCustody, walletTask, inWallet, releaseCustody } = useAppData();
   const { openWithdraw } = useUi();
   const [amt, setAmt] = useState('');
   const [risk, setRisk] = useState(false);
@@ -78,6 +78,8 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
   const [maxS, setMaxS] = useState('');
   /** Self-custody: SOL from the owner's wallet to pay for this LP with */
   const [solS, setSolS] = useState('');
+  /** Old vault wallet: the owner clicked "Switch to my own wallet" and is asked to confirm */
+  const [switching, setSwitching] = useState(false);
   const [tick, setTick] = useState(0);
 
   // A new pool starts on the recommendation; the side is set once its Add LP data arrives.
@@ -114,7 +116,8 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
       live = false;
       clearInterval(t);
     };
-  }, [active, client, x.id, positions.length, tick]);
+    // A vault that just switched to the owner's own wallet reads that wallet from now on.
+  }, [active, client, x.id, positions.length, tick, overview?.custody]);
   const reload = useCallback(() => setTick((n) => n + 1), []);
 
   const lp = x.lp;
@@ -320,12 +323,43 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
       <>
         <div className="dsec">Add LP by hand</div>
         <div className="verdict wt" id="dClosing">
-          Binwise no longer keeps funds for you: your money stays in your own wallet. Withdraw this vault&apos;s funds to your wallet, then add LP
-          straight from it. Open positions here keep running until you close them in Positions.
+          Binwise no longer keeps funds for you: your money stays in your own wallet. This vault is from before, so it adds no new LP. Move it to your
+          own wallet once, then Add LP works here, paid from your wallet:
         </div>
-        <button className="btn btn-dark" style={{ width: '100%', marginTop: 12 }} onClick={openWithdraw}>
-          Withdraw to my wallet
+        <ol className="muted" style={{ fontSize: 13, lineHeight: 1.6, margin: '12px 0 0', paddingLeft: 20 }}>
+          <li>Withdraw everything in the vault to your wallet{positions.length ? ' (close its open positions in Positions first)' : ''}.</li>
+          <li>Switch to your own wallet: Binwise deletes this vault&apos;s key.</li>
+          <li>Add LP here, approved in your wallet.</li>
+        </ol>
+        <button className="btn btn-white" style={{ width: '100%', marginTop: 12 }} onClick={openWithdraw}>
+          1. Withdraw to my wallet
         </button>
+        {switching ? (
+          <div style={{ marginTop: 10 }}>
+            <p className="muted" style={{ fontSize: 12.5, lineHeight: 1.55 }}>
+              Binwise deletes this vault&apos;s key for good. It only works once the vault wallet is empty (nothing but dust), so nothing can be lost.
+            </p>
+            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+              <button
+                className="btn btn-white btn-sm"
+                style={{ flex: 1 }}
+                onClick={() => {
+                  setSwitching(false);
+                  releaseCustody();
+                }}
+              >
+                Yes, switch
+              </button>
+              <button className="btn btn-dark btn-sm" style={{ flex: 1 }} onClick={() => setSwitching(false)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button className="btn btn-dark" style={{ width: '100%', marginTop: 10 }} onClick={() => setSwitching(true)}>
+            2. Switch to my own wallet
+          </button>
+        )}
       </>
     );
 
@@ -334,8 +368,8 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
       <div className="dsec">Add LP by hand</div>
       {x.call !== 'in' && (
         <p className="muted" style={{ fontSize: 13, lineHeight: 1.5, marginBottom: 10 }}>
-          The agent won&apos;t enter this pool by itself ({x.callLabel}). If you add LP here, it rebalances and claims fees, but won&apos;t close
-          it on its trend rules: you close it yourself in Positions. The daily loss stop still applies.
+          The agent won&apos;t enter this pool by itself ({x.callLabel}). If you add LP here, it {selfCustody ? 'proposes rebalances and fee claims' : 'rebalances and claims fees'}, but
+          won&apos;t {selfCustody ? 'propose closing' : 'close'} it on its trend rules: you close it yourself in Positions. The daily loss stop still applies.
         </p>
       )}
       <div className="rows">
