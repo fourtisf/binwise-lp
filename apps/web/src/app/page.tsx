@@ -23,10 +23,14 @@ export default function Landing() {
       <section className="hero">
         <div className="wrap hero-grid">
           <div className="hero-copy">
-            <a href="#how" className="announce">
-              <b>New</b>{LIVE_DEFAULT ? 'Live on Solana mainnet' : 'Paper mode is open to everyone'}
-              <Icon id="i-chev" />
-            </a>
+            <div className="hero-top">
+              <a href="#how" className="announce">
+                <b>New</b>{LIVE_DEFAULT ? 'Live on Solana mainnet' : 'Paper mode is open to everyone'}
+                <Icon id="i-chev" />
+              </a>
+              {/* The project token's contract address: "Coming soon" until it exists. */}
+              <CaPill />
+            </div>
             <h1>Liquidity that manages itself.</h1>
             <p className="lead">
               {BRAND} is an autonomous LP agent for Solana. It finds the pools that pay, keeps your liquidity in range, and
@@ -46,8 +50,6 @@ export default function Landing() {
                 : 'No deposit needed to try. With real funds, everything stays in your own wallet.'}
             </p>
             <div className="hero-links">
-              {/* The project token's contract address: "Coming soon" until it exists. */}
-              <CaPill />
               <a className="x-pill" href={X_URL} target="_blank" rel="noreferrer" aria-label={`${BRAND} on X (${X_HANDLE})`}>
                 <Icon id="i-xlogo" />
                 {X_HANDLE}
