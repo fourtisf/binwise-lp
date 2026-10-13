@@ -62,6 +62,7 @@ export class LiveChart {
   private bll!: SVGLineElement;
   private area!: SVGPathElement;
   private line!: SVGPathElement;
+  private glow!: SVGPathElement;
   private mk!: SVGGElement;
   private dot!: SVGCircleElement;
   private halo!: SVGCircleElement;
@@ -119,16 +120,16 @@ export class LiveChart {
     const c = this.o.compact;
     const k = this.c;
     this.el.innerHTML = `<svg class="lc" aria-hidden="true"><defs>
-      <linearGradient id="${id}a" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${k.line}" stop-opacity=".16"/><stop offset="1" stop-color="${k.line}" stop-opacity="0"/></linearGradient>
+      <linearGradient id="${id}a" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${k.lineHi}" stop-opacity=".14"/><stop offset=".7" stop-color="${k.line}" stop-opacity=".02"/><stop offset="1" stop-color="${k.line}" stop-opacity="0"/></linearGradient>
       <linearGradient id="${id}l" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="${k.line}" stop-opacity=".15"/><stop offset=".55" stop-color="${k.lineHi}"/><stop offset="1" stop-color="${k.text}"/></linearGradient>
-      <linearGradient id="${id}b" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="${k.up}" stop-opacity="0"/><stop offset=".6" stop-color="${k.up}" stop-opacity=".05"/><stop offset="1" stop-color="${k.up}" stop-opacity=".12"/></linearGradient>
-      <linearGradient id="${id}r" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="${k.down}" stop-opacity="0"/><stop offset="1" stop-color="${k.down}" stop-opacity=".13"/></linearGradient>
+      <linearGradient id="${id}b" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${k.up}" stop-opacity=".09"/><stop offset=".5" stop-color="${k.up}" stop-opacity=".015"/><stop offset="1" stop-color="${k.up}" stop-opacity=".09"/></linearGradient>
+      <linearGradient id="${id}r" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${k.down}" stop-opacity=".11"/><stop offset=".5" stop-color="${k.down}" stop-opacity=".02"/><stop offset="1" stop-color="${k.down}" stop-opacity=".11"/></linearGradient>
       <clipPath id="${id}c"><rect class="clip"/></clipPath><filter id="${id}g" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="4"/></filter>
     </defs><g class="grid"></g><rect class="band"/><line class="bl blh"/><line class="bl bll"/>
-    <g clip-path="url(#${id}c)"><path class="area" fill="url(#${id}a)"/><path class="line" stroke="url(#${id}l)"/><g class="mk"></g></g>
+    <g clip-path="url(#${id}c)"><path class="area" fill="url(#${id}a)"/><path class="glow" stroke="${k.lineHi}" filter="url(#${id}g)"/><path class="line" stroke="url(#${id}l)"/><g class="mk"></g></g>
     <circle class="halo" r="9" fill="#fff" opacity=".35" filter="url(#${id}g)"/><circle class="dot" r="4" fill="#fff"/>
-    <line class="nowl" stroke="rgba(255,255,255,.22)" stroke-dasharray="2 4"/><g class="liq"></g>
-    ${c ? '' : '<g class="rlabel"><text class="th"/><text class="tl"/></g><g class="plabel"><rect rx="5" height="20"/><text/></g>'}</svg>`;
+    <line class="nowl" stroke="rgba(255,255,255,.22)" stroke-dasharray="1 4"/><g class="liq"></g>
+    ${c ? '' : '<g class="rlabel"><text class="th"/><text class="tl"/></g><g class="plabel"><rect rx="10" height="20"/><text/></g>'}</svg>`;
     const s = this.el.firstChild as SVGSVGElement;
     this.svg = s;
     const q = <T extends Element>(k: string) => s.querySelector(k) as T;
@@ -138,6 +139,7 @@ export class LiveChart {
     this.bll = q('.bll');
     this.area = q('.area');
     this.line = q('.line');
+    this.glow = q('.glow');
     this.mk = q('.mk');
     this.dot = q('.dot');
     this.halo = q('.halo');
@@ -149,7 +151,6 @@ export class LiveChart {
     const liq = q<SVGGElement>('.liq');
     for (let i = 0; i < this.o.bins; i++) {
       const r = document.createElementNS(NS, 'rect');
-      r.setAttribute('rx', '1.5');
       liq.appendChild(r);
       this.bars.push(r);
     }
@@ -208,6 +209,7 @@ export class LiveChart {
     let dp = '';
     for (let i = 0; i < n; i++) dp += (i ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(d[i]).toFixed(1);
     this.line.setAttribute('d', dp);
+    this.glow.setAttribute('d', dp);
     this.area.setAttribute('d', dp + `L${X(n - 1)} ${H}L${X(0)} ${H}Z`);
     const cy = lerp(Y(d[n - 2]), Y(d[n - 1]), e);
     const cp = lerp(d[n - 2], d[n - 1], e);
@@ -257,12 +259,14 @@ export class LiveChart {
           : 0.72 + 0.28 * Math.exp(-Math.pow((mid - 0.5) / 0.35, 2));
       const act = cp >= pLo && cp < pHi;
       const b = this.bars[i];
+      const bh = Math.max(1, (y2 - y1) * 0.62);
       b.setAttribute('x', String(lx));
-      b.setAttribute('y', String(y1 + 0.8));
-      b.setAttribute('height', String(Math.max(1, y2 - y1 - 1.6)));
-      b.setAttribute('width', String((liqW - 4) * shape));
+      b.setAttribute('y', String((y1 + y2 - bh) / 2));
+      b.setAttribute('height', String(bh));
+      b.setAttribute('rx', String(Math.min(bh / 2, 4)));
+      b.setAttribute('width', String((liqW - 4) * shape * (act ? 1.08 : 1)));
       b.setAttribute('fill', act ? '#FFFFFF' : pHi <= cp ? this.c.up : this.c.line);
-      b.setAttribute('opacity', String(act ? 1 : pHi <= cp ? 0.7 : 0.55));
+      b.setAttribute('opacity', String(act ? 1 : pHi <= cp ? 0.78 : 0.3));
     }
     this.mk.innerHTML = this.markers
       .map((i) => {

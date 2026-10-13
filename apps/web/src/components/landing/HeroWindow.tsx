@@ -7,7 +7,6 @@ import { getDemoSource, type DemoSource } from '@/lib/api/demo';
 import { emitDemo } from '@/lib/demo-bus';
 import { LiveChart } from '@/lib/charts/LiveChart';
 import { hhmm, pct, prefersReducedMotion, usd } from '@/lib/format';
-import { Icon } from '../Sprite';
 import { PairIcon } from '../Tokens';
 
 // What the window shows before live data arrives (and in demo mode): the approved design's pairs.
@@ -17,7 +16,7 @@ const INITIAL: DemoPair[] = [
   { id: 'pengu-sol', pair: 'PENGU / SOL', shape: 'spot', tokenA: { symbol: 'PENGU', letter: 'P', color: '#9ADFFF' }, tokenB: { symbol: 'SOL', letter: 'S', color: '#A19BFF' } },
 ];
 
-/** Landing hero: a live read-only window onto a paper vault, with the agent's reasoning. */
+/** Landing live demo: a read-only console onto a paper vault: the agent's reasoning, the live chart and the readout. */
 export function HeroWindow() {
   const [pair, setPair] = useState(0);
   const [pairs, setPairs] = useState<DemoPair[]>(INITIAL);
@@ -59,6 +58,8 @@ export function HeroWindow() {
       clearInterval(typeTimer.current);
       const el = thoughtEl.current;
       if (!el) return;
+      // Long reasons step the type down so the console keeps its height while it types.
+      if (el.parentElement) el.parentElement.dataset.size = text.length > 170 ? 's' : text.length > 110 ? 'm' : 'l';
       if (prefersReducedMotion()) {
         el.textContent = text;
         return;
@@ -99,102 +100,70 @@ export function HeroWindow() {
   }, [pair, pairs, src]);
 
   return (
-    <div className="win">
-      <div className="wbar">
-        <div className="dots">
-          <i></i>
-          <i></i>
-          <i></i>
+    <div className="cx">
+      <div className="cx-top">
+        <div className="cx-id">
+          <span className="orb"></span>
+          <div>
+            <b>{BRAND} agent</b>
+            <span>{mode}</span>
+          </div>
         </div>
-        <div className="url">
-          <Icon id="i-lock" />
-          {BRAND} demo vault
+        <div className="pairtabs" id="pairtabs" role="group" aria-label="Choose pool">
+          {pairs.map((p, i) => (
+            <button key={p.id} aria-pressed={i === pair} data-pair={i} onClick={() => setPair(i)}>
+              <PairIcon a={p.tokenA} b={p.tokenB} />
+              {p.pair}
+            </button>
+          ))}
         </div>
-        <div style={{ width: 47 }}></div>
+        <span className="cx-state">
+          {/* The public demo vault runs on live prices with simulated funds: say so, it isn't anyone's money. */}
+          <span className="demo-tag">Demo vault · simulated funds</span>
+          <span className={`pill live ${stats.inRange ? 'in' : 'out'}`} id="hStatus">
+            <span className="d"></span>
+            {stats.inRange ? 'In range' : 'Out of range'}
+          </span>
+        </span>
       </div>
-      <div className="wbody">
-        <div className="wside">
-          <span className="on">
-            <Icon id="i-home" />
-          </span>
-          <span>
-            <Icon id="i-pools" />
-          </span>
-          <span>
-            <Icon id="i-pos" />
-          </span>
-          <span>
-            <Icon id="i-strat" />
-          </span>
-          <span>
-            <Icon id="i-act" />
-          </span>
+      <div className="cx-body">
+        <div className="cx-mind">
+          <small className="cx-k">Reasoning</small>
+          <p className="cx-thought">
+            <span ref={thoughtEl}></span>
+            <span className="caret"></span>
+          </p>
+          <ol className="cx-log">
+            {log.map(([a, b, t], i) => (
+              <li key={`${t}-${a}-${b}-${i}`}>
+                <time>{t}</time>
+                <span>{a}</span>
+                <b>{b}</b>
+              </li>
+            ))}
+          </ol>
         </div>
-        <div className="wmain">
-          <div className="wtop">
-            <div className="pairtabs" id="pairtabs" role="group" aria-label="Choose pool">
-              {pairs.map((p, i) => (
-                <button key={p.id} aria-pressed={i === pair} data-pair={i} onClick={() => setPair(i)}>
-                  <PairIcon a={p.tokenA} b={p.tokenB} />
-                  {p.pair}
-                </button>
-              ))}
-            </div>
-            <span className="wstate">
-              {/* The public demo vault runs on live prices with simulated funds: say so, it isn't anyone's money. */}
-              <span className="demo-tag">Demo vault · simulated funds</span>
-              <span className={`pill live ${stats.inRange ? 'in' : 'out'}`} id="hStatus">
-                <span className="d"></span>
-                {stats.inRange ? 'In range' : 'Out of range'}
-              </span>
-            </span>
-          </div>
-          <div className="wstats">
-            <div className="ws">
-              <small>Fees earned</small>
-              <b className="num up">{usd(stats.fees, 2)}</b>
-            </div>
-            <div className="ws">
-              <small>Net vs hold</small>
-              <b className={`num ${stats.netVsHold >= 0 ? 'up' : 'down'}`}>{pct(stats.netVsHold)}</b>
-            </div>
-            <div className="ws">
-              <small>Rebalances</small>
-              <b className="num">{stats.rebalances}</b>
-            </div>
-            <div className="ws">
-              <small>Time in range</small>
-              <b className="num">{stats.timeInRange}%</b>
-            </div>
-          </div>
-          <div className="wgrid">
-            <div className="wchart" id="heroChart" ref={chartEl}></div>
-            <div className="wreason">
-              <div className="agent-h">
-                <span className="orb"></span>
-                <div>
-                  <b>{BRAND} agent</b>
-                  <span>{mode}</span>
-                </div>
-              </div>
-              <div className="thought">
-                <small>Reasoning</small>
-                <span ref={thoughtEl}></span>
-                <span className="caret"></span>
-              </div>
-              <div className="minilog">
-                {log.map(([a, b, t], i) => (
-                  <div key={`${t}-${a}-${b}-${i}`}>
-                    <span>{a}</span>
-                    <span>
-                      {b}
-                      <time>{t}</time>
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
+        <div className="cx-chart" id="heroChart" ref={chartEl}></div>
+      </div>
+      <div className="cx-stats">
+        <div className="cx-s">
+          <small>Net vs hold</small>
+          <b className={`num ${stats.netVsHold >= 0 ? 'up' : 'down'}`}>{pct(stats.netVsHold)}</b>
+        </div>
+        <div className="cx-s">
+          <small>Fees earned</small>
+          <b className="num">{usd(stats.fees, 2)}</b>
+        </div>
+        <div className="cx-s">
+          <small>Rebalances</small>
+          <b className="num">{stats.rebalances}</b>
+        </div>
+        <div className="cx-s">
+          <small>Time in range</small>
+          <b className="num">{stats.timeInRange}%</b>
+          <i className="cx-bar" aria-hidden="true">
+            <i style={{ width: `${Math.max(0, Math.min(100, stats.timeInRange))}%` }}></i>
+          </i>
         </div>
       </div>
     </div>

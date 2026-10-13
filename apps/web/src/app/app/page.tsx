@@ -1,11 +1,12 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { BRAND } from '@kovra/core/brand';
 import type { PerformanceRange, PerformanceSeries } from '@kovra/core';
 import { FeedItem } from '@/components/FeedItem';
 import { CustodyNotice } from '@/components/app/CustodyNotice';
+import { RangeRing } from '@/components/app/RangeRing';
 import { PositionChart } from '@/components/PositionChart';
 import { Icon } from '@/components/Sprite';
 import { PairIcon } from '@/components/Tokens';
@@ -85,6 +86,14 @@ export default function OverviewPage() {
   }, [perf, selfCustody]);
 
   const step = cycle?.paused ? -1 : (cycle?.step ?? -1);
+  const nSteps = cycle?.steps.length ?? 0;
+  // How far the pipeline's track is lit: up to the running step, all of it once the cycle finished.
+  const pipeFill = nSteps > 1 && step >= 0 ? Math.min(1, step / (nSteps - 1)).toFixed(3) : '0';
+  // The chart's last point for each line, shown in its legend (nothing before there's a real series).
+  const ends =
+    perf && perf.ts.length >= 2 && !(perf.vault.every((v) => v === 0) && perf.hold.every((v) => v === 0))
+      ? { vault: perf.vault.at(-1)!, hold: perf.hold.at(-1)! }
+      : null;
 
   if (empty)
     return (
@@ -159,95 +168,103 @@ export default function OverviewPage() {
           </div>
         </div>
       )}
-      <div className="kpis">
-        <div className="kpi card">
-          <small>Vault value</small>
-          <div className="v num">{o ? usd(o.value, 2) : '—'}</div>
-          <div className="s">
-            <b className={`num ${today >= 0 ? 'up' : 'down'}`}>{pct(today)}</b> today
+      <div className="ovh card">
+        <div className="ovh-main">
+          <span className="kicker">
+            <i></i>Net vs hold, 30d
+          </span>
+          <div className={`ovh-big num ${!o || o.netVsHold30d >= 0 ? 'up' : 'down'}`}>{o ? pct(o.netVsHold30d, 1) : '—'}</div>
+          <p className="ovh-sub">After impermanent loss, compared with simply holding the same tokens.</p>
+          <div className="ovh-stats">
+            <div>
+              <small>Vault value</small>
+              <b className="num">{o ? usd(o.value, 2) : '—'}</b>
+              <span>
+                <b className={`num ${today >= 0 ? 'up' : 'down'}`}>{pct(today)}</b> today
+              </span>
+              <svg className="spark" viewBox="0 0 84 28" preserveAspectRatio="none" aria-hidden="true">
+                {o && <path d={sparkPath(o.spark, 84, 28)} fill="none" style={{ stroke: 'var(--up)' }} strokeWidth="1.5" strokeLinecap="round" />}
+              </svg>
+            </div>
+            <div>
+              <small>Fees earned, 30d</small>
+              <b className="num">{o ? usd(o.fees30d) : '—'}</b>
+              <span>Auto-compounded</span>
+            </div>
+            <div>
+              <small>Positions in range</small>
+              <b className="num">
+                {inRange} / {positions.length}
+              </b>
+              <span>{positions.length ? (inRange === positions.length ? 'None out of range' : `${positions.length - inRange} out of range`) : 'None open yet'}</span>
+            </div>
           </div>
-          <svg className="spark" viewBox="0 0 84 32" preserveAspectRatio="none">
-            {o && <path d={sparkPath(o.spark, 84, 32)} fill="none" style={{ stroke: 'var(--up)' }} strokeWidth="1.5" strokeLinecap="round" />}
-          </svg>
         </div>
-        <div className="kpi card">
-          <small>Fees earned, 30d</small>
-          <div className="v num">{o ? usd(o.fees30d) : '—'}</div>
-          <div className="s">Auto-compounded</div>
-        </div>
-        <div className="kpi card">
-          <small>Net vs hold, 30d</small>
-          <div className={`v num ${!o || o.netVsHold30d >= 0 ? 'up' : 'down'}`}>{o ? pct(o.netVsHold30d, 1) : '—'}</div>
-          <div className="s">After impermanent loss</div>
-        </div>
-        <div className="kpi card">
-          <small>Positions in range</small>
-          <div className="v num">
-            {inRange} / {positions.length}
+        <RangeRing value={o?.timeInRange30d ?? null} />
+      </div>
+
+      <div className="pipe card">
+        <div className="ph">
+          <div>
+            <h3>Agent reasoning</h3>
+            <p>Current cycle, step by step</p>
           </div>
-          <div className="s">
-            <b className="num">{o && o.timeInRange30d != null ? `${Math.round(o.timeInRange30d)}%` : '—'}</b> time in range, 30d
-          </div>
+          <span className={`pill live ${cycle?.paused ? 'out' : 'in'}`}>
+            <span className="d"></span>
+            {cycle?.paused ? 'Paused' : `Cycle ${fmt(cycle?.cycle ?? o?.cycle ?? 0)}`}
+          </span>
+        </div>
+        <ol className="pipe-steps" id="brain" style={{ '--p': pipeFill, '--n': nSteps || 5 } as CSSProperties}>
+          {(cycle?.steps ?? []).map((b, i) => {
+            const st = i < step ? 'done' : i === step ? 'run' : 'wait';
+            return (
+              <li className={`ps ${st}`} key={b.title}>
+                <span className="pn">
+                  <Icon id={st === 'done' ? 'i-check' : st === 'run' ? 'i-spin' : 'i-dot'} />
+                </span>
+                <b>{b.title}</b>
+                <span>{st === 'done' ? b.done || b.running : b.running}</span>
+              </li>
+            );
+          })}
+        </ol>
+        <div className="pipe-dec" id="decision">
+          <small>Decision</small>
+          <p>{decisionText}</p>
         </div>
       </div>
 
-      <div className="g2">
-        <div className="panel card">
-          <div className="ph">
-            <div>
-              <h3>Vault performance</h3>
-              <p>{BRAND} compared with holding the same tokens</p>
-            </div>
-            <div className="seg" id="eqSeg">
-              {([7, 30, 90] as const).map((r) => (
-                <button key={r} aria-pressed={r === range} onClick={() => setRange(r)}>
-                  {r}D
-                </button>
-              ))}
-            </div>
+      <div className="panel card perf">
+        <div className="ph">
+          <div>
+            <h3>Vault performance</h3>
+            <p>{BRAND} compared with holding the same tokens</p>
           </div>
-          <div className="keys">
-            <span>
-              <i style={{ background: 'var(--c-vault)' }}></i>{BRAND} vault
-            </span>
-            <span>
-              <i style={{ background: 'var(--c-hold)' }}></i>Hold
-            </span>
-          </div>
-          <div className="eq" id="eqChart" ref={eq}></div>
-        </div>
-        <div className="panel card">
-          <div className="ph">
-            <div>
-              <h3>Agent reasoning</h3>
-              <p>Current cycle, step by step</p>
-            </div>
-          </div>
-          <div className="brain" id="brain">
-            {(cycle?.steps ?? []).map((b, i) => {
-              const st = i < step ? 'done' : i === step ? 'run' : 'wait';
-              return (
-                <div className={`bstep ${st}`} key={b.title}>
-                  <span className="bico">
-                    <Icon id={st === 'done' ? 'i-check' : st === 'run' ? 'i-spin' : 'i-dot'} />
-                  </span>
-                  <div>
-                    <b>{b.title}</b>
-                    <span>{st === 'done' ? b.done || b.running : b.running}</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          <div className="decision" id="decision">
-            <small>Decision</small>
-            <span>{decisionText}</span>
+          <div className="seg" id="eqSeg">
+            {([7, 30, 90] as const).map((r) => (
+              <button key={r} aria-pressed={r === range} onClick={() => setRange(r)}>
+                {r}D
+              </button>
+            ))}
           </div>
         </div>
+        <div className="perf-keys">
+          <span>
+            <i style={{ background: 'var(--c-vault)' }}></i>
+            {BRAND} vault
+            {ends && <b className="num">{usd(ends.vault, 2)}</b>}
+          </span>
+          <span>
+            <i style={{ background: 'var(--c-hold)' }}></i>
+            Hold
+            {ends && <b className="num">{usd(ends.hold, 2)}</b>}
+          </span>
+        </div>
+        <div className="eq" id="eqChart" ref={eq}></div>
       </div>
 
       <div className="g2">
-        <div className="panel card">
+        <div className="panel card posx">
           {main ? (
             <>
               <div className="ph">
@@ -263,23 +280,25 @@ export default function OverviewPage() {
                   {main.inRange ? 'In range' : 'Out of range'}
                 </span>
               </div>
-              <PositionChart className="lp" id="appChart" positionId={main.id} bins={21} shape={main.shape} />
-              <div className="lpfoot">
-                <div>
-                  <small>Position</small>
-                  <b className="num">{usd(main.value)}</b>
-                </div>
-                <div>
-                  <small>Fees earned</small>
-                  <b className="num up">{usd(main.fees, 2)}</b>
-                </div>
-                <div>
-                  <small>Net vs hold</small>
-                  <b className={`num ${main.netVsHold >= 0 ? 'up' : 'down'}`}>{pct(main.netVsHold)}</b>
-                </div>
-                <div>
-                  <small>Rebalances</small>
-                  <b className="num">{main.rebalances}</b>
+              <div className="posx-body">
+                <PositionChart className="lp" id="appChart" positionId={main.id} bins={21} shape={main.shape} />
+                <div className="posx-side">
+                  <div>
+                    <small>Position</small>
+                    <b className="num">{usd(main.value)}</b>
+                  </div>
+                  <div>
+                    <small>Fees earned</small>
+                    <b className="num up">{usd(main.fees, 2)}</b>
+                  </div>
+                  <div>
+                    <small>Net vs hold</small>
+                    <b className={`num ${main.netVsHold >= 0 ? 'up' : 'down'}`}>{pct(main.netVsHold)}</b>
+                  </div>
+                  <div>
+                    <small>Rebalances</small>
+                    <b className="num">{main.rebalances}</b>
+                  </div>
                 </div>
               </div>
             </>
