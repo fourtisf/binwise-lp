@@ -14,3 +14,7 @@ export const BOT_URL = `https://t.me/${process.env.NEXT_PUBLIC_TELEGRAM_BOT || '
 /** Binwise on X */
 export const X_HANDLE = '@binwiselp';
 export const X_URL = 'https://x.com/binwiselp';
+
+/** The Binwise token: ticker and contract address (shown on the landing page with a copy button) */
+export const TOKEN_TICKER = '$BWS';
+export const TOKEN_CA = 'AHWEsrCE9hYNn8RomTbNNUUvgKVu6g3XU872asA4pump';

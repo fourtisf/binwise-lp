@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { CaPill } from '@/components/landing/CaPill';
 import { Bento } from '@/components/landing/Sections';
 import { Faq } from '@/components/landing/Faq';
 import { HeroWindow } from '@/components/landing/HeroWindow';
@@ -41,11 +42,8 @@ export default function Landing() {
               ? 'Real funds on mainnet. Start small: your funds stay in your own wallet, and you approve every move.'
               : 'No deposit needed to try. With real funds, everything stays in your own wallet.'}
           </p>
-          {/* The Binwise token's contract address, once it launches. */}
-          <div className="ca-pill" id="ca">
-            <b>CA</b>
-            <span>Coming soon</span>
-          </div>
+          {/* The Binwise token's contract address, with a copy button. */}
+          <CaPill />
         </div>
 
         <div className="wrap">
