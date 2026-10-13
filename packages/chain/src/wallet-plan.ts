@@ -1,14 +1,32 @@
 import type DLMMClass from '@meteora-ag/dlmm';
 import type { LbPosition } from '@meteora-ag/dlmm';
-import { ComputeBudgetProgram, Keypair, PublicKey, VersionedTransaction, type Connection, type Transaction } from '@solana/web3.js';
-import { NATIVE_MINT, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID, getAssociatedTokenAddressSync } from '@solana/spl-token';
+import {
+  ComputeBudgetProgram,
+  Keypair,
+  PACKET_DATA_SIZE,
+  PublicKey,
+  Transaction,
+  TransactionInstruction,
+  TransactionMessage,
+  VersionedTransaction,
+  type AddressLookupTableAccount,
+  type Connection,
+} from '@solana/web3.js';
+import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  NATIVE_MINT,
+  TOKEN_2022_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+  createAssociatedTokenAccountIdempotentInstruction,
+  getAssociatedTokenAddressSync,
+} from '@solana/spl-token';
 import BN from 'bn.js';
 import { DEFAULT_COSTS, composition, openPosition, type CostModel, type CustomRange, type LiquidityShape, type LiquiditySide } from '@binwise/core';
 import type { ActionResult, Executor, Holdings, MarkResult, OpenResult, PoolCtx, PositionRef } from './executor';
 import { withRetry } from './http';
-import type { JupiterClient, JupiterQuote } from './jupiter';
+import type { JupiterClient, JupiterInstruction, JupiterQuote } from './jupiter';
 import { MAX_SWAP_LOSS, SINGLE_TX_BINS, STRATEGY, markPosition, raw, setupRent, ui } from './live';
-import { PolicyViolation } from './programs';
+import { PROGRAM_IDS, PolicyViolation } from './programs';
 import { priorityFeeMicroLamports } from './rpc';
 import { DLMM, dlmmClass, sdk } from './sdk';
 
@@ -18,7 +36,9 @@ import { DLMM, dlmmClass, sdk } from './sdk';
  * DLMM open / add / remove / claim. A new position's account is the only other signer; its key is made
  * here, signs that one transaction and is thrown away (the account never holds funds of its own).
  *
- * Everything is built at once so the wallet asks once. A step that depends on an earlier one (liquidity
+ * Everything is built at once so the wallet asks once, and as few transactions as Solana takes: a swap and
+ * the position it pays for share one transaction when they fit (one approval even in wallets that ask once
+ * per transaction, and nothing half done if it fails). A step that depends on an earlier one (liquidity
  * added from a swap's output) uses the swap's guaranteed minimum, so it never asks for more than the
  * wallet will hold; whatever a swap returns above its minimum stays in the owner's wallet.
  */
@@ -28,6 +48,10 @@ const SOL = NATIVE_MINT.toBase58();
 const WALLET_CU_PRICE_CAP = 500_000;
 /** SOL a new position and its token accounts need besides bin arrays: position rent (refunded on close) plus fees. */
 const OPEN_SOL_MARGIN = 0.02;
+/** Accounts a swap's route may use when it shares a transaction with a new position (Jupiter's maxAccounts). */
+const SHARED_SWAP_ACCOUNTS = 20;
+/** Solana's compute limit for one transaction. */
+const MAX_CU = 1_400_000;
 
 export class NeedsOwnerApproval extends Error {}
 
@@ -47,11 +71,18 @@ export interface SwapCheck {
   to: string;
   amountIn: string;
   minOut: string;
+  /**
+   * The same transaction then opens a position from the swap's output: what that may also take from the
+   * wallet (raw, by mint), and lamports for the position's rent and new bin arrays.
+   */
+  deposit?: Record<string, string>;
+  rentLamports?: string;
 }
 
 export interface WalletPlanDeps {
   conn: Connection;
-  jupiter: Pick<JupiterClient, 'quote' | 'swap'>;
+  /** swapInstructions: lets a swap share a transaction with the position it pays for */
+  jupiter: Pick<JupiterClient, 'quote' | 'swap'> & Partial<Pick<JupiterClient, 'swapInstructions'>>;
   /** The wallet signs legacy transactions only (no lookup tables): ask Jupiter for legacy routes */
   legacyOnly?: boolean;
   /** Token symbols by mint, for the step labels the owner sees */
@@ -148,12 +179,56 @@ async function ownerTokenAccounts(conn: Connection, owner: PublicKey) {
   return out;
 }
 
+/** A Jupiter quote that passed its checks, before any transaction is built from it. */
+interface QuotedSwap {
+  quote: JupiterQuote;
+  check: SwapCheck;
+  swap: SwapStep;
+  label: string;
+}
+
 /**
- * Builds a Jupiter swap for the owner (ExactIn, 0.5% slippage) and checks it before the owner sees it:
- * the quote matches the request, the guaranteed minimum is within 3% of market value, and a simulation
- * against the owner's accounts shows only the input leaving (by at most its amount, plus fees) and at
- * least the minimum arriving. A bad route never reaches the wallet.
+ * Quotes a Jupiter swap for the owner (ExactIn, 0.5% slippage) and checks the quote: it matches the request
+ * and its guaranteed minimum is within 3% of market value. `maxAccounts`: a route small enough to share a
+ * transaction.
  */
+async function quoteSwap(d: WalletPlanDeps, from: string, to: string, inUi: number, prices: Amounts, pool?: PoolCtx, maxAccounts?: number): Promise<QuotedSwap> {
+  const [decIn, decOut] = await Promise.all([decimalsOf(d.conn, from, pool), decimalsOf(d.conn, to, pool)]);
+  const amountRaw = raw(inUi, decIn).toString();
+  if (amountRaw === '0') throw new Error('Swap amount is too small.');
+  const quote: JupiterQuote = await d.jupiter.quote(from, to, amountRaw, 50, maxAccounts, d.legacyOnly).catch((e) => {
+    // No route that small: any route, in a transaction of its own.
+    if (!maxAccounts) throw e;
+    return d.jupiter.quote(from, to, amountRaw, 50, undefined, d.legacyOnly);
+  });
+  if (quote.inputMint !== from || quote.outputMint !== to || quote.inAmount !== amountRaw || quote.swapMode !== 'ExactIn' || quote.slippageBps > 100)
+    throw new PolicyViolation('The swap quote does not match the request.');
+  const minOutUi = ui(quote.otherAmountThreshold, decOut);
+  const inUsd = ui(amountRaw, decIn) * priced(prices, from);
+  const outUsd = minOutUi * priced(prices, to);
+  if (outUsd < inUsd * (1 - MAX_SWAP_LOSS))
+    throw new Error(`Swapping would return about $${outUsd.toFixed(2)} for $${inUsd.toFixed(2)}, more than ${MAX_SWAP_LOSS * 100}% below market. Try a smaller amount or another pool.`);
+  return {
+    quote,
+    check: { from, to, amountIn: amountRaw, minOut: quote.otherAmountThreshold },
+    swap: { from, to, inUi: ui(amountRaw, decIn), minOutUi },
+    label: `Swap ${symbolOf(d, from)} → ${symbolOf(d, to)}`,
+  };
+}
+
+/**
+ * The quoted swap as a transaction of its own, checked before the owner sees it: a simulation against the
+ * owner's accounts shows only the input leaving (by at most its amount, plus fees) and at least the minimum
+ * arriving. A bad route never reaches the wallet. `precheck` false when an earlier step must land first (the
+ * tokens are still in a position): checked at send time only.
+ */
+async function swapTxStep(d: WalletPlanDeps, owner: PublicKey, q: QuotedSwap, precheck = true): Promise<WalletStep> {
+  const { swapTransaction } = await d.jupiter.swap(q.quote, owner.toBase58(), 200_000, d.legacyOnly);
+  if (precheck) await checkSwapEffects(d.conn, owner, VersionedTransaction.deserialize(fromBase64(swapTransaction)), q.check);
+  return { label: q.label, tx: swapTransaction, kind: 'swap', check: q.check };
+}
+
+/** A checked Jupiter swap as its own step (see quoteSwap and swapTxStep). */
 async function swapStep(
   d: WalletPlanDeps,
   owner: PublicKey,
@@ -162,24 +237,10 @@ async function swapStep(
   inUi: number,
   prices: Amounts,
   pool?: PoolCtx,
-  /** False when an earlier step must land first (the tokens are still in a position): checked at send time only */
   precheck = true,
 ): Promise<{ step: WalletStep; swap: SwapStep }> {
-  const [decIn, decOut] = await Promise.all([decimalsOf(d.conn, from, pool), decimalsOf(d.conn, to, pool)]);
-  const amountRaw = raw(inUi, decIn).toString();
-  if (amountRaw === '0') throw new Error('Swap amount is too small.');
-  const quote: JupiterQuote = await d.jupiter.quote(from, to, amountRaw, 50, undefined, d.legacyOnly);
-  if (quote.inputMint !== from || quote.outputMint !== to || quote.inAmount !== amountRaw || quote.swapMode !== 'ExactIn' || quote.slippageBps > 100)
-    throw new PolicyViolation('The swap quote does not match the request.');
-  const minOutUi = ui(quote.otherAmountThreshold, decOut);
-  const inUsd = ui(amountRaw, decIn) * priced(prices, from);
-  const outUsd = minOutUi * priced(prices, to);
-  if (outUsd < inUsd * (1 - MAX_SWAP_LOSS))
-    throw new Error(`Swapping would return about $${outUsd.toFixed(2)} for $${inUsd.toFixed(2)}, more than ${MAX_SWAP_LOSS * 100}% below market. Try a smaller amount or another pool.`);
-  const { swapTransaction } = await d.jupiter.swap(quote, owner.toBase58(), 200_000, d.legacyOnly);
-  const check: SwapCheck = { from, to, amountIn: amountRaw, minOut: quote.otherAmountThreshold };
-  if (precheck) await checkSwapEffects(d.conn, owner, VersionedTransaction.deserialize(fromBase64(swapTransaction)), check);
-  return { step: { label: `Swap ${symbolOf(d, from)} → ${symbolOf(d, to)}`, tx: swapTransaction, kind: 'swap', check }, swap: { from, to, inUi: ui(amountRaw, decIn), minOutUi } };
+  const q = await quoteSwap(d, from, to, inUi, prices, pool);
+  return { step: await swapTxStep(d, owner, q, precheck), swap: q.swap };
 }
 
 /** Lamports a swap may use besides its input: network fee, priority fee, new token accounts. */
@@ -189,11 +250,14 @@ const SWAP_SOL_TOLERANCE = 10_000_000n;
  * Simulates a swap for the owner and refuses it unless it only does what was asked: only `from` leaves the
  * wallet (at most its amount, plus fees) and at least the minimum of `to` arrives in the owner's own account
  * for it. Unsigned before the wallet sees it (`signed` false), or as signed right before it is sent.
+ * A swap that also opens a position (`c.deposit`): the position's tokens may leave too, up to its amounts,
+ * and its rent; what's left of `to` is at least the minimum less what went into the position.
  *
  * Only accounts the transaction itself uses can change, and Solana reports at most that many, so the check
  * watches the owner's token accounts among them, the owner's account for `to`, and the owner's SOL.
+ * Returns the compute units the simulation used.
  */
-export async function checkSwapEffects(conn: Connection, owner: PublicKey, tx: VersionedTransaction, c: SwapCheck, signed = false) {
+export async function checkSwapEffects(conn: Connection, owner: PublicKey, tx: VersionedTransaction, c: SwapCheck, signed = false): Promise<{ unitsConsumed?: number }> {
   if (!tx.message.staticAccountKeys[0]?.equals(owner)) throw new PolicyViolation('The swap is not paid by your wallet.');
   const tables = await Promise.all(
     tx.message.addressTableLookups.map(async (l) => {
@@ -237,10 +301,19 @@ export async function checkSwapEffects(conn: Connection, owner: PublicKey, tx: V
   const solDelta = lamportsAfter - lamportsBefore + (delta.get(SOL) ?? 0n); // native + wrapped
   const amountIn = BigInt(c.amountIn);
   const minOut = BigInt(c.minOut);
-  for (const [mint, dl] of delta) if (dl < 0n && mint !== c.from && mint !== SOL) throw new PolicyViolation(`The swap would move another token (${mint.slice(0, 4)}…) out of your wallet.`);
-  if (c.from === SOL ? -solDelta > amountIn + SWAP_SOL_TOLERANCE : -(delta.get(c.from) ?? 0n) > amountIn) throw new PolicyViolation('The swap would take more than asked.');
-  if (c.from !== SOL && -solDelta > SWAP_SOL_TOLERANCE) throw new PolicyViolation('The swap would spend too much SOL.');
-  if (c.to === SOL ? solDelta < minOut - SWAP_SOL_TOLERANCE : (delta.get(c.to) ?? 0n) < minOut) throw new PolicyViolation("The swap's output wouldn't arrive in your wallet.");
+  const deposit = (mint: string) => BigInt(c.deposit?.[mint] ?? '0');
+  // Tokens (SOL apart): at most the swap's input and the position's share of each may leave.
+  for (const [mint, dl] of delta) {
+    if (mint === SOL || mint === c.to) continue;
+    const may = (mint === c.from ? amountIn : 0n) + deposit(mint);
+    if (-dl > may) throw new PolicyViolation(may ? 'The swap would take more than asked.' : `The swap would move another token (${mint.slice(0, 4)}…) out of your wallet.`);
+  }
+  // SOL, native and wrapped: the swap's input and the position's share, fees and rent.
+  const solMay = (c.from === SOL ? amountIn : 0n) + deposit(SOL) + SWAP_SOL_TOLERANCE + BigInt(c.rentLamports ?? '0');
+  if (solDelta < (c.to === SOL ? minOut : 0n) - solMay)
+    throw new PolicyViolation(c.to === SOL ? "The swap's output wouldn't arrive in your wallet." : c.from === SOL ? 'The swap would take more than asked.' : 'The swap would spend too much SOL.');
+  if (c.to !== SOL && (delta.get(c.to) ?? 0n) < minOut - deposit(c.to)) throw new PolicyViolation("The swap's output wouldn't arrive in your wallet.");
+  return { unitsConsumed: r.value.unitsConsumed ?? undefined };
 }
 
 /** Solana would refuse the swap (not a policy problem): its error and logs, for a plain answer. */
@@ -250,6 +323,114 @@ export class SwapRefused extends Error {
     readonly logs: string[] | null | undefined,
   ) {
     super(`The swap wouldn't go through right now (${JSON.stringify(err)}). Nothing was sent; try again.`);
+  }
+}
+
+const jupiterIx = (i: JupiterInstruction) =>
+  new TransactionInstruction({
+    programId: new PublicKey(i.programId),
+    keys: i.accounts.map((a) => ({ pubkey: new PublicKey(a.pubkey), isSigner: a.isSigner, isWritable: a.isWritable })),
+    data: Buffer.from(i.data, 'base64'),
+  });
+
+/** The same DLMM or token-account instruction twice (a bin array or account both SDK transactions would create). */
+const repeated = (a: TransactionInstruction, b: TransactionInstruction) =>
+  [PROGRAM_IDS.DLMM, PROGRAM_IDS.ASSOCIATED_TOKEN].includes(a.programId.toBase58() as never) &&
+  a.programId.equals(b.programId) &&
+  a.data.equals(b.data) &&
+  a.keys.length === b.keys.length &&
+  a.keys.every((k, i) => k.pubkey.equals(b.keys[i].pubkey) && k.isWritable === b.keys[i].isWritable && k.isSigner === b.keys[i].isSigner);
+
+/**
+ * One transaction for what would otherwise take several: `swap` (a Jupiter swap that goes first, its output
+ * feeding the rest) and the DLMM SDK's transactions `sdk`, in order. One approval even in wallets that ask
+ * once per transaction, one network fee, and all or nothing: if any part fails, none of it happens.
+ *
+ * Null when it doesn't fit Solana's limits (1232 bytes; 1.4M compute units, measured by a simulation when
+ * `precheck`) or can't be built or checked: the plan then uses a transaction per part, as before. With a
+ * swap it carries the swap's check, widened by what the position takes (`deposit`, `rentLamports`), and
+ * is simulated against it now when `precheck`; without a simulation only a `light` position shares a
+ * transaction with a swap.
+ */
+async function oneTransaction(
+  d: WalletPlanDeps,
+  owner: PublicKey,
+  o: {
+    swap?: QuotedSwap;
+    sdk: Transaction[];
+    signers: Keypair[];
+    label: string;
+    kind: WalletStep['kind'];
+    precheck: boolean;
+    light: boolean;
+    deposit: Record<string, string>;
+    rentLamports: string;
+  },
+): Promise<WalletStep | null> {
+  if (o.swap && (d.legacyOnly || !d.jupiter.swapInstructions || (!o.precheck && !o.light))) return null;
+  try {
+    // The SDK's instructions without its compute budget (ours goes first), a repeated one once.
+    const body: TransactionInstruction[] = [];
+    for (const ix of o.sdk.flatMap((t) => t.instructions))
+      if (!ix.programId.equals(ComputeBudgetProgram.programId) && !body.some((b) => repeated(b, ix))) body.push(ix);
+
+    let swapIxs: TransactionInstruction[] = [];
+    let tables: AddressLookupTableAccount[] = [];
+    if (o.swap) {
+      const j = await d.jupiter.swapInstructions!(o.swap.quote, owner.toBase58());
+      if (j.otherInstructions?.length || j.tokenLedgerInstruction) return null;
+      swapIxs = [...j.setupInstructions.map(jupiterIx), jupiterIx(j.swapInstruction), ...(j.cleanupInstruction ? [jupiterIx(j.cleanupInstruction)] : [])];
+      const found = await Promise.all(j.addressLookupTableAddresses.map(async (a) => (await withRetry(() => d.conn.getAddressLookupTable(new PublicKey(a)), 3, 'getAddressLookupTable')).value));
+      if (found.some((t) => !t)) return null;
+      tables = found as AddressLookupTableAccount[];
+      // The swap closes the owner's wrapped-SOL account when done; the position may need it again (the SDK
+      // only creates it when it didn't exist yet).
+      const wsol = getAssociatedTokenAddressSync(NATIVE_MINT, owner, true);
+      const createsWsol = body.some((ix) => ix.programId.equals(ASSOCIATED_TOKEN_PROGRAM_ID) && ix.keys[1]?.pubkey.equals(wsol));
+      if (j.cleanupInstruction && !createsWsol && body.some((ix) => ix.keys.some((k) => k.pubkey.equals(wsol))))
+        body.unshift(createAssociatedTokenAccountIdempotentInstruction(owner, wsol, owner, NATIVE_MINT, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID));
+    }
+
+    const writable = [...swapIxs, ...body].flatMap((ix) => ix.keys.filter((k) => k.isWritable).map((k) => k.pubkey.toBase58()));
+    const cuPrice = await priorityFeeMicroLamports(d.conn, [...new Set(writable)], WALLET_CU_PRICE_CAP);
+    const { blockhash, lastValidBlockHeight } = await withRetry(() => d.conn.getLatestBlockhash('confirmed'), 3, 'getLatestBlockhash');
+    const build = (units: number): Uint8Array | null => {
+      const ixs = [ComputeBudgetProgram.setComputeUnitLimit({ units }), ComputeBudgetProgram.setComputeUnitPrice({ microLamports: cuPrice }), ...swapIxs, ...body];
+      let bytes: Uint8Array;
+      if (o.swap) {
+        const v = new VersionedTransaction(new TransactionMessage({ payerKey: owner, recentBlockhash: blockhash, instructions: ixs }).compileToV0Message(tables));
+        v.sign(o.signers);
+        bytes = v.serialize();
+      } else {
+        // No lookup tables needed: a legacy transaction, like the SDK's own (any wallet signs it).
+        const t = new Transaction({ feePayer: owner, blockhash, lastValidBlockHeight }).add(...ixs);
+        t.partialSign(...o.signers);
+        bytes = t.serialize({ requireAllSignatures: false, verifySignatures: false });
+      }
+      return bytes.length <= PACKET_DATA_SIZE ? bytes : null;
+    };
+
+    let bytes = build(MAX_CU);
+    if (!bytes) return null;
+    const check: SwapCheck | undefined = o.swap ? { ...o.swap.check, deposit: o.deposit, rentLamports: o.rentLamports } : undefined;
+    if (o.precheck) {
+      // As the owner's wallet is now: it goes through, and (with a swap) moves only what the check allows.
+      const tx = VersionedTransaction.deserialize(bytes);
+      let units: number | undefined;
+      if (check) units = (await checkSwapEffects(d.conn, owner, tx, check)).unitsConsumed;
+      else {
+        const r = await withRetry(() => d.conn.simulateTransaction(tx, { sigVerify: false, replaceRecentBlockhash: true, commitment: 'processed' }), 2, 'simulateTransaction');
+        if (r.value.err) return null;
+        units = r.value.unitsConsumed ?? undefined;
+      }
+      // What it used, with room for the price moving a few bins before it lands.
+      if (units) bytes = build(Math.min(MAX_CU, Math.ceil(units * 1.2) + 50_000)) ?? bytes;
+    }
+    return { label: o.label, tx: toBase64(bytes), kind: o.kind, ...(check ? { check } : {}) };
+  } catch {
+    // Too large, a route the check refuses, an RPC hiccup: the plan falls back to a transaction per part,
+    // each checked on its own as before.
+    return null;
   }
 }
 
@@ -263,7 +444,8 @@ function rangeAround(activeId: number, r: Pick<OpenWalletRequest, 'side' | 'bins
 /**
  * Opens a position in the owner's wallet from a budget: swaps what the range needs from the budget
  * (other tokens first, then the other pool token beyond its own share), then adds both tokens with the
- * shape. Checks the wallet keeps enough SOL for the position's rent and fees.
+ * shape. Checks the wallet keeps enough SOL for the position's rent and fees. One transaction for all of it
+ * when it fits (see oneTransaction), else a transaction per swap and for the position.
  */
 export async function planOpen(d: WalletPlanDeps, req: OpenWalletRequest): Promise<OpenPlan> {
   const { pool, prices } = req;
@@ -290,10 +472,11 @@ export async function planOpen(d: WalletPlanDeps, req: OpenWalletRequest): Promi
     [pool.mintY]: req.side === 'x' ? 0 : req.side === 'y' ? valueUsd : mix ? mix.y * pool.usdY : valueUsd / 2,
   };
 
-  // Swap the budget into the two tokens, counting each swap's guaranteed minimum.
+  // Swap the budget into the two tokens, counting each swap's guaranteed minimum. A route small enough to
+  // share a transaction with the position when the wallet can sign one (versioned, with lookup tables).
+  const together = !d.legacyOnly && !!d.jupiter.swapInstructions;
   const have: Amounts = { ...req.budget };
-  const steps: WalletStep[] = [];
-  const swaps: SwapStep[] = [];
+  const quoted: QuotedSwap[] = [];
   for (const target of [pool.mintX, pool.mintY]) {
     let missing = needUsd[target] - (have[target] ?? 0) * usd(target);
     if (missing <= Math.max(0.5, needUsd[target] * 0.01)) continue;
@@ -308,11 +491,10 @@ export async function planOpen(d: WalletPlanDeps, req: OpenWalletRequest): Promi
       const takeUsd = Math.min(spendableUsd, missing);
       if (takeUsd < 0.5) continue;
       const inUi = Math.min(have[src], takeUsd / usd(src));
-      const s = await swapStep(d, owner, src, target, inUi, prices, pool, !req.incoming);
-      steps.push(s.step);
-      swaps.push(s.swap);
-      have[src] -= s.swap.inUi;
-      have[target] = (have[target] ?? 0) + s.swap.minOutUi;
+      const q = await quoteSwap(d, src, target, inUi, prices, pool, together ? SHARED_SWAP_ACCOUNTS : undefined);
+      quoted.push(q);
+      have[src] -= q.swap.inUi;
+      have[target] = (have[target] ?? 0) + q.swap.minOutUi;
       missing -= takeUsd;
     }
   }
@@ -340,18 +522,48 @@ export async function planOpen(d: WalletPlanDeps, req: OpenWalletRequest): Promi
 
   const positionKp = Keypair.generate();
   const bins = maxBinId - minBinId + 1;
+  // The SDK's transactions for the position: one up to SINGLE_TX_BINS bins, else open, then add.
+  const sdkSteps: { label: string; tx: Transaction; kind: 'open' | 'add' }[] = [];
   if (bins <= SINGLE_TX_BINS) {
     const t = await dlmm.initializePositionAndAddLiquidityByStrategy({ positionPubKey: positionKp.publicKey, totalXAmount: x, totalYAmount: y, strategy, user: owner, slippage: 1 });
-    steps.push({ label: 'Open the position and add liquidity', tx: await forOwner(d, t, owner, [positionKp]), kind: 'open' });
+    sdkSteps.push({ label: 'Open the position and add liquidity', tx: t, kind: 'open' });
   } else {
     const create = await dlmm.createEmptyPosition({ positionPubKey: positionKp.publicKey, minBinId, maxBinId, user: owner });
-    steps.push({ label: 'Open the position', tx: await forOwner(d, create, owner, [positionKp]), kind: 'open' });
+    sdkSteps.push({ label: 'Open the position', tx: create, kind: 'open' });
     const adds = await dlmm.addLiquidityByStrategyChunkable({ positionPubKey: positionKp.publicKey, totalXAmount: x, totalYAmount: y, strategy, user: owner, slippage: 1 });
-    for (const [i, t] of adds.entries()) steps.push({ label: `Add liquidity (${i + 1} of ${adds.length})`, tx: await forOwner(d, t, owner), kind: 'add' });
+    for (const [i, t] of adds.entries()) sdkSteps.push({ label: `Add liquidity (${i + 1} of ${adds.length})`, tx: t, kind: 'add' });
+  }
+
+  // As few transactions as fit: the swap and the position together, else the swap, then the position in one.
+  // What the position may take (2% over its amounts: the SDK's own slippage allowance) and its rent, for the check.
+  const deposit = { [pool.mintX]: x.muln(102).divn(100).addn(1).toString(), [pool.mintY]: y.muln(102).divn(100).addn(1).toString() };
+  const rentLamports = String(Math.ceil((rent.sol + sdk().POSITION_FEE) * 1e9));
+  const position = (swap: QuotedSwap | undefined, precheck: boolean) =>
+    oneTransaction(d, owner, {
+      swap,
+      sdk: sdkSteps.map((s) => s.tx),
+      signers: [positionKp],
+      label: swap ? `${swap.label} and open the position` : 'Open the position and add liquidity',
+      kind: 'open',
+      precheck,
+      // Without a simulation to measure it, only a light position shares a transaction with a swap.
+      light: bins <= SINGLE_TX_BINS,
+      deposit,
+      rentLamports,
+    });
+  let steps: WalletStep[] = [];
+  const all = quoted.length <= 1 && quoted.length + sdkSteps.length > 1 ? await position(quoted[0], !req.incoming) : null;
+  if (all) steps = [all];
+  else {
+    for (const q of quoted) steps.push(await swapTxStep(d, owner, q, !req.incoming));
+    // After a swap the position can't be simulated yet (its tokens arrive with the swap).
+    const one = quoted.length && sdkSteps.length > 1 ? await position(undefined, false) : null;
+    if (one) steps.push(one);
+    else for (const [i, s] of sdkSteps.entries()) steps.push({ label: s.label, tx: await forOwner(d, s.tx, owner, i === 0 ? [positionKp] : []), kind: s.kind });
   }
   return {
     steps,
-    swaps,
+    swaps: quoted.map((q) => q.swap),
     position: { address: positionKp.publicKey.toBase58(), lowerBin: minBinId, upperBin: maxBinId, amountX: ui(x, pool.decimalsX), amountY: ui(y, pool.decimalsY) },
     rentSol,
     newBinArrays: rent.arrays,

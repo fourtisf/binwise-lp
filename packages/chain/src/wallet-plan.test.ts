@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { Keypair, PublicKey, SystemProgram, Transaction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
+import { AddressLookupTableAccount, Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
+import { NATIVE_MINT, getAssociatedTokenAddressSync } from '@solana/spl-token';
 import BN from 'bn.js';
 
 /** Self-custody plans without the network: the DLMM SDK, Jupiter and the RPC are stand-ins that record what they're asked. */
@@ -55,7 +56,18 @@ const fakeDlmm = {
     calls.push({ method: 'claim', args: a });
     return [sdkTx(a.owner as PublicKey)];
   },
+  // Wide ranges: open the position, then add (both create the same bin array, like the SDK's own).
+  createEmptyPosition: async (a: Record<string, unknown>) => {
+    calls.push({ method: 'create', args: a });
+    return sdkTx(a.user as PublicKey, a.positionPubKey as PublicKey).add(binArrayIx());
+  },
+  addLiquidityByStrategyChunkable: async (a: Record<string, unknown>) => {
+    calls.push({ method: 'add', args: a });
+    return [new Transaction().add(binArrayIx(), SystemProgram.transfer({ fromPubkey: a.user as PublicKey, toPubkey: fakeDlmm.pubkey, lamports: 7 }))];
+  },
 };
+const binArray = Keypair.generate().publicKey;
+const binArrayIx = () => new TransactionInstruction({ programId: new PublicKey('LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo'), keys: [{ pubkey: binArray, isSigner: false, isWritable: true }], data: Buffer.from([35, 86, 19, 1]) });
 
 vi.mock('./sdk', () => ({
   DLMM: { create: async () => fakeDlmm },
@@ -83,6 +95,8 @@ let lastSwapFromSol = false;
 let lastSwapOut: bigint | null = 0n;
 /** The owner's other token accounts (spam and empty ones too), none of them used by the swaps here */
 let otherAccounts = 0;
+/** Each swap transaction's quote, by its blockhash: what simulating it spends and delivers */
+const swapsByHash = new Map<string, { in: bigint; fromSol: boolean; out: bigint }>();
 /** Simulations asked for, and the accounts each wanted reported */
 const simulated: string[][] = [];
 /** An SPL token account holding `amount` (raw): the amount is the u64 at offset 64. */
@@ -106,19 +120,24 @@ const conn = {
           }))
         : [],
   }),
+  getAddressLookupTable: async (key: PublicKey) => ({
+    value: new AddressLookupTableAccount({ key, state: { deactivationSlot: BigInt('18446744073709551615'), lastExtendedSlot: 0, lastExtendedSlotStartIndex: 0, addresses: tableAddresses } }),
+  }),
   // Like Solana: never more accounts reported than the transaction uses.
-  simulateTransaction: async (tx: VersionedTransaction, o: { accounts: { addresses: string[] } }) => {
-    const addresses = o.accounts.addresses;
+  simulateTransaction: async (tx: VersionedTransaction, o: { accounts?: { addresses: string[] } }) => {
+    const addresses = o.accounts?.addresses ?? [];
     simulated.push(addresses);
     if (addresses.length > tx.message.staticAccountKeys.length + 1) throw new Error(`Too many accounts provided; max ${tx.message.staticAccountKeys.length}`);
+    const s = swapsByHash.get(tx.message.recentBlockhash) ?? { in: lastSwapIn, fromSol: lastSwapFromSol, out: lastSwapOut };
     return {
       value: {
         err: null,
         logs: [],
+        unitsConsumed: 300_000,
         accounts: addresses.map((a) =>
           a === owner.toBase58()
-            ? { lamports: walletLamports - Number(simulatedSpend(lastSwapIn, lastSwapFromSol)), data: ['', 'base64'] }
-            : { lamports: 2_039_280, data: [tokenAccount(lastSwapOut ?? 0n), 'base64'] },
+            ? { lamports: walletLamports - Number(simulatedSpend(s.in, s.fromSol)), data: ['', 'base64'] }
+            : { lamports: 2_039_280, data: [tokenAccount(s.out ?? 0n), 'base64'] },
         ),
       },
     };
@@ -128,8 +147,30 @@ const conn = {
 /** Jupiter stand-in: fair quotes at `rate` (out per in, UI) with a 0.5% floor, and a swap tx paid by the user. */
 const decimals: Record<string, number> = { [SOL]: 9, [CARDS]: 6, [USDC]: 6 };
 let rate: Record<string, number> = {};
+/** Jupiter's swap as instructions: a route of `routeAccounts` accounts, in its lookup table or not */
+let routeAccounts = 10;
+let routeInTable = true;
+let tableAddresses: PublicKey[] = [];
+let lastMaxAccounts: number | undefined;
+const JUP = 'JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4';
+const wsolAta = getAssociatedTokenAddressSync(NATIVE_MINT, owner, true);
+const swapInstructions = async (_q: unknown, user: string) => {
+  const route = Array.from({ length: routeAccounts }, () => Keypair.generate().publicKey);
+  tableAddresses = routeInTable ? route : [];
+  const meta = (pubkey: PublicKey | string, isSigner = false) => ({ pubkey: pubkey.toString(), isSigner, isWritable: true });
+  return {
+    computeBudgetInstructions: [],
+    otherInstructions: [],
+    setupInstructions: [{ programId: 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL', accounts: [meta(user, true), meta(wsolAta)], data: 'AQ==' }],
+    swapInstruction: { programId: JUP, accounts: [meta(user, true), ...route.map((r) => meta(r))], data: Buffer.alloc(40).toString('base64') },
+    // Unwraps SOL: closes the owner's wrapped-SOL account.
+    cleanupInstruction: { programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', accounts: [meta(wsolAta), meta(user, true)], data: 'CQ==' },
+    addressLookupTableAddresses: [Keypair.generate().publicKey.toBase58()],
+  };
+};
 const jupiter = {
-  quote: async (inputMint: string, outputMint: string, amountRaw: string) => {
+  quote: async (inputMint: string, outputMint: string, amountRaw: string, _slippage?: number, maxAccounts?: number) => {
+    lastMaxAccounts = maxAccounts;
     lastSwapIn = BigInt(amountRaw);
     lastSwapFromSol = inputMint === SOL;
     const outUi = (Number(amountRaw) / 10 ** decimals[inputMint]) * rate[`${inputMint}>${outputMint}`];
@@ -137,8 +178,10 @@ const jupiter = {
     lastSwapOut = BigInt(out);
     return { inputMint, outputMint, inAmount: amountRaw, outAmount: String(out), otherAmountThreshold: String(Math.floor(out * 0.995)), swapMode: 'ExactIn', slippageBps: 50, priceImpactPct: '0', routePlan: [] };
   },
-  swap: async (_q: unknown, user: string) => {
-    const msg = new TransactionMessage({ payerKey: new PublicKey(user), recentBlockhash: Keypair.generate().publicKey.toBase58(), instructions: [] }).compileToV0Message();
+  swap: async (q: { inputMint: string; inAmount: string; outAmount: string } | null, user: string) => {
+    const blockhash = Keypair.generate().publicKey.toBase58();
+    if (q) swapsByHash.set(blockhash, { in: BigInt(q.inAmount), fromSol: q.inputMint === SOL, out: BigInt(q.outAmount) });
+    const msg = new TransactionMessage({ payerKey: new PublicKey(user), recentBlockhash: blockhash, instructions: [] }).compileToV0Message();
     return { swapTransaction: Buffer.from(new VersionedTransaction(msg).serialize()).toString('base64'), lastValidBlockHeight: 100 };
   },
 };
@@ -157,6 +200,9 @@ beforeEach(() => {
   rate = { [`${SOL}>${CARDS}`]: 1000, [`${SOL}>${USDC}`]: 150, [`${CARDS}>${USDC}`]: 0.15, [`${USDC}>${CARDS}`]: 1 / 0.15, [`${USDC}>${SOL}`]: 1 / 150 };
   otherAccounts = 0;
   simulated.length = 0;
+  swapsByHash.clear();
+  routeAccounts = 10;
+  routeInTable = true;
 });
 
 describe('planOpen (self-custody)', () => {
@@ -208,6 +254,141 @@ describe('planOpen (self-custody)', () => {
   });
 });
 
+describe('planOpen: as few transactions as fit (one approval even in wallets that ask once per transaction)', () => {
+  const solPool = { ...pool, mintX: SOL, decimalsX: 9, usdX: 150, price: 150 };
+  const dj = { ...d, jupiter: { ...jupiter, swapInstructions } as never };
+
+  it('pays with SOL into a SOL pool: the swap and the position in one transaction, checked as a whole', async () => {
+    // The SDK wraps SOL into the owner's wrapped-SOL account, which the swap's cleanup closes before.
+    const init = fakeDlmm.initializePositionAndAddLiquidityByStrategy;
+    fakeDlmm.initializePositionAndAddLiquidityByStrategy = async (a) =>
+      (await init(a)).add(SystemProgram.transfer({ fromPubkey: a.user as PublicKey, toPubkey: wsolAta, lamports: 1 }));
+    try {
+      const p = await planOpen(dj, { owner: owner.toBase58(), pool: solPool, budget: { [SOL]: 1 }, prices, shape: 'spot', side: 'both', binsEachSide: 5 });
+      expect(lastMaxAccounts).toBe(20);
+      expect(p.steps).toHaveLength(1);
+      expect(p.steps[0]).toMatchObject({ label: 'Swap SOL → USDC and open the position', kind: 'open' });
+      expect(p.swaps).toMatchObject([{ from: SOL, to: USDC, inUi: 0.5 }]);
+      // Checked like the swap, plus what the position takes (2% over its amounts) and its rent.
+      const x = Math.round(p.position.amountX * 1e9);
+      const y = Math.round(p.position.amountY * 1e6);
+      expect(p.steps[0].check).toMatchObject({ from: SOL, to: USDC, amountIn: '500000000', rentLamports: '57000000' });
+      expect(Number(p.steps[0].check!.deposit![SOL])).toBe(Math.floor((x * 102) / 100) + 1);
+      expect(Number(p.steps[0].check!.deposit![USDC])).toBe(Math.floor((y * 102) / 100) + 1);
+      expect(simulated).toHaveLength(1);
+
+      const tx = VersionedTransaction.deserialize(Buffer.from(p.steps[0].tx, 'base64'));
+      expect(tx.version).toBe(0);
+      expect(tx.message.addressTableLookups).toHaveLength(1);
+      const keys = tx.message.staticAccountKeys;
+      expect(keys[0].equals(owner)).toBe(true);
+      // Signed by the new position; the owner's signature still to come.
+      const signer = (k: string) => tx.signatures[keys.findIndex((x) => x.toBase58() === k)];
+      expect(signer(p.position.address).some((b) => b !== 0)).toBe(true);
+      expect(signer(owner.toBase58()).every((b) => b === 0)).toBe(true);
+      // Compute: what the simulation used (300k) plus room; then the swap, its cleanup, the wrapped-SOL
+      // account made again, and the SDK's instructions without its compute budget.
+      const ixs = tx.message.compiledInstructions.map((ix) => ({ program: keys[ix.programIdIndex].toBase58(), data: Buffer.from(ix.data) }));
+      expect(ixs[0].program).toBe('ComputeBudget111111111111111111111111111111');
+      expect(ixs[0].data.readUInt32LE(1)).toBe(410_000);
+      expect(ixs.map((i) => i.program).slice(2)).toEqual([
+        'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL',
+        JUP,
+        'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+        'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL',
+        '11111111111111111111111111111111',
+        '11111111111111111111111111111111',
+      ]);
+    } finally {
+      fakeDlmm.initializePositionAndAddLiquidityByStrategy = init;
+    }
+  });
+
+  it("falls back to a transaction each when they don't fit together", async () => {
+    routeAccounts = 40;
+    routeInTable = false;
+    const p = await planOpen(dj, { owner: owner.toBase58(), pool: solPool, budget: { [SOL]: 1 }, prices, shape: 'spot', side: 'both', binsEachSide: 5 });
+    expect(p.steps.map((s) => s.kind)).toEqual(['swap', 'open']);
+    expect(p.steps[0].check).toMatchObject({ from: SOL, to: USDC, amountIn: '500000000' });
+    expect(p.steps[0].check!.deposit).toBeUndefined();
+  });
+
+  it('falls back to a transaction each when Solana would refuse them together', async () => {
+    // The simulation of the two together fails (here: once); the swap on its own is then checked as before.
+    const spy = vi.spyOn(conn, 'simulateTransaction');
+    spy.mockImplementationOnce(async () => ({ value: { err: { InstructionError: [3, { Custom: 1 }] }, logs: [], accounts: [], unitsConsumed: 0 } }) as never);
+    const p = await planOpen(dj, { owner: owner.toBase58(), pool: solPool, budget: { [SOL]: 1 }, prices, shape: 'spot', side: 'both', binsEachSide: 5 });
+    spy.mockRestore();
+    expect(p.steps.map((s) => s.kind)).toEqual(['swap', 'open']);
+  });
+
+  it('no route small enough to share a transaction: any route, on its own', async () => {
+    // Asked with a cap on its accounts: no route; then without.
+    const asked: (number | undefined)[] = [];
+    const p = await planOpen(
+      { ...dj, jupiter: { ...jupiter, swapInstructions, quote: async (...a: Parameters<typeof jupiter.quote>) => (asked.push(a[4]), a[4] ? Promise.reject(new Error('No routes found')) : jupiter.quote(...a)) } as never },
+      { owner: owner.toBase58(), pool: solPool, budget: { [SOL]: 1 }, prices, shape: 'spot', side: 'both', binsEachSide: 5 },
+    );
+    expect(asked).toEqual([20, undefined]);
+    // The route that came back may not fit: the plan tries, and falls back if it doesn't.
+    expect(p.swaps).toMatchObject([{ from: SOL, to: USDC }]);
+  });
+
+  it('a wallet that only signs legacy transactions: the swap stays on its own', async () => {
+    const p = await planOpen({ ...dj, legacyOnly: true }, { owner: owner.toBase58(), pool: solPool, budget: { [SOL]: 1 }, prices, shape: 'spot', side: 'both', binsEachSide: 5 });
+    expect(lastMaxAccounts).toBeUndefined();
+    expect(p.steps.map((s) => s.kind)).toEqual(['swap', 'open']);
+  });
+
+  it('a wide range from tokens already in the wallet: open and add in one transaction', async () => {
+    // 41 bins: the SDK opens, then adds; both would create the same bin array.
+    const p = await planOpen(d, { owner: owner.toBase58(), pool, budget: { [CARDS]: 500, [USDC]: 75 }, prices, shape: 'spot', side: 'both', binsEachSide: 20 });
+    expect(p.swaps).toHaveLength(0);
+    expect(p.steps).toHaveLength(1);
+    expect(p.steps[0]).toMatchObject({ label: 'Open the position and add liquidity', kind: 'open' });
+    expect(p.steps[0].check).toBeUndefined();
+    const tx = Transaction.from(Buffer.from(p.steps[0].tx, 'base64'));
+    expect(tx.feePayer!.equals(owner)).toBe(true);
+    const sigs = Object.fromEntries(tx.signatures.map((s) => [s.publicKey.toBase58(), s.signature != null]));
+    expect(sigs[p.position.address]).toBe(true);
+    expect(sigs[owner.toBase58()]).toBe(false);
+    expect(tx.instructions.map((i) => i.programId.toBase58())).toEqual([
+      'ComputeBudget111111111111111111111111111111',
+      'ComputeBudget111111111111111111111111111111',
+      '11111111111111111111111111111111',
+      'LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo', // the bin array, once
+      '11111111111111111111111111111111',
+    ]);
+    expect(tx.instructions[0].data.readUInt32LE(1)).toBe(410_000);
+  });
+
+  it('a wide range after a swap: the swap, then open and add in one transaction', async () => {
+    const p = await planOpen(dj, { owner: owner.toBase58(), pool: solPool, budget: { [SOL]: 1 }, prices, shape: 'spot', side: 'both', binsEachSide: 20 });
+    // Measured by a simulation, the three fit in one.
+    expect(p.steps.map((s) => s.label)).toEqual(['Swap SOL → USDC and open the position']);
+    // Without one (the tokens arrive with an earlier step), a wide position doesn't share with the swap.
+    held = { x: 400_000_000, y: 0 };
+    fillRatio = 150 / 1000;
+    walletLamports = 0.09e9;
+    const r = await planRebalance(dj, { owner: owner.toBase58(), pool: solPool, position: Keypair.generate().publicKey.toBase58(), prices, shape: 'spot', side: 'both', binsEachSide: 20 });
+    expect(r.steps.map((s) => s.label)).toEqual(['Close the position', 'Swap SOL → USDC', 'Open the position and add liquidity']);
+    expect(r.steps[2].check).toBeUndefined();
+  });
+
+  it('rebalances a narrow range with the swap and the new position in one transaction, checked when it is sent', async () => {
+    held = { x: 400_000_000, y: 0 };
+    fillRatio = 150 / 1000;
+    walletLamports = 0.09e9;
+    const r = await planRebalance(dj, { owner: owner.toBase58(), pool: solPool, position: Keypair.generate().publicKey.toBase58(), prices, shape: 'spot', side: 'both', binsEachSide: 10 });
+    expect(r.steps.map((s) => s.label)).toEqual(['Close the position', 'Swap SOL → USDC and open the position']);
+    expect(r.steps[1].check).toMatchObject({ from: SOL, to: USDC });
+    // Its SOL only arrives with the close: nothing simulated now, the most compute allowed.
+    expect(simulated).toHaveLength(0);
+    const tx = VersionedTransaction.deserialize(Buffer.from(r.steps[1].tx, 'base64'));
+    expect(Buffer.from(tx.message.compiledInstructions[0].data).readUInt32LE(1)).toBe(1_400_000);
+  });
+});
+
 describe('checkSwapEffects', () => {
   it('refuses a swap paid by another wallet', async () => {
     const msg = new TransactionMessage({ payerKey: stranger, recentBlockhash: Keypair.generate().publicKey.toBase58(), instructions: [] }).compileToV0Message();
@@ -233,7 +414,27 @@ describe('checkSwapEffects', () => {
     const tx = VersionedTransaction.deserialize(Buffer.from(swap.swapTransaction, 'base64'));
     await expect(checkSwapEffects(conn as never, owner, tx, { from: SOL, to: USDC, amountIn: '1000000', minOut: '100' })).rejects.toThrow(/output wouldn't arrive/);
     lastSwapOut = 150n;
-    await expect(checkSwapEffects(conn as never, owner, tx, { from: SOL, to: USDC, amountIn: '1000000', minOut: '100' })).resolves.toBeUndefined();
+    await expect(checkSwapEffects(conn as never, owner, tx, { from: SOL, to: USDC, amountIn: '1000000', minOut: '100' })).resolves.toEqual({ unitsConsumed: 300_000 });
+  });
+
+  it('a swap that also opens a position: what the position takes may leave too, and no more', async () => {
+    const swap = await jupiter.swap(null, owner.toBase58());
+    const tx = VersionedTransaction.deserialize(Buffer.from(swap.swapTransaction, 'base64'));
+    lastSwapIn = 1_000_000n;
+    lastSwapFromSol = true;
+    // 0.001 SOL in, and 3 SOL more into the position (plus the fee).
+    simulatedSpend = (a) => a + 3_000_000_000n + 5000n;
+    lastSwapOut = 40n; // 150 arrived, 110 of them went into the position
+    const c = { from: SOL, to: USDC, amountIn: '1000000', minOut: '100' };
+    await expect(checkSwapEffects(conn as never, owner, tx, c)).rejects.toThrow(/more than asked/);
+    await expect(checkSwapEffects(conn as never, owner, tx, { ...c, deposit: { [SOL]: '2900000000', [USDC]: '110' } })).rejects.toThrow(/more than asked/);
+    // Only 40 USDC left where at least 100 arrive and at most 50 may go into the position.
+    await expect(checkSwapEffects(conn as never, owner, tx, { ...c, deposit: { [SOL]: '3000000000', [USDC]: '50' } })).rejects.toThrow(/output wouldn't arrive/);
+    await expect(checkSwapEffects(conn as never, owner, tx, { ...c, deposit: { [SOL]: '3000000000', [USDC]: '110' } })).resolves.toEqual({ unitsConsumed: 300_000 });
+    // The position's rent counts as SOL it may take.
+    simulatedSpend = (a) => a + 3_057_000_000n;
+    await expect(checkSwapEffects(conn as never, owner, tx, { ...c, deposit: { [SOL]: '3000000000', [USDC]: '110' } })).rejects.toThrow(/more than asked/);
+    await expect(checkSwapEffects(conn as never, owner, tx, { ...c, deposit: { [SOL]: '3000000000', [USDC]: '110' }, rentLamports: '57000000' })).resolves.toBeDefined();
   });
 });
 

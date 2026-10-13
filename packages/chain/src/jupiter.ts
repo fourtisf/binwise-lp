@@ -32,6 +32,24 @@ export interface JupiterSwapResponse {
   prioritizationFeeLamports?: number;
 }
 
+/** One instruction of /swap/v1/swap-instructions (data base64). */
+export interface JupiterInstruction {
+  programId: string;
+  accounts: { pubkey: string; isSigner: boolean; isWritable: boolean }[];
+  data: string;
+}
+
+/** /swap/v1/swap-instructions: the swap as instructions, to share a transaction with others. */
+export interface JupiterSwapInstructions {
+  computeBudgetInstructions: JupiterInstruction[];
+  otherInstructions: JupiterInstruction[];
+  setupInstructions: JupiterInstruction[];
+  swapInstruction: JupiterInstruction;
+  cleanupInstruction?: JupiterInstruction | null;
+  tokenLedgerInstruction?: JupiterInstruction | null;
+  addressLookupTableAddresses: string[];
+}
+
 /** Tokens API v2 (jup-ag/docs tokens/token-information.mdx); fields we use. */
 export interface JupiterToken {
   id: string;
@@ -106,6 +124,17 @@ export class JupiterClient {
         ...(asLegacyTransaction ? { asLegacyTransaction: true } : {}),
         prioritizationFeeLamports: { priorityLevelWithMaxLamports: { priorityLevel: 'high', maxLamports: maxPriorityLamports } },
       },
+    });
+  }
+
+  /** The quote's swap as instructions (versioned transactions only), for a transaction that also does other things. */
+  swapInstructions(quoteResponse: JupiterQuote, userPublicKey: string) {
+    return fetchJson<JupiterSwapInstructions>(`${this.baseUrl}/swap/v1/swap-instructions`, {
+      method: 'POST',
+      headers: this.headers,
+      minIntervalMs: this.spacing,
+      retries: 1,
+      body: { quoteResponse, userPublicKey, wrapAndUnwrapSol: true },
     });
   }
 }
