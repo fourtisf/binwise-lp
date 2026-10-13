@@ -362,12 +362,20 @@ async function oneTransaction(
     label: string;
     kind: WalletStep['kind'];
     precheck: boolean;
-    light: boolean;
-    deposit: Record<string, string>;
-    rentLamports: string;
+    /** With a swap: shares a transaction with it even without a simulation */
+    light?: boolean;
+    /** With a swap: what the position takes, for its check */
+    deposit?: Record<string, string>;
+    rentLamports?: string;
   },
 ): Promise<WalletStep | null> {
-  if (o.swap && (d.legacyOnly || !d.jupiter.swapInstructions || (!o.precheck && !o.light))) return null;
+  const skip = (why: string) => {
+    console.warn(`[wallet-plan] not one transaction (${o.label}, ${o.sdk.length} SDK tx): ${why}`);
+    return null;
+  };
+  if (o.swap && d.legacyOnly) return skip('the wallet signs legacy transactions only');
+  if (o.swap && !d.jupiter.swapInstructions) return skip('no Jupiter swap instructions');
+  if (o.swap && !o.precheck && !o.light) return skip('wide range, nothing to simulate yet');
   try {
     // The SDK's instructions without its compute budget (ours goes first), a repeated one once.
     const body: TransactionInstruction[] = [];
@@ -378,10 +386,10 @@ async function oneTransaction(
     let tables: AddressLookupTableAccount[] = [];
     if (o.swap) {
       const j = await d.jupiter.swapInstructions!(o.swap.quote, owner.toBase58());
-      if (j.otherInstructions?.length || j.tokenLedgerInstruction) return null;
+      if (j.otherInstructions?.length || j.tokenLedgerInstruction) return skip('Jupiter added other instructions');
       swapIxs = [...j.setupInstructions.map(jupiterIx), jupiterIx(j.swapInstruction), ...(j.cleanupInstruction ? [jupiterIx(j.cleanupInstruction)] : [])];
       const found = await Promise.all(j.addressLookupTableAddresses.map(async (a) => (await withRetry(() => d.conn.getAddressLookupTable(new PublicKey(a)), 3, 'getAddressLookupTable')).value));
-      if (found.some((t) => !t)) return null;
+      if (found.some((t) => !t)) return skip("a lookup table couldn't be read");
       tables = found as AddressLookupTableAccount[];
       // The swap closes the owner's wrapped-SOL account when done; the position may need it again (the SDK
       // only creates it when it didn't exist yet).
@@ -394,24 +402,26 @@ async function oneTransaction(
     const writable = [...swapIxs, ...body].flatMap((ix) => ix.keys.filter((k) => k.isWritable).map((k) => k.pubkey.toBase58()));
     const cuPrice = await priorityFeeMicroLamports(d.conn, [...new Set(writable)], WALLET_CU_PRICE_CAP);
     const { blockhash, lastValidBlockHeight } = await withRetry(() => d.conn.getLatestBlockhash('confirmed'), 3, 'getLatestBlockhash');
+    let size = 0;
     const build = (units: number): Uint8Array | null => {
       const ixs = [ComputeBudgetProgram.setComputeUnitLimit({ units }), ComputeBudgetProgram.setComputeUnitPrice({ microLamports: cuPrice }), ...swapIxs, ...body];
       let bytes: Uint8Array;
       if (o.swap) {
         const v = new VersionedTransaction(new TransactionMessage({ payerKey: owner, recentBlockhash: blockhash, instructions: ixs }).compileToV0Message(tables));
-        v.sign(o.signers);
+        if (o.signers.length) v.sign(o.signers);
         bytes = v.serialize();
       } else {
         // No lookup tables needed: a legacy transaction, like the SDK's own (any wallet signs it).
         const t = new Transaction({ feePayer: owner, blockhash, lastValidBlockHeight }).add(...ixs);
-        t.partialSign(...o.signers);
+        if (o.signers.length) t.partialSign(...o.signers);
         bytes = t.serialize({ requireAllSignatures: false, verifySignatures: false });
       }
+      size = bytes.length;
       return bytes.length <= PACKET_DATA_SIZE ? bytes : null;
     };
 
     let bytes = build(MAX_CU);
-    if (!bytes) return null;
+    if (!bytes) return skip(`${size} bytes, over Solana's ${PACKET_DATA_SIZE}`);
     const check: SwapCheck | undefined = o.swap ? { ...o.swap.check, deposit: o.deposit, rentLamports: o.rentLamports } : undefined;
     if (o.precheck) {
       // As the owner's wallet is now: it goes through, and (with a swap) moves only what the check allows.
@@ -420,17 +430,17 @@ async function oneTransaction(
       if (check) units = (await checkSwapEffects(d.conn, owner, tx, check)).unitsConsumed;
       else {
         const r = await withRetry(() => d.conn.simulateTransaction(tx, { sigVerify: false, replaceRecentBlockhash: true, commitment: 'processed' }), 2, 'simulateTransaction');
-        if (r.value.err) return null;
+        if (r.value.err) return skip(`simulation failed: ${JSON.stringify(r.value.err)}`);
         units = r.value.unitsConsumed ?? undefined;
       }
       // What it used, with room for the price moving a few bins before it lands.
       if (units) bytes = build(Math.min(MAX_CU, Math.ceil(units * 1.2) + 50_000)) ?? bytes;
     }
     return { label: o.label, tx: toBase64(bytes), kind: o.kind, ...(check ? { check } : {}) };
-  } catch {
+  } catch (e) {
     // Too large, a route the check refuses, an RPC hiccup: the plan falls back to a transaction per part,
     // each checked on its own as before.
-    return null;
+    return skip(e instanceof Error ? e.message.slice(0, 300) : String(e));
   }
 }
 
@@ -534,14 +544,21 @@ export async function planOpen(d: WalletPlanDeps, req: OpenWalletRequest): Promi
     for (const [i, t] of adds.entries()) sdkSteps.push({ label: `Add liquidity (${i + 1} of ${adds.length})`, tx: t, kind: 'add' });
   }
 
+  // A wider range may still fit one open-and-add instruction (the SDK's open, then add, is larger): it's
+  // tried first, measured by a simulation, since a wide add can use a lot of compute.
+  const wide =
+    bins > SINGLE_TX_BINS && !req.incoming
+      ? await dlmm.initializePositionAndAddLiquidityByStrategy({ positionPubKey: positionKp.publicKey, totalXAmount: x, totalYAmount: y, strategy, user: owner, slippage: 1 }).catch(() => null)
+      : null;
+
   // As few transactions as fit: the swap and the position together, else the swap, then the position in one.
   // What the position may take (2% over its amounts: the SDK's own slippage allowance) and its rent, for the check.
   const deposit = { [pool.mintX]: x.muln(102).divn(100).addn(1).toString(), [pool.mintY]: y.muln(102).divn(100).addn(1).toString() };
   const rentLamports = String(Math.ceil((rent.sol + sdk().POSITION_FEE) * 1e9));
-  const position = (swap: QuotedSwap | undefined, precheck: boolean) =>
+  const position = (txs: Transaction[], swap: QuotedSwap | undefined, precheck: boolean) =>
     oneTransaction(d, owner, {
       swap,
-      sdk: sdkSteps.map((s) => s.tx),
+      sdk: txs,
       signers: [positionKp],
       label: swap ? `${swap.label} and open the position` : 'Open the position and add liquidity',
       kind: 'open',
@@ -552,12 +569,16 @@ export async function planOpen(d: WalletPlanDeps, req: OpenWalletRequest): Promi
       rentLamports,
     });
   let steps: WalletStep[] = [];
-  const all = quoted.length <= 1 && quoted.length + sdkSteps.length > 1 ? await position(quoted[0], !req.incoming) : null;
+  let all: WalletStep | null = null;
+  if (quoted.length <= 1) {
+    if (wide) all = await position([wide], quoted[0], true);
+    if (!all && quoted.length + sdkSteps.length > 1) all = await position(sdkSteps.map((s) => s.tx), quoted[0], !req.incoming);
+  }
   if (all) steps = [all];
   else {
     for (const q of quoted) steps.push(await swapTxStep(d, owner, q, !req.incoming));
     // After a swap the position can't be simulated yet (its tokens arrive with the swap).
-    const one = quoted.length && sdkSteps.length > 1 ? await position(undefined, false) : null;
+    const one = quoted.length && sdkSteps.length > 1 ? await position(sdkSteps.map((s) => s.tx), undefined, false) : null;
     if (one) steps.push(one);
     else for (const [i, s] of sdkSteps.entries()) steps.push({ label: s.label, tx: await forOwner(d, s.tx, owner, i === 0 ? [positionKp] : []), kind: s.kind });
   }
@@ -625,8 +646,10 @@ export async function planClaim(d: WalletPlanDeps, req: { owner: string; pool: P
   const { pool } = req;
   const { dlmm, pos } = await ownedPosition(d, pool, owner, req.position);
   const txs = await dlmm.claimAllRewardsByPosition({ owner, position: pos });
-  const steps: WalletStep[] = [];
-  for (const [i, t] of txs.entries()) steps.push({ label: txs.length > 1 ? `Claim fees (${i + 1} of ${txs.length})` : 'Claim fees', tx: await forOwner(d, t, owner), kind: 'claim' });
+  // Fees and farm rewards in one transaction when they fit.
+  const one = txs.length > 1 ? await oneTransaction(d, owner, { sdk: txs, signers: [], label: 'Claim fees', kind: 'claim', precheck: true }) : null;
+  const steps: WalletStep[] = one ? [one] : [];
+  if (!one) for (const [i, t] of txs.entries()) steps.push({ label: txs.length > 1 ? `Claim fees (${i + 1} of ${txs.length})` : 'Claim fees', tx: await forOwner(d, t, owner), kind: 'claim' });
   const feesUsd = ui(pos.positionData.feeX, pool.decimalsX) * pool.usdX + ui(pos.positionData.feeY, pool.decimalsY) * pool.usdY;
   return { steps, feesUsd };
 }
@@ -641,8 +664,7 @@ export async function planCompound(
   const { dlmm, pos } = await ownedPosition(d, pool, owner, req.position);
   const fx = pos.positionData.feeXExcludeTransferFee;
   const fy = pos.positionData.feeYExcludeTransferFee;
-  const steps: WalletStep[] = [];
-  for (const [i, t] of (await dlmm.claimAllRewardsByPosition({ owner, position: pos })).entries()) steps.push({ label: `Claim fees${i ? ` (${i + 1})` : ''}`, tx: await forOwner(d, t, owner), kind: 'claim' });
+  const claims = await dlmm.claimAllRewardsByPosition({ owner, position: pos });
   const adds = await dlmm.addLiquidityByStrategyChunkable({
     positionPubKey: pos.publicKey,
     totalXAmount: fx,
@@ -651,7 +673,13 @@ export async function planCompound(
     user: owner,
     slippage: 1,
   });
-  for (const [i, t] of adds.entries()) steps.push({ label: adds.length > 1 ? `Add the fees back (${i + 1} of ${adds.length})` : 'Add the fees back', tx: await forOwner(d, t, owner), kind: 'add' });
+  // Claim and add back in one transaction when they fit (one approval, and never claimed without the add).
+  const one = await oneTransaction(d, owner, { sdk: [...claims, ...adds], signers: [], label: 'Claim the fees and add them back', kind: 'add', precheck: true });
+  const steps: WalletStep[] = one ? [one] : [];
+  if (!one) {
+    for (const [i, t] of claims.entries()) steps.push({ label: `Claim fees${i ? ` (${i + 1})` : ''}`, tx: await forOwner(d, t, owner), kind: 'claim' });
+    for (const [i, t] of adds.entries()) steps.push({ label: adds.length > 1 ? `Add the fees back (${i + 1} of ${adds.length})` : 'Add the fees back', tx: await forOwner(d, t, owner), kind: 'add' });
+  }
   return { steps, feesUsd: ui(fx, pool.decimalsX) * pool.usdX + ui(fy, pool.decimalsY) * pool.usdY };
 }
 

@@ -83,7 +83,7 @@ vi.mock('./live', async (importOriginal) => ({
   setupRent: async () => ({ arrays: 0, sol: 0 }),
 }));
 
-const { planClose, planOpen, planRebalance, checkSwapEffects } = await import('./wallet-plan');
+const { planClaim, planClose, planCompound, planOpen, planRebalance, checkSwapEffects } = await import('./wallet-plan');
 
 /** RPC stand-in: the owner's SOL, a blockhash, priority fees, and swap simulations that spend exactly the input. */
 let walletLamports = 5e9;
@@ -340,13 +340,14 @@ describe('planOpen: as few transactions as fit (one approval even in wallets tha
     expect(p.steps.map((s) => s.kind)).toEqual(['swap', 'open']);
   });
 
-  it('a wide range from tokens already in the wallet: open and add in one transaction', async () => {
-    // 41 bins: the SDK opens, then adds; both would create the same bin array.
+  it('a wide range from tokens already in the wallet: one open-and-add when it fits', async () => {
+    // 41 bins: the SDK's single open-and-add is tried first, measured by a simulation.
     const p = await planOpen(d, { owner: owner.toBase58(), pool, budget: { [CARDS]: 500, [USDC]: 75 }, prices, shape: 'spot', side: 'both', binsEachSide: 20 });
     expect(p.swaps).toHaveLength(0);
     expect(p.steps).toHaveLength(1);
     expect(p.steps[0]).toMatchObject({ label: 'Open the position and add liquidity', kind: 'open' });
     expect(p.steps[0].check).toBeUndefined();
+    expect(calls.find((c) => c.method === 'init')!.args.strategy).toMatchObject({ minBinId: 980, maxBinId: 1020 });
     const tx = Transaction.from(Buffer.from(p.steps[0].tx, 'base64'));
     expect(tx.feePayer!.equals(owner)).toBe(true);
     const sigs = Object.fromEntries(tx.signatures.map((s) => [s.publicKey.toBase58(), s.signature != null]));
@@ -356,10 +357,24 @@ describe('planOpen: as few transactions as fit (one approval even in wallets tha
       'ComputeBudget111111111111111111111111111111',
       'ComputeBudget111111111111111111111111111111',
       '11111111111111111111111111111111',
+    ]);
+    expect(tx.instructions[0].data.readUInt32LE(1)).toBe(410_000);
+  });
+
+  it("a wide range whose single open-and-add Solana wouldn't take: open and add (the SDK's two) in one transaction", async () => {
+    const spy = vi.spyOn(conn, 'simulateTransaction');
+    spy.mockImplementationOnce(async () => ({ value: { err: { InstructionError: [2, 'ComputationalBudgetExceeded'] }, logs: [], accounts: [], unitsConsumed: 1_400_000 } }) as never);
+    const p = await planOpen(d, { owner: owner.toBase58(), pool, budget: { [CARDS]: 500, [USDC]: 75 }, prices, shape: 'spot', side: 'both', binsEachSide: 20 }).finally(() => spy.mockRestore());
+    expect(p.steps).toHaveLength(1);
+    expect(p.steps[0]).toMatchObject({ label: 'Open the position and add liquidity', kind: 'open' });
+    const tx = Transaction.from(Buffer.from(p.steps[0].tx, 'base64'));
+    expect(tx.instructions.map((i) => i.programId.toBase58())).toEqual([
+      'ComputeBudget111111111111111111111111111111',
+      'ComputeBudget111111111111111111111111111111',
+      '11111111111111111111111111111111',
       'LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo', // the bin array, once
       '11111111111111111111111111111111',
     ]);
-    expect(tx.instructions[0].data.readUInt32LE(1)).toBe(410_000);
   });
 
   it('a wide range after a swap: the swap, then open and add in one transaction', async () => {
@@ -450,6 +465,34 @@ describe('planClose / planRebalance (self-custody)', () => {
     // The CARDS are still in the position until the close lands: the swap is checked when it is sent, not now.
     expect(simulated).toHaveLength(0);
     expect(p.steps[1].check).toMatchObject({ from: CARDS, to: USDC, amountIn: '200799000' });
+  });
+
+  it('claims fees and farm rewards in one transaction', async () => {
+    const claim = fakeDlmm.claimAllRewardsByPosition;
+    fakeDlmm.claimAllRewardsByPosition = async (a) => [...(await claim(a)), ...(await claim(a))];
+    const p = await planClaim(d, { owner: owner.toBase58(), pool, position: Keypair.generate().publicKey.toBase58() }).finally(() => (fakeDlmm.claimAllRewardsByPosition = claim));
+    expect(p.steps).toHaveLength(1);
+    expect(p.steps[0]).toMatchObject({ label: 'Claim fees', kind: 'claim' });
+    const tx = Transaction.from(Buffer.from(p.steps[0].tx, 'base64'));
+    expect(tx.feePayer!.equals(owner)).toBe(true);
+    // Both claims (the stand-in's identical transfers are both kept: only DLMM and token-account repeats are dropped).
+    expect(tx.instructions.map((i) => i.programId.toBase58()).slice(2)).toEqual(['11111111111111111111111111111111', '11111111111111111111111111111111']);
+  });
+
+  it('compounds in one transaction: claim and add back together', async () => {
+    const p = await planCompound(d, { owner: owner.toBase58(), pool, position: Keypair.generate().publicKey.toBase58(), lowerBin: 990, upperBin: 1010, shape: 'spot' });
+    expect(p.steps).toHaveLength(1);
+    expect(p.steps[0]).toMatchObject({ label: 'Claim the fees and add them back', kind: 'add' });
+    const tx = Transaction.from(Buffer.from(p.steps[0].tx, 'base64'));
+    expect(tx.instructions.map((i) => i.programId.toBase58())).toEqual([
+      'ComputeBudget111111111111111111111111111111',
+      'ComputeBudget111111111111111111111111111111',
+      '11111111111111111111111111111111',
+      'LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo',
+      '11111111111111111111111111111111',
+    ]);
+    // The fees it adds back: what the position earned.
+    expect(calls.find((c) => c.method === 'add')!.args).toMatchObject({ strategy: { minBinId: 990, maxBinId: 1010 } });
   });
 
   it("refuses a position the owner doesn't own", async () => {
