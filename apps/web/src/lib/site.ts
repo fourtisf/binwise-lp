@@ -12,5 +12,5 @@ export const WALLET_LOGIN = process.env.NEXT_PUBLIC_WALLET_LOGIN !== 'false';
 export const BOT_URL = `https://t.me/${process.env.NEXT_PUBLIC_TELEGRAM_BOT || 'binwiselpbot'}`;
 
 /** Binwise on X */
-export const X_HANDLE = '@binwiseofficial';
-export const X_URL = 'https://x.com/binwiseofficial';
+export const X_HANDLE = '@binwiselp';
+export const X_URL = 'https://x.com/binwiselp';
