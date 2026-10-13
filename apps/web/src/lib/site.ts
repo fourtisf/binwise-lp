@@ -25,3 +25,13 @@ const originOf = (url?: string) => {
 
 /** Where the site lives, for absolute links in share cards: NEXT_PUBLIC_SITE_URL, else the API's origin. */
 export const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || originOf(process.env.NEXT_PUBLIC_API_URL) || 'http://localhost:3000';
+
+/** The project's X account. */
+export const X_HANDLE = '@kovrasol';
+export const X_URL = 'https://x.com/kovrasol';
+
+/**
+ * The token's contract address: NEXT_PUBLIC_TOKEN_CA, set once the token exists (then the landing page shows it
+ * with a copy button). Until then the page says "Coming soon".
+ */
+export const TOKEN_CA: string | null = process.env.NEXT_PUBLIC_TOKEN_CA?.trim() || null;

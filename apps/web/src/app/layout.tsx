@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { BRAND } from '@kovra/core/brand';
 import { Sprite } from '@/components/Sprite';
 import { Spotlight } from '@/components/Spotlight';
-import { SITE_URL } from '@/lib/site';
+import { SITE_URL, X_HANDLE } from '@/lib/site';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -20,6 +20,8 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: 'summary_large_image',
+    site: X_HANDLE,
+    creator: X_HANDLE,
     title: `${BRAND}: liquidity that manages itself`,
     description: 'An autonomous LP agent for Meteora DLMM on Solana. It finds the pools that pay, keeps your liquidity in range and explains every move.',
     images: ['/og.png'],

@@ -1,12 +1,10 @@
 import { BRAND } from '@kovra/core/brand';
-import { Icon } from './Sprite';
+import { BrandMark } from './BrandMark';
 
 export function Logo() {
   return (
     <a href="#" className="logo">
-      <span className="mark">
-        <Icon id="i-mark" />
-      </span>
+      <BrandMark />
       {BRAND}
     </a>
   );

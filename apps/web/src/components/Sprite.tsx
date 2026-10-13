@@ -2,7 +2,6 @@
 export function Sprite() {
   return (
       <svg width="0" height="0" style={{ position: 'absolute' }} aria-hidden="true">
-      <symbol id="i-mark" viewBox="0 0 18 18" fill="none" stroke="#050506" strokeWidth="3.4" strokeLinecap="round"><path d="M3.7 3.2v11.6"/><path d="M8.6 9 15 2.6"/><path d="M10.9 10.4 15 15.4"/></symbol>
       <symbol id="i-home" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="6" height="8" rx="1.5"/><rect x="11" y="3" width="6" height="5" rx="1.5"/><rect x="11" y="10" width="6" height="7" rx="1.5"/><rect x="3" y="13" width="6" height="4" rx="1.5"/></symbol>
       <symbol id="i-pools" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="M4 16V9M8 16V5M12 16v-8M16 16V3"/></symbol>
       <symbol id="i-pos" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><circle cx="10" cy="10" r="7"/><path d="M10 3v7l5 4"/></symbol>
@@ -16,6 +15,7 @@ export function Sprite() {
       <symbol id="i-exit" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M10 3h3v10h-3M7 5L4 8l3 3M4 8h7"/></symbol>
       <symbol id="i-comp" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 3v3h-3"/></symbol>
       <symbol id="i-search" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></symbol>
+      <symbol id="i-xlogo" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></symbol>
       <symbol id="i-x" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><path d="M4 4l8 8M12 4l-8 8"/></symbol>
       <symbol id="i-pause" viewBox="0 0 16 16" fill="currentColor"><rect x="4" y="3" width="3" height="10" rx="1"/><rect x="9" y="3" width="3" height="10" rx="1"/></symbol>
       <symbol id="i-play" viewBox="0 0 16 16" fill="currentColor"><path d="M5 3.5v9l7.5-4.5z"/></symbol>
@@ -33,9 +33,9 @@ export function Sprite() {
 }
 
 export type IconId =
-  | 'i-mark' | 'i-home' | 'i-pools' | 'i-pos' | 'i-strat' | 'i-act' | 'i-check' | 'i-spin' | 'i-dot'
+  | 'i-home' | 'i-pools' | 'i-pos' | 'i-strat' | 'i-act' | 'i-check' | 'i-spin' | 'i-dot'
   | 'i-plus' | 'i-swap' | 'i-exit' | 'i-comp' | 'i-search' | 'i-x' | 'i-pause' | 'i-play' | 'i-chev'
-  | 'i-updown' | 'i-lock' | 'i-bolt' | 'i-copy' | 'i-ext' | 'i-send' | 'i-down' | 'i-wallet';
+  | 'i-updown' | 'i-lock' | 'i-bolt' | 'i-copy' | 'i-ext' | 'i-send' | 'i-down' | 'i-wallet' | 'i-xlogo';
 
 export function Icon({ id, className }: { id: IconId; className?: string }) {
   return (

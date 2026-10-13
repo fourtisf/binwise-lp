@@ -17,7 +17,8 @@ The look is **Kovra direction B, "cinematic"** (owner's choice, Oct 2026; refere
 - Premium black with a titanium (silver) accent, mint for gains and red for losses, Space Grotesk for headings and big numbers, Inter for body text. Every color is a token on `:root` in `apps/web/src/app/globals.css`; charts read the same tokens (`apps/web/src/lib/theme.ts`). Don't hardcode colors in components.
 - `design/original-prototype.html` is still the source for content: copy, labels, data shown, empty/error wording and interactions. Don't drop features or disclaimers from it.
 - The name users see comes from `BRAND` in `packages/core/src/brand.ts` (web imports `@kovra/core/brand`). Everything else is `kovra` too: `@kovra/*` packages, Redis keys, database, server user `kovra`, `/home/kovra/kovra`, PM2 `kovra-*`. Only the GitHub repo is still `binwise-lp`, and applied database migrations are never edited.
-- Logo: today's K tile (`i-mark` in `apps/web/src/components/Sprite.tsx`, `apps/web/src/app/icon.svg`). Six proposed replacements are in `design/logos/` (sheet: `kovra-logo-options.png`); the owner hasn't picked one yet.
+- Logo: **A, "Bin Ring"** (owner's pick, Oct 2026): bins round a chrome core, the in-range arc in mint. On the site it is `BrandMark` (`apps/web/src/components/BrandMark.tsx`); favicons, app icons and the share card are in `apps/web/public` and `apps/web/src/app/icon.svg`; the X profile picture and header are in `design/brand/`. The other proposals stay in `design/logos/`.
+- Socials: X is [@kovrasol](https://x.com/kovrasol) (`X_URL` in `apps/web/src/lib/site.ts`). The token's contract address comes from `NEXT_PUBLIC_TOKEN_CA`; until it is set the landing page shows "CA: Coming soon".
 - Every simulated number must be replaced by real data from the backend (see §5).
 - Owner dislikes: black-and-gold palettes and white/light backgrounds. Keep the dark theme. Don't restyle again without the owner asking.
 

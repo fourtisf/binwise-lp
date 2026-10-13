@@ -5,6 +5,7 @@ import { BRAND } from '@kovra/core/brand';
 import { useAppData } from '@/lib/store';
 import { BOT_URL, LIVE_DEFAULT, WALLET_LOGIN } from '@/lib/site';
 import { useUi } from '@/lib/ui';
+import { BrandMark } from '../BrandMark';
 import { Icon } from '../Sprite';
 import { AccountMenu } from './AccountMenu';
 import { AgentDock } from './AgentDock';
@@ -20,9 +21,7 @@ export function TopNav({ current }: { current: PageKey }) {
   return (
     <header className="deckbar">
       <Link className="deck-brand" id="toLanding" title="Back to site" href="/">
-        <span className="mark">
-          <Icon id="i-mark" />
-        </span>
+        <BrandMark />
         <b>{BRAND}</b>
       </Link>
       <nav className="deck-tabs" aria-label="App">
