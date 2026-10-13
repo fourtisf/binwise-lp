@@ -1,0 +1,327 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+@font-face{font-family:SG;src:url(sg.woff2) format("woff2");font-weight:300 700}
+@font-face{font-family:IN;src:url(inter.woff2) format("woff2");font-weight:100 900}
+:root{--bg:#030303;--text:#F5F5F6;--soft:#CFCFD4;--muted:#95959D;--dim:#5D5D65;--accent:#C9CDD6;--hi:#E7E9EE;--up:#3DDC97;--down:#FF6369;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.13)}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:1920px;height:1080px;overflow:hidden;background:var(--bg);color:var(--text);font-family:IN,sans-serif;-webkit-font-smoothing:antialiased}
+#v{position:absolute;inset:0;overflow:hidden;background:var(--bg)}
+.layer{position:absolute;inset:0;transform-origin:50% 50%}
+.blob{position:absolute;border-radius:50%;filter:blur(90px)}
+#bigring{position:absolute;left:50%;top:50%;width:1500px;height:1500px;margin:-750px 0 0 -750px}
+.grain{position:absolute;inset:-120px;opacity:.075;mix-blend-mode:overlay;pointer-events:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+.vig{position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse 75% 70% at 50% 50%,transparent 55%,rgba(0,0,0,.7))}
+.word{font-family:SG;font-weight:600;letter-spacing:-.055em;line-height:1}
+.grad{background:linear-gradient(180deg,#fff 35%,#9EA2AB);-webkit-background-clip:text;background-clip:text;color:transparent}
+.kick{display:inline-flex;align-items:center;gap:11px;height:50px;padding:0 22px 0 18px;border-radius:999px;border:1px solid var(--line2);background:rgba(255,255,255,.035);font-size:22px;font-weight:500;color:var(--soft)}
+.kick i{width:8px;height:8px;border-radius:50%;background:var(--up);box-shadow:0 0 14px var(--up)}
+.head{position:absolute;left:160px;top:140px}
+.head h2{font-family:SG;font-weight:600;font-size:88px;letter-spacing:-.055em;line-height:1;margin-top:26px;padding-bottom:8px}
+.typed{margin-top:22px;font-size:30px;color:var(--muted);height:40px}
+.caret{display:inline-block;width:12px;height:.9em;background:var(--hi);vertical-align:-4px;margin-left:3px;border-radius:2px}
+.glass{position:absolute;border-radius:32px;border:1px solid var(--line2);background:linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.015));box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 60px 120px -50px rgba(0,0,0,.9)}
+.note{position:absolute;right:160px;bottom:64px;font-size:20px;color:var(--dim)}
+/* scene 1 */
+#logo1{position:absolute;width:576px;height:576px}
+#word1{position:absolute;font-size:176px;top:540px;margin-top:-90px}
+#tag1{position:absolute;left:0;right:0;top:750px;text-align:center;font-size:30px;color:var(--muted);letter-spacing:-.005em}
+/* scene 2 */
+#s2 h1{position:absolute;left:0;right:0;top:270px;text-align:center;font-family:SG;font-weight:600;font-size:176px;letter-spacing:-.06em;line-height:.95}
+#s2 h1 .w{display:inline-block;padding-bottom:12px}
+#sub2{position:absolute;left:0;right:0;top:720px;text-align:center;font-size:30px;color:var(--muted)}
+#sub2 b{color:var(--text);font-weight:500}
+/* scene 3 */
+.card{position:absolute;top:470px;width:504px;height:450px;padding:34px 34px 30px}
+.card .rk{position:absolute;right:30px;top:20px;font-family:SG;font-weight:600;font-size:96px;letter-spacing:-.06em;line-height:1;background:linear-gradient(180deg,rgba(255,255,255,.16),rgba(255,255,255,0));-webkit-background-clip:text;background-clip:text;color:transparent}
+.pair{display:flex;align-items:center;gap:14px;font-family:SG;font-weight:600;font-size:34px;letter-spacing:-.03em}
+.toks{display:inline-flex}.toks img{width:42px;height:42px;border-radius:50%;box-shadow:0 0 0 3px #0E0E10}.toks img+img{margin-left:-12px}
+.pill{display:inline-flex;align-items:center;gap:9px;height:40px;padding:0 18px;border-radius:999px;font-size:20px;font-weight:500;margin-top:16px}
+.pill i{width:7px;height:7px;border-radius:50%;background:currentColor}
+.pill.in{background:rgba(61,220,151,.12);color:var(--up);border:1px solid rgba(61,220,151,.25)}
+.pill.out{background:rgba(255,99,105,.12);color:var(--down);border:1px solid rgba(255,99,105,.25)}
+.score{display:flex;align-items:center;gap:20px;margin-top:26px}
+.score svg{width:112px;height:112px;transform:rotate(-90deg)}
+.score .num{position:absolute;width:112px;height:112px;display:grid;place-items:center;font-family:SG;font-weight:600;font-size:40px;letter-spacing:-.04em}
+.score small{display:block;font-size:22px;color:var(--soft);font-weight:500}.score span{font-size:18px;color:var(--dim)}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);margin-top:26px;padding-top:20px;border-top:1px solid var(--line)}
+.stats>div+div{padding-left:18px;border-left:1px solid var(--line)}
+.stats small{display:block;font-size:18px;color:var(--muted)}.stats b{display:block;font-family:SG;font-weight:600;font-size:31px;letter-spacing:-.03em;margin-top:4px}
+.up{color:var(--up)}.down{color:var(--down)}
+/* scene 4 */
+#bubble{right:160px;top:140px;width:720px;min-height:170px;padding:26px 30px}
+.agent{display:flex;align-items:center;gap:14px}
+.orb{width:44px;height:44px;border-radius:50%;background:radial-gradient(circle at 32% 26%,#fff,#C9CDD6 36%,#6B6E78 64%,#18181A);box-shadow:0 0 26px rgba(255,255,255,.2)}
+.agent b{display:block;font-family:SG;font-weight:600;font-size:26px;letter-spacing:-.02em}.agent span{font-size:19px;color:var(--muted)}
+#think{margin-top:16px;font-family:SG;font-weight:500;font-size:32px;line-height:1.28;letter-spacing:-.02em;min-height:82px}
+#panel{left:160px;top:400px;width:1600px;height:560px;overflow:hidden}
+#chart{position:absolute;inset:0}
+#status{position:absolute;right:28px;top:24px;margin:0}
+/* scene 5 */
+#big5{position:absolute;left:160px;top:420px;font-family:SG;font-weight:600;font-size:260px;letter-spacing:-.065em;line-height:.9;color:var(--up);text-shadow:0 0 120px rgba(61,220,151,.35)}
+#lab5{position:absolute;left:166px;top:690px;font-size:34px;color:var(--soft)}
+#lab5 span{display:block;font-size:25px;color:var(--muted);margin-top:8px}
+#vs{left:1000px;top:330px;width:760px;height:520px;padding:30px}
+.legend{display:flex;gap:12px}
+.legend span{display:inline-flex;align-items:center;gap:10px;height:48px;padding:0 20px;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.025);font-size:20px;color:var(--muted)}
+.legend i{width:16px;height:4px;border-radius:2px}
+.legend b{font-family:SG;font-weight:600;font-size:18px;color:var(--text)}
+#vsc{position:absolute;left:30px;right:30px;top:110px;bottom:30px}
+#disc5{position:absolute;left:160px;bottom:80px;font-size:21px;color:var(--dim)}
+/* scene 6 */
+#logo6{position:absolute;width:576px;height:576px}
+#word6{position:absolute;font-size:176px;top:430px;margin-top:-90px}
+#tag6{position:absolute;left:0;right:0;top:600px;text-align:center;font-family:SG;font-weight:500;font-size:46px;letter-spacing:-.035em;color:var(--soft)}
+#row6{position:absolute;left:0;right:0;top:720px;display:flex;justify-content:center;gap:16px}
+#row6 span{display:inline-flex;align-items:center;gap:12px;height:72px;padding:0 30px;border-radius:999px;border:1px solid var(--line2);background:rgba(255,255,255,.04);font-size:28px;font-weight:500;color:var(--text)}
+#row6 svg{width:22px;height:22px}
+#row6 .soon{font-size:21px;color:var(--hi);background:rgba(201,205,214,.1);padding:7px 14px;border-radius:999px}
+#row6 .soon::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--hi);margin-right:9px;vertical-align:1px}
+#disc6{position:absolute;left:0;right:0;bottom:60px;text-align:center;font-size:20px;color:var(--dim)}
+</style></head>
+<body><div id="v">
+  <div id="bg" class="layer">
+    <div id="blobA" class="blob" style="width:900px;height:700px;background:rgba(255,255,255,.07)"></div>
+    <div id="blobB" class="blob" style="width:800px;height:600px;background:rgba(61,220,151,.07)"></div>
+    <svg id="bigring" viewBox="-750 -750 1500 1500"></svg>
+  </div>
+
+  <section id="s1" class="layer">
+    <svg id="logo1" viewBox="-36 -36 72 72"></svg>
+    <div id="word1" class="word grad">Kovra</div>
+    <div id="tag1">Autonomous LP agent · Meteora DLMM on Solana</div>
+  </section>
+
+  <section id="s2" class="layer">
+    <h1><span class="w grad">Liquidity</span> <span class="w grad">that</span><br><span class="w grad">manages</span> <span class="w grad">itself.</span></h1>
+    <p id="sub2">An autonomous LP agent that <b>finds the pools that pay</b> and <b>explains every move</b>.</p>
+  </section>
+
+  <section id="s3" class="layer">
+    <div class="head"><span class="kick"><i></i>Scan &amp; score</span><h2 class="grad">It finds the pools that pay.</h2><p class="typed"><span id="t3"></span><span class="caret" id="c3"></span></p></div>
+    <div id="cards"></div>
+    <div class="note" id="n3">Example data</div>
+  </section>
+
+  <section id="s4" class="layer">
+    <div class="head"><span class="kick"><i></i>Rebalance only when it pays</span><h2 class="grad">Keeps your liquidity<br>in range.</h2></div>
+    <div class="glass" id="bubble"><div class="agent"><span class="orb"></span><div><b>Kovra agent</b><span id="mode4">Holding position</span></div></div><p id="think"><span id="t4"></span><span class="caret" id="c4"></span></p></div>
+    <div class="glass" id="panel"><svg id="chart" viewBox="0 0 1600 560"></svg><span class="pill in" id="status"><i></i>In range</span></div>
+    <div class="note" id="n4">Simulated price path</div>
+  </section>
+
+  <section id="s5" class="layer">
+    <div class="head"><span class="kick"><i></i>One honest number</span><h2 class="grad">Judged against<br>simply holding.</h2></div>
+    <div id="big5">+0.0%</div>
+    <div id="lab5">Net vs hold, 30 days<span>After impermanent loss and every cost.</span></div>
+    <div class="glass" id="vs"><div class="legend"><span><i style="background:#00AD71"></i>Kovra vault</span><span><i style="background:#8A8A92"></i>Hold the same tokens</span></div><svg id="vsc" viewBox="0 0 700 380" preserveAspectRatio="none"></svg></div>
+    <div id="disc5">Example from a simulated paper run. Not a promise of returns.</div>
+  </section>
+
+  <section id="s6" class="layer">
+    <svg id="logo6" viewBox="-36 -36 72 72"></svg>
+    <div id="word6" class="word grad">Kovra</div>
+    <div id="tag6">Liquidity that manages itself.</div>
+    <div id="row6">
+      <span id="p61">kovra.live</span>
+      <span id="p62"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>@kovrasol</span>
+      <span id="p63">CA<em class="soon" style="font-style:normal">Coming soon</em></span>
+    </div>
+    <div id="disc6">DeFi carries risk, including total loss of funds. Not financial advice.</div>
+  </section>
+
+  <div class="vig"></div>
+  <div class="grain" id="grain"></div>
+</div>
+<script>
+const NS='http://www.w3.org/2000/svg';
+const $=id=>document.getElementById(id);
+const clamp=(x,a=0,b=1)=>Math.min(b,Math.max(a,x));
+const lerp=(a,b,t)=>a+(b-a)*t;
+const eo=t=>1-Math.pow(1-clamp(t),3);
+const eio=t=>{t=clamp(t);return t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2};
+const pr=(t,a,b)=>clamp((t-a)/(b-a));
+const env=(t,a,b,fi=.6,fo=.6)=>Math.min(eo(pr(t,a,a+fi)),1-eio(pr(t,b-fo,b)));
+function set(el,o,tx=0,ty=0,sc=1,blur=0){el.style.opacity=o.toFixed(3);el.style.transform=`translate(${tx.toFixed(2)}px,${ty.toFixed(2)}px) scale(${sc.toFixed(4)})`;el.style.filter=blur>.05?`blur(${blur.toFixed(2)}px)`:'none';el.style.visibility=o<=.002?'hidden':'visible';}
+// reveal: fade + rise + unblur from t0 over d seconds
+function rise(el,t,t0,d=.7,dy=36,bl=14){const e=eo(pr(t,t0,t0+d));set(el,e,0,lerp(dy,0,e),1,lerp(bl,0,e));return e;}
+function typeIn(el,text,t,t0,cps=58){const n=Math.floor((t-t0)*cps);el.textContent=n<=0?'':text.slice(0,n);return n>=text.length;}
+const MINT='#3DDC97';
+const noise=i=>.5+.5*Math.sin(i*12.9898)*Math.cos(i*4.1414);
+
+// ---------- the Kovra mark (A, Bin Ring) ----------
+function buildLogo(svg,uid){
+  const n=28,a0=3,a1=12,head=8;
+  svg.innerHTML=`<defs><radialGradient id="c${uid}" cx=".34" cy=".28" r=".85"><stop offset="0" stop-color="#fff"/><stop offset=".42" stop-color="#C9CDD6"/><stop offset=".8" stop-color="#55585F"/><stop offset="1" stop-color="#1C1D20"/></radialGradient><filter id="g${uid}" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="1.6"/></filter></defs><g class="gl" filter="url(#g${uid})" opacity=".6"></g><g class="tk"></g><circle class="halo" r="13" fill="#fff" opacity=".12" filter="url(#g${uid})"/><circle class="core" r="11" fill="url(#c${uid})"/>`;
+  const ticks=[];
+  for(let i=0;i<n;i++){
+    const a=i/n*Math.PI*2-Math.PI/2,inr=i>=a0&&i<=a1;
+    const L=inr?9+7*noise(i):5+3*noise(i);
+    const col=i===head?'#fff':inr?MINT:'#C9CDD6',op=i===head?1:inr?.92:.36;
+    const mk=g=>{const l=document.createElementNS(NS,'line');l.setAttribute('stroke',col);l.setAttribute('stroke-opacity',op);l.setAttribute('stroke-width','2.6');l.setAttribute('stroke-linecap','round');svg.querySelector(g).appendChild(l);return l;};
+    ticks.push({a,L,inr,el:mk('.tk'),gl:(inr||i===head)?mk('.gl'):null});
+  }
+  return {svg,ticks,core:svg.querySelector('.core'),halo:svg.querySelector('.halo')};
+}
+function drawLogo(lg,grow,coreE,t){
+  const r0=15.5;
+  lg.ticks.forEach((k,i)=>{
+    const g=typeof grow==='function'?grow(i):grow;
+    const br=1+.04*Math.sin(t*2.2+i*.6);
+    const L=k.L*g*br;
+    const x1=Math.cos(k.a)*r0,y1=Math.sin(k.a)*r0,x2=Math.cos(k.a)*(r0+Math.max(.001,L)),y2=Math.sin(k.a)*(r0+Math.max(.001,L));
+    for(const el of [k.el,k.gl]) if(el){el.setAttribute('x1',x1.toFixed(2));el.setAttribute('y1',y1.toFixed(2));el.setAttribute('x2',x2.toFixed(2));el.setAttribute('y2',y2.toFixed(2));el.style.opacity=g>0.01?1:0;}
+  });
+  lg.core.setAttribute('r',(11*lerp(.35,1,coreE)).toFixed(2));lg.core.style.opacity=coreE;
+  lg.halo.style.opacity=(.12*coreE).toFixed(3);
+}
+const L1=buildLogo($('logo1'),'a'),L6=buildLogo($('logo6'),'b');
+
+// ---------- background ring (the hero's bins) ----------
+const BR=$('bigring');const BN=150;const brl=[];
+for(let i=0;i<BN;i++){const a=i/BN*Math.PI*2-Math.PI/2;const inr=i>=18&&i<74;const len=inr?120+180*Math.exp(-Math.pow((i-46)/22,2)):40+40*noise(i);const l=document.createElementNS(NS,'line');
+  l.setAttribute('x1',Math.cos(a)*330);l.setAttribute('y1',Math.sin(a)*330);l.setAttribute('x2',Math.cos(a)*(330+len));l.setAttribute('y2',Math.sin(a)*(330+len));
+  l.setAttribute('stroke',inr?MINT:'#fff');l.setAttribute('stroke-opacity',inr?.22:.09);l.setAttribute('stroke-width','5');l.setAttribute('stroke-linecap','round');BR.appendChild(l);brl.push(l);}
+BR.insertAdjacentHTML('afterbegin','<circle r="720" fill="none" stroke="rgba(255,255,255,.06)" stroke-width="2" stroke-dasharray="3 14"/>');
+
+// ---------- scene 3 cards ----------
+const POOLS=[
+  {a:'PENGU',b:'SOL',score:78,vt:'2.25x',apr:'246%',tr:'+6.8%'},
+  {a:'JUP',b:'SOL',score:73,vt:'1.92x',apr:'175%',tr:'+4.2%'},
+  {a:'JUP',b:'USDC',score:67,vt:'1.42x',apr:'155%',tr:'+4.0%'},
+];
+const cards=$('cards');
+POOLS.forEach((p,i)=>{cards.insertAdjacentHTML('beforeend',`<div class="glass card" id="cd${i}" style="left:${160+i*548}px"><span class="rk">0${i+1}</span>
+<div class="pair"><span class="toks"><img src="tokens/${p.a}.png"><img src="tokens/${p.b}.png"></span>${p.a} / ${p.b}</div>
+<span class="pill in"><i></i>Deploy</span>
+<div class="score"><span class="num" id="sn${i}">0</span><svg viewBox="0 0 112 112"><circle cx="56" cy="56" r="50" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="8"/><circle id="sr${i}" cx="56" cy="56" r="50" fill="none" stroke="${MINT}" stroke-width="8" stroke-linecap="round" pathLength="100" stroke-dasharray="0 100"/></svg><div><small>Agent score</small><span>out of 100</span></div></div>
+<div class="stats"><div><small>Vol / TVL</small><b>${p.vt}</b></div><div><small>Fee APR</small><b>${p.apr}</b></div><div><small>7-day trend</small><b class="up">${p.tr}</b></div></div></div>`);});
+
+// ---------- scene 4 chart ----------
+const C=$('chart');const NP=160;const PX0=50,PX1=1220,PY0=90,PY1=520,YMIN=94,YMAX=115;
+const ss=(a,b,x)=>{const t=clamp((x-a)/(b-a));return t*t*(3-2*t);};
+const price=i=>100+7.5*ss(84,120,i)+2.1*Math.sin(i*.23)+1.0*Math.sin(i*.61+1.3)+.5*Math.sin(i*1.7+.4);
+const R=114;const LO0=96,HI0=104,LO1=103.6,HI1=111.6;
+const band=k=>{const m=eio(pr(k,R,R+10));return [lerp(LO0,LO1,m),lerp(HI0,HI1,m)];};
+let kOut=R;for(let i=92;i<R;i++){if(price(i)>HI0){kOut=i;break;}}
+const X=i=>PX0+(i/(NP-1))*(PX1-PX0),Y=v=>PY1-(v-YMIN)/(YMAX-YMIN)*(PY1-PY0);
+C.innerHTML=`<defs><linearGradient id="ar" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#E7E9EE" stop-opacity=".16"/><stop offset=".75" stop-color="#C9CDD6" stop-opacity=".02"/><stop offset="1" stop-color="#C9CDD6" stop-opacity="0"/></linearGradient>
+<linearGradient id="ln" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#C9CDD6" stop-opacity=".2"/><stop offset=".6" stop-color="#E7E9EE"/><stop offset="1" stop-color="#fff"/></linearGradient>
+<linearGradient id="bdU" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${MINT}" stop-opacity=".12"/><stop offset=".5" stop-color="${MINT}" stop-opacity=".02"/><stop offset="1" stop-color="${MINT}" stop-opacity=".12"/></linearGradient>
+<linearGradient id="bdD" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FF6369" stop-opacity=".14"/><stop offset=".5" stop-color="#FF6369" stop-opacity=".03"/><stop offset="1" stop-color="#FF6369" stop-opacity=".14"/></linearGradient>
+<filter id="gw" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="5"/></filter></defs>
+<g id="grid"></g><rect id="bd"/><line id="bh" stroke-width="1.5"/><line id="bl" stroke-width="1.5"/>
+<path id="ca" fill="url(#ar)"/><path id="cg" fill="none" stroke="#E7E9EE" stroke-width="7" opacity=".3" filter="url(#gw)"/><path id="cl" fill="none" stroke="url(#ln)" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<g id="mk"></g><circle id="halo" r="16" fill="#fff" opacity=".3" filter="url(#gw)"/><circle id="dot" r="7" fill="#fff"/><line id="nowl" stroke="rgba(255,255,255,.25)" stroke-dasharray="2 6" stroke-width="1.5"/>
+<g id="bins"></g><text id="th" font-size="21" font-family="IN"/><text id="tl" font-size="21" font-family="IN"/><g id="pl"><rect height="38" rx="19" width="124"/><text font-size="21" font-family="IN" font-weight="600" fill="#050506"/></g>`;
+for(let i=0;i<5;i++){const y=PY0+(PY1-PY0)*i/4;$('grid').insertAdjacentHTML('beforeend',`<line x1="0" x2="1600" y1="${y}" y2="${y}" stroke="rgba(255,255,255,.07)" stroke-dasharray="2 9"/>`);}
+const NB=21;for(let i=0;i<NB;i++){const r=document.createElementNS(NS,'rect');$('bins').appendChild(r);}
+const kAt=t=>t<12.5?40:t<14.1?lerp(40,96,pr(t,12.5,14.1)):t<16.2?lerp(96,R+1,pr(t,14.1,16.2)):lerp(R+1,NP-1,eo(pr(t,16.2,17.8)));
+const tOfK=k=>k<=96?lerp(12.5,14.1,(k-40)/56):k<=R+1?lerp(14.1,16.2,(k-96)/(R+1-96)):16.2;
+const T_OUT=tOfK(kOut),T_REB=tOfK(R-4),T_BACK=tOfK(R+1)+.15;
+const THINK=[
+  [0,'Holding position','Price is inside the range and volume is strong. Fees keep flowing. Holding.'],
+  [T_OUT,'Evaluating a rebalance','Price left the range. Waiting one tick: price often snaps back.'],
+  [T_REB,'Rebalancing','Fees over the next 6 hours beat the cost 3.1x. Re-centering now.'],
+  [T_BACK,'Holding position','Re-centered around the new price. Earning fees again.'],
+];
+function drawChart(t){
+  const kf=kAt(t);const k=Math.floor(kf);const fr=kf-k;
+  const pts=[];for(let i=0;i<=k;i++)pts.push([X(i),Y(price(i))]);
+  const kn=Math.min(NP-1,k+1);const hx=lerp(X(k),X(kn),fr),hy=lerp(Y(price(k)),Y(price(kn)),fr);pts.push([hx,hy]);
+  const d=pts.map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join('');
+  $('cl').setAttribute('d',d);$('cg').setAttribute('d',d);$('ca').setAttribute('d',d+`L${hx.toFixed(1)} 560L${X(0)} 560Z`);
+  const cp=lerp(price(k),price(kn),fr);const [lo,hi]=band(kf);const out=cp>hi||cp<lo;
+  const yh=Y(hi),yl=Y(lo);const bd=$('bd');bd.setAttribute('x',0);bd.setAttribute('width',1400);bd.setAttribute('y',yh);bd.setAttribute('height',yl-yh);bd.setAttribute('fill',out?'url(#bdD)':'url(#bdU)');
+  const ec=out?'rgba(255,99,105,.55)':'rgba(61,220,151,.4)';
+  for(const [id,y] of [['bh',yh],['bl',yl]]){const l=$(id);l.setAttribute('x1',0);l.setAttribute('x2',1400);l.setAttribute('y1',y);l.setAttribute('y2',y);l.setAttribute('stroke',ec);}
+  $('dot').setAttribute('cx',hx);$('dot').setAttribute('cy',hy);$('dot').setAttribute('fill',out?'#FF6369':'#fff');
+  $('halo').setAttribute('cx',hx);$('halo').setAttribute('cy',hy);$('halo').setAttribute('fill',out?'#FF6369':'#fff');$('halo').setAttribute('r',(16+5*Math.sin(t*5)).toFixed(1));
+  $('nowl').setAttribute('x1',hx);$('nowl').setAttribute('x2',1400);$('nowl').setAttribute('y1',hy);$('nowl').setAttribute('y2',hy);
+  // bins
+  const bw=(hi-lo)/NB;[...$('bins').children].forEach((r,i)=>{const pl=lo+i*bw,ph=pl+bw;const y1=Y(ph),y2=Y(pl);const h=(y2-y1)*.62;const mid=(i+.5)/NB;const w=118*(.72+.28*Math.exp(-Math.pow((mid-.5)/.35,2)));const act=cp>=pl&&cp<ph;
+    r.setAttribute('x',1250);r.setAttribute('y',((y1+y2-h)/2).toFixed(1));r.setAttribute('height',h.toFixed(1));r.setAttribute('rx',Math.min(h/2,5).toFixed(1));r.setAttribute('width',(w*(act?1.08:1)).toFixed(1));
+    r.setAttribute('fill',act?'#fff':ph<=cp?MINT:'#C9CDD6');r.setAttribute('opacity',act?1:ph<=cp?.78:.3);});
+  // labels
+  const th=$('th'),tl=$('tl');th.setAttribute('x',1430);th.setAttribute('y',yh+6);th.textContent=hi.toFixed(2);tl.setAttribute('x',1430);tl.setAttribute('y',yl+6);tl.textContent=lo.toFixed(2);
+  th.setAttribute('fill',ec);tl.setAttribute('fill',ec);th.style.opacity=Math.abs(hy-yh)<24?0:1;tl.style.opacity=Math.abs(hy-yl)<24?0:1;
+  const pl=$('pl');pl.querySelector('rect').setAttribute('x',1420);pl.querySelector('rect').setAttribute('y',hy-19);pl.querySelector('rect').setAttribute('fill',out?'#FF6369':'#F5F5F6');
+  const tx=pl.querySelector('text');tx.setAttribute('x',1438);tx.setAttribute('y',hy+7);tx.textContent=cp.toFixed(2);
+  // rebalance marker
+  if(kf>=R){const e=eo(pr(kf,R,R+3));const mx=X(R),my=Y(price(R));$('mk').innerHTML=`<g opacity="${e.toFixed(2)}"><line x1="${mx}" x2="${mx}" y1="${my+14}" y2="${PY1+10}" stroke="rgba(201,205,214,.35)" stroke-dasharray="3 5" stroke-width="1.5"/><circle cx="${mx}" cy="${my}" r="9" fill="#080808" stroke="#E7E9EE" stroke-width="3"/><text x="${mx+16}" y="${my-16}" font-size="22" font-family="IN" font-weight="500" fill="#E7E9EE">Rebalanced</text></g>`;}
+  else $('mk').innerHTML='';
+  const st=$('status');st.className='pill '+(out?'out':'in');st.lastChild.textContent=out?'Out of range':'In range';
+  // reasoning
+  let ph=THINK[0];for(const x of THINK) if(t>=x[0]+(x[0]?0:12.2)) ph=x;
+  const t0=ph===THINK[0]?12.3:ph[0];$('mode4').textContent=ph[1];typeIn($('t4'),ph[2],t,t0,64);
+  $('c4').style.opacity=(Math.floor(t*2.4)%2)?0:1;
+}
+
+// ---------- scene 5 vault vs hold ----------
+const VS=$('vsc');const VN=60;
+const hold=i=>100+6*Math.sin(i/9)+3*Math.sin(i/3.7+1)+i*.05;
+const vault=i=>hold(i)*(1+0.068*Math.pow(i/(VN-1),1.15))+.6*Math.sin(i/2.3);
+let vmin=1e9,vmax=-1e9;for(let i=0;i<VN;i++){vmin=Math.min(vmin,hold(i),vault(i));vmax=Math.max(vmax,hold(i),vault(i));}
+const VX=i=>10+i/(VN-1)*680,VY=v=>360-(v-vmin+2)/(vmax-vmin+4)*340;
+VS.innerHTML=`<defs><linearGradient id="va" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#00AD71" stop-opacity=".28"/><stop offset="1" stop-color="#00AD71" stop-opacity="0"/></linearGradient></defs>
+${[0,1,2,3].map(i=>`<line x1="0" x2="700" y1="${20+i*110}" y2="${20+i*110}" stroke="rgba(255,255,255,.07)" stroke-dasharray="2 8" vector-effect="non-scaling-stroke"/>`).join('')}
+<path id="vA" fill="url(#va)"/><path id="vH" fill="none" stroke="#8A8A92" stroke-width="2.5" stroke-dasharray="7 7" vector-effect="non-scaling-stroke"/><path id="vV" fill="none" stroke="#00AD71" stroke-width="3.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`;
+function drawVs(t){const e=eio(pr(t,18.8,20.4));const n=Math.max(2,Math.round(e*(VN-1))+1);
+  const pv=[],ph=[];for(let i=0;i<n;i++){pv.push([VX(i),VY(vault(i))]);ph.push([VX(i),VY(hold(i))]);}
+  const dv=pv.map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join('');const dh=ph.map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join('');
+  $('vV').setAttribute('d',dv);$('vH').setAttribute('d',dh);$('vA').setAttribute('d',dv+`L${pv.at(-1)[0]} 380L${pv[0][0]} 380Z`);}
+
+// ---------- render one frame ----------
+const S=['s1','s2','s3','s4','s5','s6'].map($);
+function render(t,frame){
+  // background
+  set($('bg'),1);
+  $('blobA').style.left=(960-450+260*Math.sin(t*.21))+'px';$('blobA').style.top=(-250+80*Math.cos(t*.17))+'px';
+  $('blobB').style.left=(1300-400+220*Math.cos(t*.19))+'px';$('blobB').style.top=(560+120*Math.sin(t*.23))+'px';
+  const ringO=.16+.3*env(t,4.0,7.7,.8,.8)+.06*env(t,21.4,26.5,1,.1);
+  const br=$('bigring');br.style.opacity=ringO.toFixed(3);br.style.transform=`rotate(${(t*2.4).toFixed(2)}deg) scale(${(1+t*.004).toFixed(4)})`;
+  $('grain').style.transform=`translate(${(frame*37)%100-50}px,${(frame*53)%100-50}px)`;
+
+  // 1: the mark assembles, then locks up with the name
+  {const o=env(t,0,4.3,.01,.6);const ex=eio(pr(t,3.7,4.3));set(S[0],o,0,0,1+.05*ex,8*ex);
+   const m=eio(pr(t,1.95,2.65));const cx=lerp(960,716,m),cy=lerp(540,540,m),sc=lerp(1,.5,m);
+   const lg=$('logo1');lg.style.left=(cx-288)+'px';lg.style.top=(cy-288)+'px';lg.style.transform=`scale(${sc})`;
+   drawLogo(L1,i=>eo(pr(t,.35+i*.042,.9+i*.042)),eo(pr(t,.15,1.0)),t);
+   const w=$('word1');w.style.left='900px';const we=eo(pr(t,2.5,3.15));set(w,we,lerp(-40,0,we),0,1,lerp(12,0,we));
+   rise($('tag1'),t,2.9,.7,20,8);}
+
+  // 2: the promise
+  {const o=env(t,3.95,7.75,.01,.6);const ex=eio(pr(t,7.15,7.75));set(S[1],o,0,-30*ex,1,8*ex);
+   [...S[1].querySelectorAll('.w')].forEach((w,i)=>rise(w,t,4.05+i*.13,.75,46,16));rise($('sub2'),t,4.85,.8,24,10);}
+
+  // 3: scan and score
+  {const o=env(t,7.45,12.0,.01,.6);const ex=eio(pr(t,11.4,12.0));set(S[2],o,0,-24*ex,1,8*ex);
+   const hd=S[2].querySelector('.head');rise(hd.children[0],t,7.55,.6,20,8);rise(hd.children[1],t,7.65,.75,36,14);
+   const tp=hd.children[2];set(tp,eo(pr(t,8.05,8.3)));typeIn($('t3'),'Scanned 214 pools. 38 passed the safety checks. Ranked by score.',t,8.1,62);$('c3').style.opacity=(Math.floor(t*2.4)%2)?0:1;
+   POOLS.forEach((p,i)=>{const c=$('cd'+i);rise(c,t,8.25+i*.16,.8,70,10);const e=eo(pr(t,8.65+i*.16,9.9+i*.16));$('sn'+i).textContent=Math.round(p.score*e);$('sr'+i).setAttribute('stroke-dasharray',`${(p.score*e).toFixed(2)} 100`);});
+   set($('n3'),eo(pr(t,9.0,9.6)));}
+
+  // 4: in range, rebalance only when it pays
+  {const o=env(t,11.75,18.5,.01,.6);const ex=eio(pr(t,17.9,18.5));set(S[3],o,0,-24*ex,1,8*ex);
+   const hd=S[3].querySelector('.head');rise(hd.children[0],t,11.85,.6,20,8);rise(hd.children[1],t,11.95,.75,36,14);
+   rise($('bubble'),t,12.1,.8,30,10);rise($('panel'),t,12.2,.9,60,10);set($('n4'),eo(pr(t,12.8,13.4)));
+   if(t>11.7&&t<18.6)drawChart(t);}
+
+  // 5: net vs hold
+  {const o=env(t,18.2,21.75,.01,.6);const ex=eio(pr(t,21.15,21.75));set(S[4],o,0,-24*ex,1,8*ex);
+   const hd=S[4].querySelector('.head');rise(hd.children[0],t,18.3,.6,20,8);rise(hd.children[1],t,18.4,.75,36,14);
+   const e=eo(pr(t,18.7,20.1));rise($('big5'),t,18.6,.7,40,16);$('big5').textContent='+'+(6.8*e).toFixed(1)+'%';
+   rise($('lab5'),t,19.0,.7,20,8);rise($('vs'),t,18.7,.8,50,10);drawVs(t);set($('disc5'),eo(pr(t,19.5,20.1)));}
+
+  // 6: end card
+  {const o=env(t,21.45,99,.01,.1);set(S[5],o);
+   const e=eo(pr(t,21.5,22.4));const lg=$('logo6');lg.style.left=(716-288)+'px';lg.style.top=(430-288)+'px';lg.style.transform=`scale(${(.5*lerp(.92,1,e)).toFixed(4)})`;lg.style.opacity=e;lg.style.filter=`blur(${lerp(10,0,e).toFixed(2)}px)`;
+   drawLogo(L6,i=>eo(pr(t,21.5+i*.018,21.9+i*.018)),e,t);
+   const w=$('word6');w.style.left='900px';set(w,e,lerp(-30,0,e),0,1,lerp(12,0,e));
+   rise($('tag6'),t,21.95,.8,24,10);['p61','p62','p63'].forEach((id,i)=>rise($(id),t,22.35+i*.13,.7,22,8));set($('disc6'),eo(pr(t,22.9,23.5)));}
+}
+window.render=render;
+window.DURATION=26;
+</script>
+</body></html>
