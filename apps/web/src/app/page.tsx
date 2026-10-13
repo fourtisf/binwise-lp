@@ -1,12 +1,12 @@
 import Link from 'next/link';
 import { BRAND } from '@binwise/core/brand';
+import { BinRing } from '@/components/landing/BinRing';
 import { CaPill } from '@/components/landing/CaPill';
 import { Bento } from '@/components/landing/Sections';
 import { Faq } from '@/components/landing/Faq';
 import { HeroWindow } from '@/components/landing/HeroWindow';
 import { Nav } from '@/components/landing/Nav';
 import { Reveal } from '@/components/landing/Reveal';
-import { Stage } from '@/components/landing/Stage';
 import { Logo } from '@/components/Logo';
 import { Icon } from '@/components/Sprite';
 import { LIVE_DEFAULT, WALLET_LOGIN, X_URL } from '@/lib/site';
@@ -16,45 +16,55 @@ const Check = () => <Icon id="i-check" />;
 export default function Landing() {
   return (
     <div id="landing">
-      <div className="grid-bg"></div>
       <div className="topglow"></div>
       <Nav />
       <Reveal />
 
       <section className="hero">
-        <div className="wrap">
-          <a href="#how" className="announce">
-            <b>New</b>{LIVE_DEFAULT ? 'Live on Solana mainnet' : 'Paper mode is open to everyone'}
-            <Icon id="i-chev" />
-          </a>
-          <h1>Liquidity that manages itself.</h1>
-          <p className="lead">
-            {BRAND} is an autonomous LP agent for Solana. It finds the pools that pay, keeps your liquidity in range, and
-            steps aside before a downtrend eats the yield.
-          </p>
-          <div className="ctas">
-            <Link className="btn btn-white" href="/app">
-              {LIVE_DEFAULT ? 'Launch app' : 'Start in paper mode'}
-            </Link>
-            <a href="#product" className="btn btn-dark">
-              See how it decides
+        <div className="wrap hero-grid">
+          <div className="hero-copy">
+            <a href="#how" className="announce">
+              <b>New</b>{LIVE_DEFAULT ? 'Live on Solana mainnet' : 'Paper mode is open to everyone'}
+              <Icon id="i-chev" />
             </a>
+            <h1>Liquidity that manages itself.</h1>
+            <p className="lead">
+              {BRAND} is an autonomous LP agent for Solana. It finds the pools that pay, keeps your liquidity in range, and
+              steps aside before a downtrend eats the yield.
+            </p>
+            <div className="ctas">
+              <Link className="btn btn-white" href="/app">
+                {LIVE_DEFAULT ? 'Launch app' : 'Start in paper mode'}
+              </Link>
+              <a href="#live" className="btn btn-dark">
+                See how it decides
+              </a>
+            </div>
+            <p className="hero-note">
+              {LIVE_DEFAULT
+                ? 'Real funds on mainnet. Start small: your funds stay in your own wallet, and you approve every move.'
+                : 'No deposit needed to try. With real funds, everything stays in your own wallet.'}
+            </p>
+            {/* The project token's contract address, with a copy button. */}
+            <CaPill />
           </div>
-          <p className="hero-note">
-            {LIVE_DEFAULT
-              ? 'Real funds on mainnet. Start small: your funds stay in your own wallet, and you approve every move.'
-              : 'No deposit needed to try. With real funds, everything stays in your own wallet.'}
-          </p>
-          {/* The project token's contract address, with a copy button. */}
-          <CaPill />
+          <BinRing />
         </div>
+      </section>
 
+      <section className="sec" id="live">
         <div className="wrap">
-          <Stage>
+          <div className="sec-head">
+            <span className="kicker">
+              <i></i>Live demo
+            </span>
+            <h2 className="sec-h">Watch the agent work.</h2>
+            <p className="sec-p">The public demo vault on live prices: every tick, every decision and the reason behind it, as it happens.</p>
+          </div>
+          <div className="window">
             <HeroWindow />
-          </Stage>
+          </div>
         </div>
-
         <div className="wrap logos">
           <p>Built on the infrastructure Solana runs on</p>
           <div>
@@ -90,25 +100,29 @@ export default function Landing() {
 
       <section className="sec" id="product">
         <div className="wrap">
-          <span className="kicker">
-            <i></i>Product
-          </span>
-          <h2 className="sec-h">
-            An agent you can actually read. <span className="g">Every move comes with a reason.</span>
-          </h2>
+          <div className="sec-head">
+            <span className="kicker">
+              <i></i>Product
+            </span>
+            <h2 className="sec-h">
+              An agent you can actually read. <span className="g">Every move comes with a reason.</span>
+            </h2>
+          </div>
           <Bento />
         </div>
       </section>
 
       <section className="sec" id="how">
         <div className="wrap">
-          <span className="kicker">
-            <i></i>How it works
-          </span>
-          <h2 className="sec-h">From wallet to working agent in three steps.</h2>
+          <div className="sec-head">
+            <span className="kicker">
+              <i></i>How it works
+            </span>
+            <h2 className="sec-h">From wallet to working agent in three steps.</h2>
+          </div>
           <div className="steps3">
             <div className="st card spot">
-              <span className="n">1</span>
+              <span className="n">01</span>
               <h3>{WALLET_LOGIN ? 'Connect a wallet' : 'Open the Telegram bot'}</h3>
               <p>
                 {WALLET_LOGIN
@@ -117,12 +131,12 @@ export default function Landing() {
               </p>
             </div>
             <div className="st card spot">
-              <span className="n">2</span>
+              <span className="n">02</span>
               <h3>Pick a risk profile</h3>
               <p>Conservative, balanced or aggressive. Fine-tune the limits if you want.</p>
             </div>
             <div className="st card spot">
-              <span className="n">3</span>
+              <span className="n">03</span>
               <h3>Let it work</h3>
               <p>
                 {LIVE_DEFAULT
@@ -153,16 +167,18 @@ export default function Landing() {
         </div>
       </section>
 
-      <section className="sec center" id="pricing">
+      <section className="sec" id="pricing">
         <div className="wrap">
-          <span className="kicker">
-            <i></i>Pricing
-          </span>
-          <h2 className="sec-h">We earn only when you beat holding.</h2>
-          <p className="sec-p">
-            No subscription for the agent. A share of the profit above what holding would have made, and nothing in a losing
-            month.
-          </p>
+          <div className="sec-head">
+            <span className="kicker">
+              <i></i>Pricing
+            </span>
+            <h2 className="sec-h">We earn only when you beat holding.</h2>
+            <p className="sec-p">
+              No subscription for the agent. A share of the profit above what holding would have made, and nothing in a losing
+              month.
+            </p>
+          </div>
           <div className={`plans${LIVE_DEFAULT ? ' two' : ''}`} style={{ textAlign: 'left' }}>
             {/* Mainnet site: no paper vaults, so no Paper plan. */}
             {!LIVE_DEFAULT && (
@@ -249,17 +265,27 @@ export default function Landing() {
       </section>
 
       <section className="sec" id="faq">
-        <div className="wrap center">
-          <span className="kicker">
-            <i></i>FAQ
-          </span>
-          <h2 className="sec-h">Questions, answered.</h2>
+        <div className="wrap faq-grid">
+          <div className="faq-head">
+            <span className="kicker">
+              <i></i>FAQ
+            </span>
+            <h2 className="sec-h">Questions, answered.</h2>
+            <p className="sec-p">
+              Anything else? Ask us on{' '}
+              <a href={X_URL} target="_blank" rel="noreferrer">
+                X
+              </a>
+              .
+            </p>
+          </div>
           <Faq />
         </div>
       </section>
 
       <div className="wrap">
         <div className="final">
+          <div className="final-ring" aria-hidden="true"></div>
           <h2>Put your liquidity to work.</h2>
           <p>
             {!WALLET_LOGIN

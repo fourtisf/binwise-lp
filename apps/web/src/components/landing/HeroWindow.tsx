@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { BRAND } from '@binwise/core/brand';
 import type { DemoPair, DemoStats } from '@binwise/core';
 import { getDemoSource, type DemoSource } from '@/lib/api/demo';
+import { emitDemo } from '@/lib/demo-bus';
 import { LiveChart } from '@/lib/charts/LiveChart';
 import { hhmm, pct, prefersReducedMotion, usd } from '@/lib/format';
 import { SITE_HOST } from '@/lib/site';
@@ -29,6 +30,7 @@ export function HeroWindow() {
   const thoughtEl = useRef<HTMLSpanElement>(null);
   const chart = useRef<LiveChart | null>(null);
   const typeTimer = useRef<ReturnType<typeof setInterval>>();
+  const decimals = useRef(4);
 
   useEffect(() => {
     if (!chartEl.current) return;
@@ -79,10 +81,14 @@ export function HeroWindow() {
         return;
       }
       if (e.type === 'demo:snapshot') {
+        decimals.current = e.chart.decimals;
+        const price = e.chart.history[e.chart.history.length - 1];
+        if (price !== undefined) emitDemo({ pair: p.pair, shape: p.shape, price, lo: e.chart.lo, hi: e.chart.hi, decimals: e.chart.decimals, stats: e.stats });
         chart.current?.load(e.chart, p.shape);
         setLog(e.log.map(([a, b]) => [a, b, hhmm()]));
         think(e.thought);
       } else {
+        emitDemo({ pair: p.pair, shape: p.shape, price: e.price, lo: e.lo, hi: e.hi, decimals: decimals.current, stats: e.stats });
         chart.current?.push(e.price, e.lo, e.hi, e.marker);
         if (e.thought) think(e.thought);
         if (e.log) setLog((l) => [[e.log![0], e.log![1], hhmm()] as [string, string, string], ...l].slice(0, 3));

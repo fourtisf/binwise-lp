@@ -3,7 +3,7 @@
 import { useEffect } from 'react';
 import { prefersReducedMotion } from '@/lib/format';
 
-const TARGETS = '.kicker, .sec-h, .sec-p, .bento > *, .steps3 > *, .metrics > *, .plans > *, .faq, .final';
+const TARGETS = '.kicker, .sec-h, .sec-p, #live .window, .logos, .bento > *, .steps3 > *, .metrics > *, .plans > *, .faq, .final';
 
 /**
  * Landing sections fade up as they scroll into view. Only what starts below the fold is hidden, and only

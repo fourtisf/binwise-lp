@@ -10,24 +10,24 @@ The owner is non-technical. Work autonomously, make sensible decisions, and repo
 
 ## 0. Source of truth for UI
 
-`design/binwise-prototype.html` is the approved design. It is a single-file prototype with simulated data.
-
-- Recreate it **pixel-faithfully** in Next.js: same spacing, layout, copy, animations and interactions.
-- Do not "improve" or restyle the design. Owner rejected many earlier designs; this one is approved.
-- **Brand and theme (owner decision, Oct 2026)** replace the prototype's name, colors and typography: the product is **Kovra**, the theme is premium black with a titanium (silver) accent, mint for gains and red for losses, Space Grotesk for headings and big numbers, Inter for body text. Every color is a token on `:root` in `apps/web/src/app/globals.css`; charts read the same tokens (`apps/web/src/lib/theme.ts`). Don't hardcode colors in components.
+The look is **Kovra direction B, "cinematic"** (owner's choice, Oct 2026; reference: `design/kovra-direction-b.html`). It replaced the Binwise prototype's layout because the owner wanted the site to stop looking like Binwise.
+- Landing: headline bottom-left with a **live bin ring** (chrome core, the demo vault's liquidity bin by bin, following the live window) on the right; centred section heads with pill kickers; the live demo window in its own section; steps as a timeline; one glass panel of example metrics; FAQ in two columns; the final call to action inside a ring of bins.
+- App: floating glass sidebar and pill topbar, white pill for the current page, pill buttons and segmented controls, 24px cards, a floating dock on phones.
+- Premium black with a titanium (silver) accent, mint for gains and red for losses, Space Grotesk for headings and big numbers, Inter for body text. Every color is a token on `:root` in `apps/web/src/app/globals.css`; charts read the same tokens (`apps/web/src/lib/theme.ts`). Don't hardcode colors in components.
+- `design/binwise-prototype.html` is still the source for content: copy, labels, data shown, empty/error wording and interactions. Don't drop features or disclaimers from it.
 - The name users see comes from `BRAND` in `packages/core/src/brand.ts` (web imports `@binwise/core/brand`). Internal identifiers keep the code name `binwise` on purpose: `@binwise/*` packages, Redis keys (kill switch), session cookie, database, PM2 processes, server paths.
-- Every simulated number in the prototype must be replaced by real data from the backend (see §5). Keep the prototype's labels and empty/error wording style.
-- Owner dislikes: black-and-gold palettes and white/light backgrounds. Keep the dark theme.
+- Every simulated number must be replaced by real data from the backend (see §5).
+- Owner dislikes: black-and-gold palettes and white/light backgrounds. Keep the dark theme. Don't restyle again without the owner asking.
 
-Pages in the prototype:
-- **Landing**: hero, 3D product window (live chart + agent reasoning), "Built on" strip, bento features, how it works, metrics, pricing, FAQ, final CTA, footer.
+Pages:
+- **Landing**: hero (headline + live bin ring), live demo window (live chart + agent reasoning), "Built on" strip, bento features, how it works, metrics, pricing, FAQ, final CTA, footer.
 - **App**: sidebar (vault switcher, ⌘K search, nav, live positions, agent status card), Overview, Pools (+ score drawer), Positions, Strategy, Activity, Deposit modal, Command palette (⌘K).
 
 ---
 
 ## 1. Stack (use this, it matches the owner's other production projects)
 
-- **Frontend**: Next.js 14 (App Router), TypeScript, Tailwind or CSS modules (match prototype exactly)
+- **Frontend**: Next.js 14 (App Router), TypeScript, plain CSS with tokens (see §0)
 - **API**: Fastify (TypeScript)
 - **Agent worker**: separate Node process (TypeScript), managed by PM2
 - **DB**: PostgreSQL + Prisma
@@ -137,7 +137,7 @@ VaultSnapshot(id, vaultId, ts, value, holdValue, feesTotal, netVsHold)
 7. Open to users, Telegram alerts, pricing (10% of profit above hold — placeholder, owner to confirm).
 
 ### Acceptance checks per step
-- Frontend: side-by-side screenshots match prototype at 1440px and 390px; no horizontal scroll on mobile; ⌘K palette works.
+- Frontend: screenshots at 1440px and 390px follow §0; no horizontal scroll on mobile; ⌘K palette works.
 - Scoring: unit tests for score, net-vs-hold, rebalance-cost rule, exit rules.
 - Paper mode: every cycle produces a logged decision; feed shows reasons; numbers reconcile with snapshots.
 - Live: every tx simulated first; kill switch tested; withdraw-to-owner tested on devnet before mainnet.
