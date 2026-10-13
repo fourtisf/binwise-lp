@@ -1,3 +1,4 @@
+import { BRAND } from '@binwise/core/brand';
 import { Switch } from '../Switch';
 import { BentoChart, BentoFeed, TgChat, VsChart } from './Bento';
 
@@ -39,7 +40,7 @@ export function Bento() {
             </div>
             <div>
               <span>Volatility</span>
-              <i style={{ ['--w' as string]: '30%', ['--c' as string]: 'var(--red)' }}></i>
+              <i style={{ ['--w' as string]: '30%', ['--c' as string]: 'var(--down)' }}></i>
               <b className="down">−10</b>
             </div>
           </div>
@@ -77,11 +78,11 @@ export function Bento() {
           <div className="vsnums">
             <h3 style={{ fontSize: 26, letterSpacing: '-.04em' }}>Measured against holding, not APR.</h3>
             <p style={{ marginBottom: 24 }}>
-              A pool can show 400% APR and still lose you money. Binwise reports one honest number: how you did versus just
+              A pool can show 400% APR and still lose you money. {BRAND} reports one honest number: how you did versus just
               holding.
             </p>
             <div>
-              <span className="muted">Binwise</span>
+              <span className="muted">{BRAND}</span>
               <b className="up num">+6.8%</b>
             </div>
             <div>
@@ -96,13 +97,13 @@ export function Bento() {
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             <div className="keys">
               <span>
-                <i style={{ background: 'var(--aqua)' }}></i>Binwise
+                <i style={{ background: 'var(--c-vault)' }}></i>{BRAND}
               </span>
               <span>
-                <i style={{ background: 'var(--indigo)' }}></i>Unmanaged LP
+                <i style={{ background: 'var(--c-lp)' }}></i>Unmanaged LP
               </span>
               <span>
-                <i style={{ background: '#5D6072' }}></i>Hold
+                <i style={{ background: 'var(--c-hold)' }}></i>Hold
               </span>
             </div>
             <VsChart />

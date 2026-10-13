@@ -1,8 +1,24 @@
 import type { LiquidityShape, PositionChart } from '@binwise/core';
 import { clamp, ease, lerp, prefersReducedMotion } from '../format';
+import { alpha, token } from '../theme';
 
 const NS = 'http://www.w3.org/2000/svg';
 let uid = 0;
+
+/** Chart colours from the theme tokens in globals.css, resolved once per chart. */
+function palette() {
+  return {
+    line: token('--accent'),
+    lineHi: token('--accent-hi'),
+    text: token('--text'),
+    up: token('--up'),
+    down: token('--down'),
+    bg: token('--bg1'),
+    upEdge: alpha('--up-rgb', 0.45),
+    downEdge: alpha('--down-rgb', 0.6),
+    marker: alpha('--accent-rgb', 0.3),
+  };
+}
 
 export interface LiveChartOptions {
   bins?: number;
@@ -55,6 +71,7 @@ export class LiveChart {
   private tl: SVGTextElement | null = null;
   private pl: SVGGElement | null = null;
   private bars: SVGRectElement[] = [];
+  private c = palette();
 
   constructor(el: HTMLElement, o: LiveChartOptions = {}) {
     this.el = el;
@@ -100,11 +117,12 @@ export class LiveChart {
   private build() {
     const id = this.id;
     const c = this.o.compact;
+    const k = this.c;
     this.el.innerHTML = `<svg class="lc" aria-hidden="true"><defs>
-      <linearGradient id="${id}a" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8B8DFF" stop-opacity=".26"/><stop offset="1" stop-color="#8B8DFF" stop-opacity="0"/></linearGradient>
-      <linearGradient id="${id}l" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#8B8DFF" stop-opacity=".15"/><stop offset=".55" stop-color="#ABADFF"/><stop offset="1" stop-color="#F3F4F8"/></linearGradient>
-      <linearGradient id="${id}b" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#4BE3CF" stop-opacity="0"/><stop offset=".6" stop-color="#4BE3CF" stop-opacity=".05"/><stop offset="1" stop-color="#4BE3CF" stop-opacity=".12"/></linearGradient>
-      <linearGradient id="${id}r" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#FF6B81" stop-opacity="0"/><stop offset="1" stop-color="#FF6B81" stop-opacity=".13"/></linearGradient>
+      <linearGradient id="${id}a" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${k.line}" stop-opacity=".16"/><stop offset="1" stop-color="${k.line}" stop-opacity="0"/></linearGradient>
+      <linearGradient id="${id}l" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="${k.line}" stop-opacity=".15"/><stop offset=".55" stop-color="${k.lineHi}"/><stop offset="1" stop-color="${k.text}"/></linearGradient>
+      <linearGradient id="${id}b" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="${k.up}" stop-opacity="0"/><stop offset=".6" stop-color="${k.up}" stop-opacity=".05"/><stop offset="1" stop-color="${k.up}" stop-opacity=".12"/></linearGradient>
+      <linearGradient id="${id}r" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="${k.down}" stop-opacity="0"/><stop offset="1" stop-color="${k.down}" stop-opacity=".13"/></linearGradient>
       <clipPath id="${id}c"><rect class="clip"/></clipPath><filter id="${id}g" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="4"/></filter>
     </defs><g class="grid"></g><rect class="band"/><line class="bl blh"/><line class="bl bll"/>
     <g clip-path="url(#${id}c)"><path class="area" fill="url(#${id}a)"/><path class="line" stroke="url(#${id}l)"/><g class="mk"></g></g>
@@ -209,7 +227,7 @@ export class LiveChart {
     this.band.setAttribute('y', String(yh));
     this.band.setAttribute('height', String(Math.max(0, yl - yh)));
     this.band.setAttribute('fill', `url(#${this.id}${out ? 'r' : 'b'})`);
-    const bc = out ? 'rgba(255,107,129,.6)' : 'rgba(75,227,207,.45)';
+    const bc = out ? this.c.downEdge : this.c.upEdge;
     (
       [
         [this.blh, yh],
@@ -222,8 +240,8 @@ export class LiveChart {
       l.setAttribute('y2', String(y));
       l.setAttribute('stroke', bc);
     });
-    this.dot.setAttribute('fill', out ? '#FF6B81' : '#fff');
-    this.halo.setAttribute('fill', out ? '#FF6B81' : '#fff');
+    this.dot.setAttribute('fill', out ? this.c.down : '#fff');
+    this.halo.setAttribute('fill', out ? this.c.down : '#fff');
     const B = o.bins;
     const bw = (this.dhi - this.dlo) / B;
     const lx = plotR + (o.compact ? 6 : 14);
@@ -243,14 +261,14 @@ export class LiveChart {
       b.setAttribute('y', String(y1 + 0.8));
       b.setAttribute('height', String(Math.max(1, y2 - y1 - 1.6)));
       b.setAttribute('width', String((liqW - 4) * shape));
-      b.setAttribute('fill', act ? '#FFFFFF' : pHi <= cp ? '#4BE3CF' : '#8B8DFF');
+      b.setAttribute('fill', act ? '#FFFFFF' : pHi <= cp ? this.c.up : this.c.line);
       b.setAttribute('opacity', String(act ? 1 : pHi <= cp ? 0.7 : 0.55));
     }
     this.mk.innerHTML = this.markers
       .map((i) => {
         const x = X(i);
         const y = Y(d[i]);
-        return `<line x1="${x}" x2="${x}" y1="${y + 8}" y2="${H - pad.b + 6}" stroke="rgba(171,173,255,.3)" stroke-dasharray="2 3"/><circle cx="${x}" cy="${y}" r="5.5" fill="#0A0B11" stroke="#ABADFF" stroke-width="2"/>${o.compact ? '' : `<text x="${x + 10}" y="${y - 10}">Rebalanced</text>`}`;
+        return `<line x1="${x}" x2="${x}" y1="${y + 8}" y2="${H - pad.b + 6}" stroke="${this.c.marker}" stroke-dasharray="2 3"/><circle cx="${x}" cy="${y}" r="5.5" fill="${this.c.bg}" stroke="${this.c.lineHi}" stroke-width="2"/>${o.compact ? '' : `<text x="${x + 10}" y="${y - 10}">Rebalanced</text>`}`;
       })
       .join('');
     if (!o.compact && this.th && this.tl && this.pl) {
@@ -270,7 +288,7 @@ export class LiveChart {
       rc.setAttribute('x', String(W - axW + 4));
       rc.setAttribute('y', String(cy - 10));
       rc.setAttribute('width', String(Math.max(54, (t.getComputedTextLength ? t.getComputedTextLength() : 50) + 14)));
-      rc.setAttribute('fill', out ? '#FF6B81' : '#F3F4F8');
+      rc.setAttribute('fill', out ? this.c.down : this.c.text);
       t.setAttribute('x', String(W - axW + 11));
       t.setAttribute('y', String(cy + 4));
       this.th.style.opacity = Math.abs(cy - yh) < 16 ? '0' : '1';

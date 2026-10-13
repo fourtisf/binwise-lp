@@ -76,8 +76,8 @@ export function PoolDrawer() {
                       className="fill"
                       style={
                         v >= 0
-                          ? { background: 'var(--aqua)', left: '50%', width: `${Math.min(50, (v / 40) * 50)}%` }
-                          : { background: 'var(--red)', right: '50%', width: `${Math.min(50, (-v / 40) * 50)}%` }
+                          ? { background: 'var(--up)', left: '50%', width: `${Math.min(50, (v / 40) * 50)}%` }
+                          : { background: 'var(--down)', right: '50%', width: `${Math.min(50, (-v / 40) * 50)}%` }
                       }
                     ></div>
                   </div>

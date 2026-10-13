@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_PARAMS, type OptimizeResult } from '@binwise/core';
+import { BRAND, DEFAULT_PARAMS, type OptimizeResult } from '@binwise/core';
 import { renderOptimizeReport, searchable } from './optimize';
 
 const score = (test: number, params = DEFAULT_PARAMS) => ({ params, train: test + 1, test, testNetVsHoldPct: test, testBeatHold: 3 });
@@ -10,7 +10,7 @@ describe('optimiser report', () => {
 
   it('says plainly whether the new settings are active and highlights what changed', () => {
     const applied = renderOptimizeReport(r, { days: 60, profile: 'balanced', candidates: 60, applied: true, now: Date.UTC(2026, 9, 10) });
-    expect(applied).toContain('# Binwise settings search — 2026-10-10');
+    expect(applied).toContain(`# ${BRAND} settings search — 2026-10-10`);
     expect(applied).toContain('they are now active');
     expect(applied).toContain('| Deploy at score | 62 | **70** |');
     expect(applied).toContain('| Rebalance mode | balanced | **single** |');

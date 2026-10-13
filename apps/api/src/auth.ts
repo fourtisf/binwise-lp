@@ -1,5 +1,6 @@
 import { createHmac, createPublicKey, randomBytes, timingSafeEqual, verify } from 'node:crypto';
 import bs58 from 'bs58';
+import { BRAND } from '@binwise/core';
 
 /**
  * Sign-In With Solana: the wallet signs a one-time message; we verify the
@@ -12,10 +13,10 @@ export const SESSION_DAYS = 14;
 export const newNonce = () => randomBytes(16).toString('hex');
 
 /** The statement shown by wallets that use the standard Sign In With Solana flow. */
-export const SIGN_IN_STATEMENT = 'Sign in to Binwise. This does not send a transaction or cost anything.';
+export const SIGN_IN_STATEMENT = `Sign in to ${BRAND}. This does not send a transaction or cost anything.`;
 
 export const signInMessage = (wallet: string, nonce: string, issuedAt: string, domain: string) =>
-  `${domain} wants you to sign in to Binwise with your Solana wallet.\n\nWallet: ${wallet}\nNonce: ${nonce}\nIssued at: ${issuedAt}\n\nThis does not send a transaction or cost anything.`;
+  `${domain} wants you to sign in to ${BRAND} with your Solana wallet.\n\nWallet: ${wallet}\nNonce: ${nonce}\nIssued at: ${issuedAt}\n\nThis does not send a transaction or cost anything.`;
 
 /** True when `signature` (base58) is `wallet`'s ed25519 signature over `message`. */
 export function verifyWalletSignature(wallet: string, message: string, signatureB58: string): boolean {

@@ -1,4 +1,6 @@
-# Deploying Binwise to the VPS
+# Deploying Kovra to the VPS
+
+Server names keep the project's code name `binwise` (system user, folder, database, PM2 processes): only what users see is called Kovra.
 
 Two ways to run it:
 

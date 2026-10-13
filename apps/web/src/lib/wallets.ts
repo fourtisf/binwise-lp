@@ -12,6 +12,7 @@ import { getWallets } from '@wallet-standard/app';
 import type { Wallet, WalletAccount } from '@wallet-standard/base';
 import { StandardConnect, type StandardConnectFeature } from '@wallet-standard/features';
 import bs58 from 'bs58';
+import { BRAND } from '@binwise/core/brand';
 import { ApiError } from './api/client';
 import { connectInjected, impostorOf, injectedFor, phantomDiagnostics, signMessageInjected } from './injected';
 
@@ -83,7 +84,7 @@ async function binwise<T>(p: Promise<T>): Promise<T> {
     return await p;
   } catch (e) {
     if (e instanceof ApiError) throw new SignInError('binwise', e.message, [], e.code);
-    throw new SignInError('binwise', `Could not reach Binwise (${errText(e)}). Check your connection and try again.`);
+    throw new SignInError('binwise', `Could not reach ${BRAND} (${errText(e)}). Check your connection and try again.`);
   }
 }
 
@@ -114,7 +115,7 @@ export async function signInWithWallet(w: Wallet, api: SignInApi, onTry?: (n: nu
       if (e instanceof SignInError) {
         // A one-step message our server couldn't check (a wallet that builds it differently): try the classic message.
         if (e.kind === 'binwise' && (e.code === 'bad_nonce' || e.code === 'bad_signature') && label === 'One-step sign-in') {
-          tried.push(`${label}: Binwise couldn't check the wallet's message (${e.message})`);
+          tried.push(`${label}: ${BRAND} couldn't check the wallet's message (${e.message})`);
           return null;
         }
         throw e;

@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
+import { BRAND } from '@binwise/core/brand';
 import type { PerformanceRange, PerformanceSeries } from '@binwise/core';
 import { FeedItem } from '@/components/FeedItem';
 import { CustodyNotice } from '@/components/app/CustodyNotice';
@@ -67,8 +68,8 @@ export default function OverviewPage() {
       lineChart(eq.current, {
         labels: perf.ts.map((t) => (hourly ? hhmm(t) : dayLabel(t))),
         series: [
-          { name: 'Binwise vault', color: '#4BE3CF', values: perf.vault, area: true, w: 2.2 },
-          { name: 'Hold', color: '#5D6072', values: perf.hold, dash: '4 4' },
+          { name: `${BRAND} vault`, color: 'var(--c-vault)', values: perf.vault, area: true, w: 2.2 },
+          { name: 'Hold', color: 'var(--c-hold)', values: perf.hold, dash: '4 4' },
         ],
         fmtY: axisUsd,
         fmtTip: (v) => usd(v, 2),
@@ -92,7 +93,7 @@ export default function OverviewPage() {
           <h3 style={{ fontSize: 19 }}>{WALLET_LOGIN ? 'Connect a wallet to start' : 'Start in Telegram'}</h3>
           <p className="muted" style={{ margin: '8px auto 20px', maxWidth: '44ch' }}>
             {!WALLET_LOGIN
-              ? 'Create or import a wallet in the Binwise bot, deposit SOL and add LP. The agent runs on Solana mainnet with real funds: start small. This page shows the pools and every decision.'
+              ? `Create or import a wallet in the ${BRAND} bot, deposit SOL and add LP. The agent runs on Solana mainnet with real funds: start small. This page shows the pools and every decision.`
               : LIVE_DEFAULT
               ? 'Your vault runs on Solana mainnet with real funds. Start small and watch every decision.'
               : 'You get a paper vault with simulated funds. Watch every decision before risking anything.'}
@@ -162,7 +163,7 @@ export default function OverviewPage() {
             <b className={`num ${today >= 0 ? 'up' : 'down'}`}>{pct(today)}</b> today
           </div>
           <svg className="spark" viewBox="0 0 84 32" preserveAspectRatio="none">
-            {o && <path d={sparkPath(o.spark, 84, 32)} fill="none" stroke="#4BE3CF" strokeWidth="1.5" strokeLinecap="round" />}
+            {o && <path d={sparkPath(o.spark, 84, 32)} fill="none" style={{ stroke: 'var(--up)' }} strokeWidth="1.5" strokeLinecap="round" />}
           </svg>
         </div>
         <div className="kpi card">
@@ -191,7 +192,7 @@ export default function OverviewPage() {
           <div className="ph">
             <div>
               <h3>Vault performance</h3>
-              <p>Binwise compared with holding the same tokens</p>
+              <p>{BRAND} compared with holding the same tokens</p>
             </div>
             <div className="seg" id="eqSeg">
               {([7, 30, 90] as const).map((r) => (
@@ -203,10 +204,10 @@ export default function OverviewPage() {
           </div>
           <div className="keys">
             <span>
-              <i style={{ background: 'var(--aqua)' }}></i>Binwise vault
+              <i style={{ background: 'var(--c-vault)' }}></i>{BRAND} vault
             </span>
             <span>
-              <i style={{ background: '#5D6072' }}></i>Hold
+              <i style={{ background: 'var(--c-hold)' }}></i>Hold
             </span>
           </div>
           <div className="eq" id="eqChart" ref={eq}></div>

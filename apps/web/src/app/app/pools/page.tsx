@@ -72,7 +72,7 @@ export default function PoolsPage() {
             <tbody id="poolRows">
               {rows.length ? (
                 rows.map((x) => {
-                  const col = x.score >= 62 ? 'var(--aqua)' : x.score >= 40 ? '#A9ABFF' : 'var(--red)';
+                  const col = x.score >= 62 ? 'var(--up)' : x.score >= 40 ? 'var(--accent-hi)' : 'var(--down)';
                   return (
                     <tr key={x.id} onClick={() => openPool(x.id)}>
                       <td>
@@ -93,7 +93,7 @@ export default function PoolsPage() {
                             <path
                               d={sparkPath(x.spark, 64, 22)}
                               fill="none"
-                              stroke={x.trend7d >= 0 ? '#4BE3CF' : '#FF6B81'}
+                              style={{ stroke: x.trend7d >= 0 ? 'var(--up)' : 'var(--down)' }}
                               strokeWidth="1.5"
                               strokeLinecap="round"
                               strokeLinejoin="round"

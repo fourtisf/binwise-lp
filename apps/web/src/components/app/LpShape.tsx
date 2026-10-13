@@ -63,7 +63,7 @@ export function LpShape({
       <svg viewBox={`0 0 ${W} ${H + 4}`} width="100%" height={H + 4} preserveAspectRatio="none" role="img" aria-label={`${NAME[s]}: liquidity across ${w.length} bins`}>
         {w.map((v, i) => {
           const h = 6 + (H - 12) * (v / top);
-          const fill = i === below ? 'var(--text)' : i < below ? 'var(--aqua)' : 'var(--indigo)';
+          const fill = i === below ? 'var(--text)' : i < below ? 'var(--up)' : 'var(--accent)';
           return <rect key={i} x={i * slot + gap / 2} y={H - h} width={Math.max(1, slot - gap)} height={h} rx={Math.min(2.5, (slot - gap) / 2)} fill={fill} opacity={i === below ? 1 : 0.85} />;
         })}
         <line x1={priceX} x2={priceX} y1={0} y2={H + 4} stroke="rgba(255,255,255,.35)" strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />
@@ -85,13 +85,13 @@ export function LpShape({
       <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
         {below > 0 && (
           <span>
-            {key('var(--aqua)')}
+            {key('var(--up)')}
             {symB} below the price
           </span>
         )}
         {above > 0 && (
           <span>
-            {key('var(--indigo)')}
+            {key('var(--accent)')}
             {symA} above the price
           </span>
         )}

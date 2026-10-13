@@ -1,5 +1,6 @@
 'use client';
 
+import { BRAND } from '@binwise/core/brand';
 import { STRATEGY_LIMITS, STRATEGY_PRESETS, type RiskProfile, type StrategySettings, type StrategyToggles } from '@binwise/core';
 import { Switch } from '@/components/Switch';
 import { fmt, fmtM, usd } from '@/lib/format';
@@ -133,7 +134,7 @@ export default function StrategyPage() {
                     guard(() =>
                       client.telegramLink().then((l) => {
                         if (l.url) window.open(l.url, '_blank', 'noopener');
-                        toast(l.url ? 'Open Telegram and press Start to link alerts.' : `Send /start ${l.code} to the Binwise bot.`);
+                        toast(l.url ? 'Open Telegram and press Start to link alerts.' : `Send /start ${l.code} to the ${BRAND} bot.`);
                       }),
                     );
                 }}

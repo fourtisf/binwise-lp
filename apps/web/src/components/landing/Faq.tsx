@@ -1,16 +1,17 @@
 'use client';
 
 import { useState } from 'react';
+import { BRAND } from '@binwise/core/brand';
 import { LIVE_DEFAULT } from '@/lib/site';
 
 const FAQ: [string, string][] = [
   [
-    'Does Binwise hold my funds?',
-    'No. Your funds and positions stay in your own wallet, and Binwise never holds your keys. The agent watches the pools and proposes each move; adding LP, rebalancing, exiting and claiming are transactions you approve in your wallet. If Binwise were ever offline or hacked, your funds would still be in your wallet.',
+    `Does ${BRAND} hold my funds?`,
+    `No. Your funds and positions stay in your own wallet, and ${BRAND} never holds your keys. The agent watches the pools and proposes each move; adding LP, rebalancing, exiting and claiming are transactions you approve in your wallet. If ${BRAND} were ever offline or hacked, your funds would still be in your wallet.`,
   ],
   [
     'Is profit guaranteed?',
-    `No. No strategy is. Binwise is built to beat holding the same tokens by picking high-fee pools, avoiding downtrends and not over-trading. ${
+    `No. No strategy is. ${BRAND} is built to beat holding the same tokens by picking high-fee pools, avoiding downtrends and not over-trading. ${
       LIVE_DEFAULT
         ? 'Every number is shown against holding, so you can start small and judge it on real results.'
         : 'That is why paper mode exists: you see the real numbers before risking anything.'

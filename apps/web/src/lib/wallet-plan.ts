@@ -1,3 +1,4 @@
+import { BRAND } from '@binwise/core/brand';
 import { ApiError, type BinwiseClient, type WalletAction, type WalletTxStatus } from './api/client';
 import { SignInError, signAllWithWallet, signsVersioned, type Wallet } from './wallets';
 
@@ -98,7 +99,7 @@ export async function runWalletPlan(o: {
       if (i === 0 && e instanceof ApiError && ['sim_failed', 'swap_refused', 'unsigned', 'bad_tx', 'kill_switch', 'live_disabled'].includes(e.code))
         void o.client.walletCancel(plan.planId).catch(() => {});
       // Refused by Solana's simulation or the swap check: it surely didn't go out.
-      throw stoppedAt(i, e instanceof ApiError ? e.message : 'Could not reach Binwise.', e instanceof ApiError && ['sim_failed', 'swap_refused'].includes(e.code));
+      throw stoppedAt(i, e instanceof ApiError ? e.message : `Could not reach ${BRAND}.`, e instanceof ApiError && ['sim_failed', 'swap_refused'].includes(e.code));
     }
     const sig = r.signature!;
     sigs.push(sig);

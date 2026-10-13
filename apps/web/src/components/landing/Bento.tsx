@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { gauss, rng, walk } from '@binwise/mock';
+import { BRAND } from '@binwise/core/brand';
 import { getDemoSource } from '@/lib/api/demo';
 import { LiveChart } from '@/lib/charts/LiveChart';
 import { dayLabels, lineChart, stepDecimals } from '@/lib/charts/lineChart';
@@ -108,7 +109,7 @@ export function TgChat() {
     <div className="vis tg-chat" id="tgChat" ref={el}>
       {bubbles.map(([text, t], i) => (
         <div className={`bubble${i < shown ? ' on' : ''}`} key={t}>
-          <b>Binwise</b>
+          <b>{BRAND}</b>
           {text}
           <time>{t}</time>
         </div>
@@ -117,7 +118,7 @@ export function TgChat() {
   );
 }
 
-/** Example 30-day comparison: Binwise vs unmanaged LP vs hold (simulated, labelled as such on the page). */
+/** Example 30-day comparison: the agent vs unmanaged LP vs hold (simulated, labelled as such on the page). */
 export function VsChart() {
   const el = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -131,9 +132,9 @@ export function VsChart() {
       lineChart(el.current, {
         labels: dayLabels(31),
         series: [
-          { name: 'Binwise', color: '#4BE3CF', values: toP(bw), area: true, w: 2.2 },
-          { name: 'Unmanaged LP', color: '#8B8DFF', values: toP(un) },
-          { name: 'Hold', color: '#5D6072', values: toP(hold), dash: '4 4' },
+          { name: BRAND, color: 'var(--c-vault)', values: toP(bw), area: true, w: 2.2 },
+          { name: 'Unmanaged LP', color: 'var(--c-lp)', values: toP(un) },
+          { name: 'Hold', color: 'var(--c-hold)', values: toP(hold), dash: '4 4' },
         ],
         fmtY: (v, step) => (v > 0 ? '+' : '') + v.toFixed(stepDecimals(step)).replace(/^-0(\.0+)?$/, '0') + '%',
         fmtTip: (v) => pct(v, 1),

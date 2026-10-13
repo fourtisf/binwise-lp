@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
+import { BRAND } from '@binwise/core/brand';
 import { BOT_URL } from '@/lib/site';
 import { useAppData } from '@/lib/store';
 import { useUi } from '@/lib/ui';
@@ -57,7 +58,7 @@ export function AccountMenu() {
         if (!l.url) tab?.close();
         else if (tab) tab.location.href = l.url;
         else window.open(l.url, '_blank', 'noopener');
-        toast(l.url ? 'Open Telegram and press Start to link your vault.' : `Send /start ${l.code} to the Binwise bot.`);
+        toast(l.url ? 'Open Telegram and press Start to link your vault.' : `Send /start ${l.code} to the ${BRAND} bot.`);
       })
       .catch(() => {
         tab?.close();

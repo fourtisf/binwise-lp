@@ -6,7 +6,7 @@ const NAME: Record<LiquidityShape, string> = { spot: 'Spot', curve: 'Curve', bid
 export const RecDot = () => (
   <i
     title="Recommended"
-    style={{ display: 'inline-block', width: 6, height: 6, borderRadius: '50%', background: 'var(--aqua)', boxShadow: '0 0 6px var(--aqua)', marginRight: 6, verticalAlign: 'middle' }}
+    style={{ display: 'inline-block', width: 6, height: 6, borderRadius: '50%', background: 'var(--up)', boxShadow: '0 0 6px var(--up)', marginRight: 6, verticalAlign: 'middle' }}
   />
 );
 
@@ -57,7 +57,7 @@ export function LpRecommend({
   return (
     <div
       id="dRec"
-      style={{ marginTop: 16, padding: '13px 14px', borderRadius: 11, background: 'linear-gradient(180deg,rgba(75,227,207,.07),rgba(75,227,207,.025))', border: '1px solid rgba(75,227,207,.22)' }}
+      style={{ marginTop: 16, padding: '13px 14px', borderRadius: 11, background: 'linear-gradient(180deg,rgba(var(--up-rgb),.07),rgba(var(--up-rgb),.025))', border: '1px solid rgba(var(--up-rgb),.22)' }}
     >
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
         <span style={{ fontSize: 13.5, fontWeight: 500, color: 'var(--text)' }}>

@@ -10,6 +10,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { BRAND } from '@binwise/core/brand';
 import type {
   CustomRange,
   CycleState,
@@ -267,7 +268,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
           update({
             phase: all.length
               ? { phase: 'pick', wallets: all }
-              : { phase: 'error', message: 'No Solana wallet found in this browser. Open Binwise where your wallet is installed (Phantom, Solflare, Backpack, Bitget…).' },
+              : { phase: 'error', message: `No Solana wallet found in this browser. Open ${BRAND} where your wallet is installed (Phantom, Solflare, Backpack, Bitget…).` },
           });
           return false;
         }
@@ -302,7 +303,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     const canAct = !!overview && !overview.readOnly && (client?.kind !== 'http' || !!me);
     const guard = (fn: () => void) => {
       if (canAct) fn();
-      else if (client?.kind === 'http' && !WALLET_LOGIN) toast('Manage your vault in the Binwise Telegram bot (Open Telegram bot, top right).');
+      else if (client?.kind === 'http' && !WALLET_LOGIN) toast(`Manage your vault in the ${BRAND} Telegram bot (Open Telegram bot, top right).`);
       else if (client?.kind === 'http') openConnect();
       else toast('This vault is read-only.');
     };

@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { BRAND } from '@binwise/core/brand';
 import { useAppData } from '@/lib/store';
 import { useUi } from '@/lib/ui';
 import { Icon } from '../Sprite';
@@ -22,7 +23,7 @@ export function Sidebar({ current }: { current: PageKey }) {
         </span>
         <div>
           <b>Main vault</b>
-          <small>Binwise</small>
+          <small>{BRAND}</small>
         </div>
         <Icon id="i-updown" className="ch" />
       </Link>

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { BRAND } from '@binwise/core/brand';
 import { SignInError, rememberWallet, signInWithWallet, watchSolanaWallets, type Wallet } from '@/lib/wallets';
 import { useAppData } from '@/lib/store';
 import { useUi } from '@/lib/ui';
@@ -61,7 +62,7 @@ function Problem({ wallet, err, others }: { wallet: string; err: SignInError; ot
   if (err.kind === 'binwise')
     return (
       <div className="verdict stop" style={{ marginTop: 0, marginBottom: 12 }}>
-        Binwise didn&apos;t finish the sign-in.
+        {BRAND} didn&apos;t finish the sign-in.
         <div style={body}>{err.message}</div>
       </div>
     );
@@ -76,7 +77,7 @@ function Problem({ wallet, err, others }: { wallet: string; err: SignInError; ot
     );
   return (
     <div className="verdict stop" style={{ marginTop: 0, marginBottom: 12 }}>
-      {wallet} refused to connect. The error comes from inside the wallet, not from Binwise.
+      {wallet} refused to connect. The error comes from inside the wallet, not from {BRAND}.
       <ol style={{ ...body, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 6 }}>
         {others.length > 0 && (
           <li>
@@ -86,7 +87,7 @@ function Problem({ wallet, err, others }: { wallet: string; err: SignInError; ot
         )}
         <li>Quit the browser completely and open it again. Reloading the page doesn&apos;t restart a stuck wallet.</li>
         <li>
-          Update {wallet}. In {wallet} → Settings → Connected apps, remove binwise.org if it&apos;s there.
+          Update {wallet}. In {wallet} → Settings → Connected apps, remove {typeof window === 'undefined' ? 'this site' : window.location.host} if it&apos;s there.
         </li>
       </ol>
       {err.tried.length > 0 && (
@@ -204,7 +205,7 @@ export function ConnectModal() {
       {others.length > 0 && (
         <>
           <div className="dsec" style={{ margin: '18px 0 4px' }}>
-            {installed.length ? 'Other wallets' : mobile ? 'Open Binwise in your wallet app' : 'Install a Solana wallet to continue'}
+            {installed.length ? 'Other wallets' : mobile ? `Open ${BRAND} in your wallet app` : 'Install a Solana wallet to continue'}
           </div>
           <div className="rows">
             {others.map((k) => {
@@ -250,7 +251,7 @@ export function ConfirmLiveModal() {
       <div className="rows">
         <div>
           <span>Where funds stay</span>
-          <b>In your own wallet. Binwise never holds them</b>
+          <b>In your own wallet. {BRAND} never holds them</b>
         </div>
         <div>
           <span>Every change</span>

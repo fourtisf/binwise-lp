@@ -7,6 +7,7 @@ import type { Redis } from 'ioredis';
 import { randomUUID } from 'node:crypto';
 import { Connection, PublicKey } from '@solana/web3.js';
 import {
+  BRAND,
   DEFAULT_STRATEGY,
   MAX_BINS_EACH_SIDE,
   MAX_POSITION_BINS,
@@ -178,7 +179,7 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
 
   /** Self-custody: the funds are in the owner's own wallet, so vault deposits and withdrawals don't apply. */
   const notSelfCustody = (v: { mode: string; custody: string }) => {
-    if (isSelfCustody(v)) throw new ApiError(400, 'self_custody', 'Your funds stay in your own wallet: nothing to deposit to or withdraw from Binwise.');
+    if (isSelfCustody(v)) throw new ApiError(400, 'self_custody', `Your funds stay in your own wallet: nothing to deposit to or withdraw from ${BRAND}.`);
   };
   /**
    * Vault wallets Binwise holds the key of are winding down: no new money goes in and no new positions open.
@@ -189,7 +190,7 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
       throw new ApiError(
         409,
         'custody_closing',
-        "Binwise no longer keeps funds for you: your money stays in your own wallet. Withdraw this vault's funds to your wallet (Portfolio → Withdraw); then add LP straight from your wallet.",
+        `${BRAND} no longer keeps funds for you: your money stays in your own wallet. Withdraw this vault's funds to your wallet (Portfolio → Withdraw); then add LP straight from your wallet.`,
       );
   };
 
@@ -357,7 +358,7 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
       }
     const nonce = newNonce();
     const issuedAt = new Date().toISOString();
-    const domain = o.domain ?? 'Binwise';
+    const domain = o.domain ?? BRAND;
     const message = wallet ? signInMessage(wallet, nonce, issuedAt, domain) : null;
     // Keyed by the nonce itself, so requesting a new message can't invalidate someone else's.
     await redis.set(REDIS_KEYS.nonce(nonce), JSON.stringify({ message, wallet }), 'EX', 300);
@@ -382,7 +383,7 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
       !!issued &&
       (issued.wallet === null || issued.wallet === wallet) &&
       ((issued.message !== null && message === issued.message) ||
-        message.startsWith(`${o.domain ?? 'Binwise'} wants you to sign in with your Solana account:\n${wallet}\n`));
+        message.startsWith(`${o.domain ?? BRAND} wants you to sign in with your Solana account:\n${wallet}\n`));
     if (!ok) throw new ApiError(400, 'bad_nonce', 'Sign-in request expired. Try again.');
     if (!verifyWalletSignature(wallet, message, signature)) throw new ApiError(401, 'bad_signature', 'Signature check failed.');
     const user = await ensureUser(db, wallet);
@@ -390,7 +391,7 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
       if (liveByDefault(wallet)) {
         // Mainnet by default, self-custody: the funds stay in the owner's own wallet and Binwise holds no key.
         const v = await createVault(db, user.id, { selfCustody: true });
-        await logDecision(v.id, 'scan', 'Vault created', 'Your funds stay in your own wallet: Binwise holds no key. Add LP from a pool and approve it in your wallet; the agent watches your positions and asks before any change.');
+        await logDecision(v.id, 'scan', 'Vault created', `Your funds stay in your own wallet: ${BRAND} holds no key. Add LP from a pool and approve it in your wallet; the agent watches your positions and asks before any change.`);
       } else {
         const usdc = await db.token.findFirst({ where: { symbol: 'USDC', isVerified: true }, orderBy: { mcapUsd: 'desc' } });
         const v = await createVault(db, user.id);
@@ -438,7 +439,7 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
           'Moved to mainnet',
           hasKey
             ? 'This vault now uses real funds on Solana mainnet. The simulated balance was removed.'
-            : 'This vault now uses real funds on Solana mainnet, kept in your own wallet: Binwise holds no key. Add LP from a pool and approve it in your wallet.',
+            : `This vault now uses real funds on Solana mainnet, kept in your own wallet: ${BRAND} holds no key. Add LP from a pool and approve it in your wallet.`,
         );
       }).catch(() => {}); // busy right now: tried again on the next page load
     }
@@ -909,7 +910,7 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
       return /InsufficientFundsForRent|insufficient/i.test(`${m} ${(e.logs ?? []).join(' ')}`)
         ? new ApiError(400, 'insufficient_balance', 'Solana needs a little more SOL to stay in the vault for this withdrawal. Nothing was sent; try a slightly smaller amount.')
         : new ApiError(400, 'sim_failed', `Solana would reject this withdrawal (${m.replace(/^Simulation failed: /, '')}). Nothing was sent.`);
-    if (e instanceof PolicyViolation) return new ApiError(400, 'blocked', `Binwise's safety check stopped this withdrawal: ${m}. Nothing was sent.`);
+    if (e instanceof PolicyViolation) return new ApiError(400, 'blocked', `${BRAND}'s safety check stopped this withdrawal: ${m}. Nothing was sent.`);
     if (e instanceof TradingHalted) return new ApiError(423, 'kill_switch', 'Trading is halted right now. Nothing was sent; try again later.');
     if (e instanceof DuplicateAction) return new ApiError(409, 'duplicate', 'This withdrawal already ran. Check Activity.');
     // Failed on-chain or expired before landing: nothing moved.
@@ -1025,11 +1026,11 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     const id = (await writable(req, req.params.id)).id;
     await withVaultLock(id, 60_000, async () => {
       const v = await writable(req, req.params.id);
-      if (v.mode !== 'live' || v.custody !== 'agent' || !v.encSecret || !v.agentPubkey) throw new ApiError(400, 'no_custody', 'Binwise holds no key for this vault.');
+      if (v.mode !== 'live' || v.custody !== 'agent' || !v.encSecret || !v.agentPubkey) throw new ApiError(400, 'no_custody', `${BRAND} holds no key for this vault.`);
       // A wallet made in Telegram is the owner's only wallet: its key must be saved first (the bot does that).
       if (v.user.wallet === v.agentPubkey)
-        throw new ApiError(400, 'same_wallet', 'This is the wallet made in Telegram. Save its private key there first (🔑 Wallet), then remove it from Binwise in the bot.');
-      if (req.body?.confirm !== true) throw new ApiError(400, 'confirm_required', "Confirm that Binwise should delete this vault's key.");
+        throw new ApiError(400, 'same_wallet', `This is the wallet made in Telegram. Save its private key there first (🔑 Wallet), then remove it from ${BRAND} in the bot.`);
+      if (req.body?.confirm !== true) throw new ApiError(400, 'confirm_required', `Confirm that ${BRAND} should delete this vault's key.`);
       if (await db.position.count({ where: { vaultId: v.id, status: 'open' } }))
         throw new ApiError(409, 'positions_open', 'Close your positions first (Positions), then withdraw everything to your wallet.');
       const conn = chain();
@@ -1053,7 +1054,7 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
         v.id,
         'hold',
         'Switched to your own wallet',
-        `Binwise deleted this vault's key. Your funds stay in your own wallet now, and you approve every change there.${dust > 0 ? ` About ${dust.toLocaleString('en-US', { maximumFractionDigits: 4 })} SOL of dust and account rent, too little to recover, stays at the old vault address.` : ''}`,
+        `${BRAND} deleted this vault's key. Your funds stay in your own wallet now, and you approve every change there.${dust > 0 ? ` About ${dust.toLocaleString('en-US', { maximumFractionDigits: 4 })} SOL of dust and account rent, too little to recover, stays at the old vault address.` : ''}`,
       );
     });
     return overview(db, id, { readOnly: false });

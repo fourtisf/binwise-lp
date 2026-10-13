@@ -1,6 +1,6 @@
-# Binwise — Build Brief for Claude Code
+# Kovra (formerly Binwise) — Build Brief for Claude Code
 
-Binwise is an autonomous LP (liquidity provider) agent for **Solana Meteora DLMM pools**, plus a website (landing page + web app) where users watch and control the agent.
+Kovra is an autonomous LP (liquidity provider) agent for **Solana Meteora DLMM pools**, plus a website (landing page + web app) where users watch and control the agent.
 
 The agent scans pools, scores them, deploys liquidity, rebalances only when it pays, and exits before downtrends. It must **actually work on-chain**, not just look good. Success metric shown everywhere: **net return vs simply holding the same tokens** (not APR).
 
@@ -12,8 +12,10 @@ The owner is non-technical. Work autonomously, make sensible decisions, and repo
 
 `design/binwise-prototype.html` is the approved design. It is a single-file prototype with simulated data.
 
-- Recreate it **pixel-faithfully** in Next.js: same colors, typography (Geist), spacing, layout, copy, animations and interactions.
+- Recreate it **pixel-faithfully** in Next.js: same spacing, layout, copy, animations and interactions.
 - Do not "improve" or restyle the design. Owner rejected many earlier designs; this one is approved.
+- **Brand and theme (owner decision, Oct 2026)** replace the prototype's name, colors and typography: the product is **Kovra**, the theme is premium black with a titanium (silver) accent, mint for gains and red for losses, Space Grotesk for headings and big numbers, Inter for body text. Every color is a token on `:root` in `apps/web/src/app/globals.css`; charts read the same tokens (`apps/web/src/lib/theme.ts`). Don't hardcode colors in components.
+- The name users see comes from `BRAND` in `packages/core/src/brand.ts` (web imports `@binwise/core/brand`). Internal identifiers keep the code name `binwise` on purpose: `@binwise/*` packages, Redis keys (kill switch), session cookie, database, PM2 processes, server paths.
 - Every simulated number in the prototype must be replaced by real data from the backend (see §5). Keep the prototype's labels and empty/error wording style.
 - Owner dislikes: black-and-gold palettes and white/light backgrounds. Keep the dark theme.
 

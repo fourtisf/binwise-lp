@@ -3,6 +3,7 @@ import type { Redis } from 'ioredis';
 import { randomUUID } from 'node:crypto';
 import { PublicKey, VersionedTransaction, type Connection } from '@solana/web3.js';
 import {
+  BRAND,
   REDIS_KEYS,
   customRangeError,
   sideOfRange,
@@ -290,7 +291,7 @@ export function registerSelfCustody(app: FastifyInstance, c: SelfCustodyCtx) {
       const summary = [
         `Into ${pair}: about ${usdText(valueUsd)} (${paying}${capNote}).`,
         `${plan.rentSol.toFixed(3)} SOL more for the position's rent and fees; the rent comes back when it closes${plan.newBinArrays ? ` (except ${plan.newBinArrays} new bin array${plan.newBinArrays > 1 ? 's' : ''})` : ''}.`,
-        'The position belongs to your wallet. Binwise never holds it.',
+        `The position belongs to your wallet. ${BRAND} never holds it.`,
       ];
       const stored = await store(
         {
@@ -403,7 +404,7 @@ export function registerSelfCustody(app: FastifyInstance, c: SelfCustodyCtx) {
     // Only the programs Binwise's own transactions use (programs always sit in the static keys, never in lookup tables).
     const keys = tx.message.staticAccountKeys;
     if (tx.message.compiledInstructions.some((ix) => !RELAY_PROGRAMS.has(keys[ix.programIdIndex]?.toBase58() ?? '')))
-      throw new ApiError(400, 'bad_tx', 'Binwise only sends its own liquidity transactions. Nothing was sent.');
+      throw new ApiError(400, 'bad_tx', `${BRAND} only sends its own liquidity transactions. Nothing was sent.`);
     const conn = c.chain();
     const unreachable = () => {
       throw new ApiError(502, 'rpc_unavailable', 'Could not reach Solana right now. Nothing was sent; try again in a moment.');

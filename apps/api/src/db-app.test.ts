@@ -5,7 +5,7 @@ import bs58 from 'bs58';
 import WebSocket from 'ws';
 import { Redis } from 'ioredis';
 import type { FastifyInstance } from 'fastify';
-import { REDIS_KEYS, DEFAULT_STRATEGY } from '@binwise/core';
+import { BRAND, REDIS_KEYS, DEFAULT_STRATEGY } from '@binwise/core';
 import { ComputeBudgetProgram, Keypair, PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import { createVault, ensureUser, getDb } from '@binwise/db';
 import { buildDbApp } from './db-app';
@@ -115,7 +115,7 @@ describe('sign-in with Solana', () => {
 
     // Only the standard message counts: there was no message of ours to sign for this nonce.
     const c2 = await nonce();
-    const ours = `${c2.domain} wants you to sign in to Binwise with your Solana wallet.\n\nWallet: ${w.address}\nNonce: ${c2.nonce}\nIssued at: ${c2.issuedAt}`;
+    const ours = `${c2.domain} wants you to sign in to ${BRAND} with your Solana wallet.\n\nWallet: ${w.address}\nNonce: ${c2.nonce}\nIssued at: ${c2.issuedAt}`;
     expect((await verify(w.address, ours, w.signMsg(ours))).statusCode).toBe(400);
 
     // Only for this site's domain.

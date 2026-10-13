@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { BRAND } from '@binwise/core/brand';
 import {
   binIdForPrice,
   binPrice,
@@ -205,7 +206,7 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
       {on ? (
         <span className="up">✓</span>
       ) : (
-        <button style={{ fontSize: 12.5, color: 'var(--aqua)', textDecoration: 'underline' }} onClick={pick}>
+        <button style={{ fontSize: 12.5, color: 'var(--accent-hi)', textDecoration: 'underline' }} onClick={pick}>
           Use it
         </button>
       )}
@@ -276,8 +277,8 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
       : mint === x.tokenB.mint
         ? x.tokenB
         : mint === SOL_MINT
-          ? { symbol: 'SOL', letter: 'S', color: '#1b1d27', logo: '/tokens/SOL.png', mint }
-          : { symbol, letter: (symbol[0] ?? '?').toUpperCase(), color: '#2a2c38', mint };
+          ? { symbol: 'SOL', letter: 'S', color: '#19191C', logo: '/tokens/SOL.png', mint }
+          : { symbol, letter: (symbol[0] ?? '?').toUpperCase(), color: '#2A2A2E', mint };
 
   // ---- self-custody: paid with SOL from the owner's own wallet, approved there
   const wallet = bal?.wallet;
@@ -323,12 +324,12 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
       <>
         <div className="dsec">Add LP by hand</div>
         <div className="verdict wt" id="dClosing">
-          Binwise no longer keeps funds for you: your money stays in your own wallet. This vault is from before, so it adds no new LP. Move it to your
+          {BRAND} no longer keeps funds for you: your money stays in your own wallet. This vault is from before, so it adds no new LP. Move it to your
           own wallet once, then Add LP works here, paid from your wallet:
         </div>
         <ol className="muted" style={{ fontSize: 13, lineHeight: 1.6, margin: '12px 0 0', paddingLeft: 20 }}>
           <li>Withdraw everything in the vault to your wallet{positions.length ? ' (close its open positions in Positions first)' : ''}.</li>
-          <li>Switch to your own wallet: Binwise deletes this vault&apos;s key.</li>
+          <li>Switch to your own wallet: {BRAND} deletes this vault&apos;s key.</li>
           <li>Add LP here, approved in your wallet.</li>
         </ol>
         <button className="btn btn-white" style={{ width: '100%', marginTop: 12 }} onClick={openWithdraw}>
@@ -337,7 +338,7 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
         {switching ? (
           <div style={{ marginTop: 10 }}>
             <p className="muted" style={{ fontSize: 12.5, lineHeight: 1.55 }}>
-              Binwise deletes this vault&apos;s key for good. It only works once the vault wallet is empty (nothing but dust), so nothing can be lost.
+              {BRAND} deletes this vault&apos;s key for good. It only works once the vault wallet is empty (nothing but dust), so nothing can be lost.
             </p>
             <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
               <button
@@ -393,7 +394,7 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
           {wallet ? (
             <>
               {solPrice > 0 && `${usd(wallet.sol * solPrice, 2)} · `}
-              {WALLET_KEEP_SOL} SOL stays in your wallet for the position&apos;s rent and network fees. Binwise never holds your funds: the position opens in
+              {WALLET_KEEP_SOL} SOL stays in your wallet for the position&apos;s rent and network fees. {BRAND} never holds your funds: the position opens in
               your wallet and stays there.
             </>
           ) : (
@@ -695,7 +696,7 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
 
       {x.call !== 'in' && (
         <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', marginTop: 12, fontSize: 12.5, lineHeight: 1.45, color: 'var(--muted)', cursor: 'pointer' }}>
-          <input type="checkbox" checked={risk} onChange={(e) => setRisk(e.target.checked)} style={{ marginTop: 2, accentColor: '#4BE3CF' }} />
+          <input type="checkbox" checked={risk} onChange={(e) => setRisk(e.target.checked)} style={{ marginTop: 2, accentColor: 'var(--accent)' }} />
           <span>I add this against the agent&apos;s call, at my own risk. No strategy is guaranteed to profit.</span>
         </label>
       )}

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Wallet } from '@/lib/wallets';
 
 const box = { marginTop: 12, padding: 14, borderRadius: 12, border: '1px solid var(--line)', background: 'rgba(255,255,255,.02)', fontSize: 12.5, lineHeight: 1.55 } as const;
-const link = { fontSize: 12.5, color: 'var(--aqua)', textDecoration: 'underline' } as const;
+const link = { fontSize: 12.5, color: 'var(--accent-hi)', textDecoration: 'underline' } as const;
 const clock = (s: number) => (s < 60 ? `${s}s` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`);
 
 /** Brings a panel that opens under the button into view: the drawer can end at the button. */

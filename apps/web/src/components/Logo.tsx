@@ -1,3 +1,4 @@
+import { BRAND } from '@binwise/core/brand';
 import { Icon } from './Sprite';
 
 export function Logo() {
@@ -6,7 +7,7 @@ export function Logo() {
       <span className="mark">
         <Icon id="i-mark" />
       </span>
-      Binwise
+      {BRAND}
     </a>
   );
 }

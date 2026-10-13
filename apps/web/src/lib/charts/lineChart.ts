@@ -1,4 +1,5 @@
 import { clamp } from '../format';
+import { resolveColor, token } from '../theme';
 
 let uid = 0;
 
@@ -43,7 +44,7 @@ export const stepDecimals = (step: number) => (String(Number(step.toPrecision(6)
 export function lineChart(
   el: HTMLElement,
   {
-    series,
+    series: input,
     labels,
     fmtY,
     fmtTip,
@@ -58,6 +59,9 @@ export function lineChart(
   const W = el.clientWidth;
   const H = el.clientHeight;
   if (!W || !H) return;
+  // Series colours may be theme tokens (var(--c-vault)); SVG attributes need the resolved value.
+  const series = input.map((s) => ({ ...s, color: resolveColor(s.color) }));
+  const ring = token('--card');
   const pad = { t: 10, r: 8, b: 26, l: 50 };
   const all = series.flatMap((s) => s.values).filter((v) => Number.isFinite(v));
   const { ticks, step } = niceTicks(Math.min(...all), Math.max(...all));
@@ -92,7 +96,7 @@ export function lineChart(
       paths += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.w || 1.8}" ${s.dash ? `stroke-dasharray="${s.dash}"` : ''} stroke-linejoin="round" stroke-linecap="round"/>`;
     });
   el.innerHTML = `<svg class="lc" viewBox="0 0 ${W} ${H}"><defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${series[0].color}" stop-opacity=".2"/><stop offset="1" stop-color="${series[0].color}" stop-opacity="0"/></linearGradient></defs>${g}${paths}
-    <line class="xh" y1="${pad.t}" y2="${H - pad.b}" stroke="rgba(255,255,255,.22)" style="opacity:0"/>${series.map((s, k) => `<circle class="hc${k}" r="4.5" fill="${s.color}" stroke="#0D0E15" stroke-width="2" style="opacity:0"/>`).join('')}
+    <line class="xh" y1="${pad.t}" y2="${H - pad.b}" stroke="rgba(255,255,255,.22)" style="opacity:0"/>${series.map((s, k) => `<circle class="hc${k}" r="4.5" fill="${s.color}" stroke="${ring}" stroke-width="2" style="opacity:0"/>`).join('')}
     <rect x="${pad.l}" y="0" width="${W - pad.l - pad.r}" height="${H}" fill="transparent" class="hit"/></svg><div class="tip"></div>`;
   const svg = el.firstChild as SVGSVGElement;
   const tip = el.querySelector('.tip') as HTMLDivElement;

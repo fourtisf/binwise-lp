@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
+import { BRAND } from '@binwise/core/brand';
 import type { Portfolio } from '@binwise/core';
 import { Icon } from '@/components/Sprite';
 import { PairIcon, Tok } from '@/components/Tokens';
@@ -104,7 +105,7 @@ export default function PortfolioPage() {
         if (!l.url) tab?.close();
         else if (tab) tab.location.href = l.url;
         else window.open(l.url, '_blank', 'noopener');
-        toast(l.url ? 'Open Telegram and press Start to link your vault.' : `Send /start ${l.code} to the Binwise bot.`);
+        toast(l.url ? 'Open Telegram and press Start to link your vault.' : `Send /start ${l.code} to the ${BRAND} bot.`);
       })
       .catch(() => {
         tab?.close();

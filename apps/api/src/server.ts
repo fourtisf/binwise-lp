@@ -1,6 +1,7 @@
 import { Redis } from 'ioredis';
 import { MockEngine } from '@binwise/mock';
 import { getDb } from '@binwise/db';
+import { BRAND } from '@binwise/core';
 import { buildApp } from './mock-app';
 import { buildDbApp } from './db-app';
 
@@ -30,7 +31,7 @@ if (mock) {
     sub,
     corsOrigins,
     logger: true,
-    domain: process.env.PUBLIC_DOMAIN || 'Binwise',
+    domain: process.env.PUBLIC_DOMAIN || BRAND,
   });
   close = async () => {
     await redis.quit();
@@ -47,4 +48,4 @@ process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
 await app.listen({ port, host });
-app.log.info(`Binwise API in ${mock ? 'MOCK' : 'database'} mode`);
+app.log.info(`${BRAND} API in ${mock ? 'MOCK' : 'database'} mode`);

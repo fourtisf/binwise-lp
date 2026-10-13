@@ -1,4 +1,6 @@
-# Binwise
+# Kovra
+
+(Code name `binwise`: package names, database, server paths and process names keep it.)
 
 Autonomous LP agent for Solana Meteora DLMM pools, plus the website where users watch and control it.
 The full brief is in [CLAUDE.md](CLAUDE.md); the approved design is [design/binwise-prototype.html](design/binwise-prototype.html).

@@ -1,10 +1,12 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { BRAND } from '@binwise/core/brand';
 import type { DemoPair, DemoStats } from '@binwise/core';
 import { getDemoSource, type DemoSource } from '@/lib/api/demo';
 import { LiveChart } from '@/lib/charts/LiveChart';
 import { hhmm, pct, prefersReducedMotion, usd } from '@/lib/format';
+import { SITE_HOST } from '@/lib/site';
 import { Icon } from '../Sprite';
 import { PairIcon } from '../Tokens';
 
@@ -101,7 +103,7 @@ export function HeroWindow() {
         </div>
         <div className="url">
           <Icon id="i-lock" />
-          binwise.org/app
+          {SITE_HOST}/app
         </div>
         <div style={{ width: 47 }}></div>
       </div>
@@ -166,7 +168,7 @@ export function HeroWindow() {
               <div className="agent-h">
                 <span className="orb"></span>
                 <div>
-                  <b>Binwise agent</b>
+                  <b>{BRAND} agent</b>
                   <span>{mode}</span>
                 </div>
               </div>

@@ -1,4 +1,5 @@
 import {
+  BRAND,
   DEFAULT_COSTS,
   DEFAULT_FEE_MODEL,
   DEFAULT_STRATEGY,
@@ -184,7 +185,7 @@ export function renderReport(
         `| ${r.pool.pair} | ${r.stats.days.toFixed(0)} | **${pct(r.stats.netVsHoldPct)}** | ${pct(r.stats.unmanagedVsHoldPct)} | ${usd(r.stats.feesUsd)} | ${usd(r.stats.costsUsd)} | ${r.stats.rebalances} | ${r.stats.exits} | ${r.stats.deployedPct.toFixed(0)}% | ${r.stats.timeInRangePct.toFixed(0)}% | ${r.stats.maxDrawdownPct.toFixed(1)}% |`,
     )
     .join('\n');
-  return `# Binwise backtest — ${date}
+  return `# ${BRAND} backtest — ${date}
 
 **Question:** would the agent's rules have beaten simply holding the same tokens, after costs?
 
@@ -197,7 +198,7 @@ export function renderReport(
 
 ## Per pool
 
-| Pool | Days | Binwise vs hold | Unmanaged LP vs hold | Fees | Costs | Rebalances | Exits | Time deployed | Time in range | Max drawdown |
+| Pool | Days | ${BRAND} vs hold | Unmanaged LP vs hold | Fees | Costs | Rebalances | Exits | Time deployed | Time in range | Max drawdown |
 |---|---|---|---|---|---|---|---|---|---|---|
 ${rows || '| — | | | | | | | | | | |'}
 
@@ -206,7 +207,7 @@ ${skipped.length ? `### Skipped\n\n${skipped.map((x) => `- ${x.pair}: ${x.reason
 
 - Same scoring, entry, rebalance (6h fees > ${(o.params?.rebalanceFeeMultiple ?? 1.5)}× costs, one-tick wait, ${o.params?.rebalanceCooldownMin ?? 30} min cooldown), exit and compound rules as paper and live mode.
 - Market regime: in a confirmed uptrend liquidity sits one-sided above price; in a confirmed downtrend the agent stays out. Fees are weighed against volatility loss (LVR) in the score.
-- Hourly Meteora candles; the first 7 days only warm up indicators. Both Binwise and hold start 50/50 in the pair's tokens.
+- Hourly Meteora candles; the first 7 days only warm up indicators. Both ${BRAND} and hold start 50/50 in the pair's tokens.
 - "Unmanaged LP" opens the same range once and never moves it.
 
 ## Assumptions (read before trusting the numbers)

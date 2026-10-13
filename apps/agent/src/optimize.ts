@@ -1,4 +1,4 @@
-import { PARAM_SPACE, type AgentParams, type OptimizeResult } from '@binwise/core';
+import { BRAND, PARAM_SPACE, type AgentParams, type OptimizeResult } from '@binwise/core';
 
 /** Settings the optimiser can change, with plain-language names for the report. */
 const LABELS: Record<keyof typeof PARAM_SPACE, string> = {
@@ -30,7 +30,7 @@ export function renderOptimizeReport(r: OptimizeResult, o: { days: number; profi
       ? 'The new settings did better on data they never saw, so **they are now active**. The agent uses them from its next cycle.'
       : 'The new settings did better on data they never saw. They are saved but **not active**. Run the optimiser again with `--apply` to switch.'
     : 'The new settings did **not** clearly beat the current ones on unseen data, so nothing changes. That is the safe outcome: the search found no reliable improvement.';
-  return `# Binwise settings search — ${date}
+  return `# ${BRAND} settings search — ${date}
 
 **Question:** can different agent settings beat the current ones, on data they were not tuned on?
 

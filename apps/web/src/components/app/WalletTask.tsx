@@ -1,9 +1,10 @@
 'use client';
 
+import { BRAND } from '@binwise/core/brand';
 import { useAppData } from '@/lib/store';
 import { WalletWaiting } from './WalletWait';
 
-const link = { fontSize: 12.5, color: 'var(--aqua)', textDecoration: 'underline' } as const;
+const link = { fontSize: 12.5, color: 'var(--accent-hi)', textDecoration: 'underline' } as const;
 
 /**
  * Self-custody: the action running in the owner's own wallet (Add LP, close, claim, an approved proposal),
@@ -37,7 +38,7 @@ export function WalletTaskCard() {
       {p.phase === 'pick' && me && (
         <>
           <p className="muted" style={{ fontSize: 12.5, lineHeight: 1.55, marginTop: 8 }}>
-            Which wallet did you sign in with ({me.wallet.slice(0, 4)}…{me.wallet.slice(-4)})? Binwise remembers it.
+            Which wallet did you sign in with ({me.wallet.slice(0, 4)}…{me.wallet.slice(-4)})? {BRAND} remembers it.
           </p>
           <div className="seg" style={{ display: 'flex', flexWrap: 'wrap', width: '100%', marginTop: 8 }} role="group" aria-label="Wallet to approve in">
             {p.wallets.map((w) => (

@@ -1,4 +1,5 @@
 import {
+  BRAND,
   DEFAULT_THRESHOLDS,
   MAX_BINS_EACH_SIDE,
   assessPool,
@@ -570,7 +571,7 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
       if (!marked.length && !eligible.length) holds.push(`No pool clears your filters right now. Watching ${views.length} pools.`);
       else if (!marked.length && selfCustody) holds.push('No positions yet. Add LP from Pools: you pay from your own wallet and approve it there.');
       else if (custodyClosing && holdingsUsd(cash, tokens) >= MIN_POSITION_USD)
-        holds.push("Binwise no longer keeps funds for you, so idle funds aren't deployed. Withdraw them to your own wallet (Portfolio → Withdraw) and add LP from there.");
+        holds.push(`${BRAND} no longer keeps funds for you, so idle funds aren't deployed. Withdraw them to your own wallet (Portfolio → Withdraw) and add LP from there.`);
       else if (!marked.length && holdingsUsd(cash, tokens) < MIN_POSITION_USD) holds.push('No idle funds to deploy. Deposit to start.');
       else if (!holds.length) holds.push('All positions are in range and trends are healthy. Moving anything now would cost more than it earns.');
     }
@@ -654,7 +655,7 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
     await db.vault.update({ where: { id: vault.id }, data: { status: 'paused', pausedReason: `Daily loss stop: down more than ${s.dailyStopPct}% in 24h.` } });
     await db.proposal.updateMany({ where: { vaultId: vault.id, status: 'pending' }, data: { status: 'expired' } });
     texts.push(`Vault fell more than ${s.dailyStopPct}% in 24 hours. Closed positions and paused the agent.`);
-    await deps.notify?.(vault, `Daily loss stop hit. Binwise closed positions and paused your vault.`).catch(() => {});
+    await deps.notify?.(vault, `Daily loss stop hit. ${BRAND} closed positions and paused your vault.`).catch(() => {});
   }
 
   const text = texts.length ? texts.join(' ') : holds.join(' ');
@@ -1165,7 +1166,7 @@ export async function runManualDeploy(
   const view = await poolView(snap, tokens, s, strategyWeights(vault.strategy!), params);
   if (!view) throw new Error('Token prices are missing for this pool.');
   if (vault.status !== 'running') throw new Error(`The agent is paused${vault.pausedReason ? ` (${vault.pausedReason})` : ''}. Resume it first.`);
-  if (keyHeldHere(vault)) throw new Error("Binwise no longer keeps funds for you. Withdraw this vault's funds to your own wallet, then add LP from there on the website.");
+  if (keyHeldHere(vault)) throw new Error(`${BRAND} no longer keeps funds for you. Withdraw this vault's funds to your own wallet, then add LP from there on the website.`);
   const override = !!opts.override && !view.a.eligible;
   if (!override) {
     if (!view.a.eligible) throw new Error(`The agent won't enter this pool right now. ${view.a.reason}`);

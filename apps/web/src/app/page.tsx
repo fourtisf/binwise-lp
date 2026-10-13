@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { BRAND } from '@binwise/core/brand';
 import { CaPill } from '@/components/landing/CaPill';
 import { Bento } from '@/components/landing/Sections';
 import { Faq } from '@/components/landing/Faq';
@@ -26,7 +27,7 @@ export default function Landing() {
           </a>
           <h1>Liquidity that manages itself.</h1>
           <p className="lead">
-            Binwise is an autonomous LP agent for Solana. It finds the pools that pay, keeps your liquidity in range, and
+            {BRAND} is an autonomous LP agent for Solana. It finds the pools that pay, keeps your liquidity in range, and
             steps aside before a downtrend eats the yield.
           </p>
           <div className="ctas">
@@ -42,7 +43,7 @@ export default function Landing() {
               ? 'Real funds on mainnet. Start small: your funds stay in your own wallet, and you approve every move.'
               : 'No deposit needed to try. With real funds, everything stays in your own wallet.'}
           </p>
-          {/* The Binwise token's contract address, with a copy button. */}
+          {/* The project token's contract address, with a copy button. */}
           <CaPill />
         </div>
 
@@ -305,7 +306,7 @@ export default function Landing() {
             </div>
           </div>
           <div className="fbot">
-            <span>© 2026 Binwise. DeFi carries risk, including total loss of funds. Not financial advice.</span>
+            <span>© 2026 {BRAND}. DeFi carries risk, including total loss of funds. Not financial advice.</span>
             <span className="status">
               <i></i>All systems normal
             </span>

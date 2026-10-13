@@ -1,4 +1,4 @@
-import { STRATEGY_LIMITS, STRATEGY_PRESETS, assessPool, bestPerPair, pairKey, positionCapUsd, positionSizeUsd, type AgentParams, type CustomRange, type LiquidityShape, type RiskProfile, type StrategySettings } from '@binwise/core';
+import { BRAND, STRATEGY_LIMITS, STRATEGY_PRESETS, assessPool, bestPerPair, pairKey, positionCapUsd, positionSizeUsd, type AgentParams, type CustomRange, type LiquidityShape, type RiskProfile, type StrategySettings } from '@binwise/core';
 import { SOL_MINT, isLiveTelegram, liveLimits, walletAddress } from '@binwise/chain';
 import {
   ProposalError,
@@ -201,7 +201,7 @@ export function makeBot(d: BotDeps) {
   const notLinked: Screen = keepsWallets
     ? {
         text:
-          `👋 <b>Welcome to Binwise</b>\n\nAn AI agent that provides liquidity on Meteora (Solana) for you, and shows whether it beats simply holding.\n\n` +
+          `👋 <b>Welcome to ${BRAND}</b>\n\nAn AI agent that provides liquidity on Meteora (Solana) for you, and shows whether it beats simply holding.\n\n` +
           `This chat isn't connected to a vault yet.\n\n` +
           `🆕 <b>New here?</b> Tap <b>Create wallet</b>: you get your own Solana wallet in this chat, deposit SOL, and the agent does the rest. ` +
           `Or <b>Import wallet</b> to use one you already have.\n\n` +
@@ -216,15 +216,15 @@ export function makeBot(d: BotDeps) {
       }
     : {
         text:
-          `👋 <b>Welcome to Binwise</b>\n\nAn AI agent that provides liquidity on Meteora (Solana) for you, and shows whether it beats simply holding.\n\n` +
-          `🔐 <b>Your funds stay in your own wallet.</b> Binwise never holds them or your keys: the agent watches your positions and asks you to approve every change in your wallet.\n\n` +
+          `👋 <b>Welcome to ${BRAND}</b>\n\nAn AI agent that provides liquidity on Meteora (Solana) for you, and shows whether it beats simply holding.\n\n` +
+          `🔐 <b>Your funds stay in your own wallet.</b> ${BRAND} never holds them or your keys: the agent watches your positions and asks you to approve every change in your wallet.\n\n` +
           `<b>Start</b>\n1. Open ${esc(d.appUrl)}/app and connect your wallet (Phantom, Solflare, Backpack, Bitget…)\n2. Go to <b>Strategy</b> → turn on <b>Telegram alerts</b>\n3. Press <b>Start</b> in the chat that opens: alerts and approvals come here`,
         keyboard: [[{ text: '🌐 Open website', url: `${d.appUrl}/app` }]],
       };
   /** Create / Import when Binwise no longer keeps wallets. */
   const walletsClosed: Screen = {
     text:
-      `🔐 <b>Binwise no longer keeps wallets</b>\n\nYour funds stay in your own wallet, and you approve every change there. ` +
+      `🔐 <b>${BRAND} no longer keeps wallets</b>\n\nYour funds stay in your own wallet, and you approve every change there. ` +
       `Open ${esc(d.appUrl)}/app and connect your wallet (Phantom, Solflare, Backpack, Bitget…).`,
     keyboard: [[{ text: '🌐 Open website', url: `${d.appUrl}/app` }], [{ text: '⬅️ Back', callback_data: 'start' }]],
   };
@@ -233,7 +233,7 @@ export function makeBot(d: BotDeps) {
 
   const welcome = (c: Ctx): Screen => ({
     text:
-      `👋 <b>Binwise</b> · ${esc(c.vault.name)}\n${modeLabel(c.vault)}\n${tradingLabel(c.vault)}\n\n` +
+      `👋 <b>${BRAND}</b> · ${esc(c.vault.name)}\n${modeLabel(c.vault)}\n${tradingLabel(c.vault)}\n\n` +
       (manual(c.vault)
         ? `The agent scans pools every minute and sends you each trade it wants to make. Nothing runs until you tap ✅ Approve.\n\n`
         : `The agent runs by itself every minute: it picks pools, adds liquidity, rebalances when it pays and exits before downtrends.\n\n`) +
@@ -570,7 +570,7 @@ export function makeBot(d: BotDeps) {
         text:
           header +
           `💳 <b>Your wallet</b> · Solana mainnet\n<code>${c.user.wallet}</code>\n\n` +
-          `🔐 Your funds and positions stay in this wallet. Binwise holds no key: the agent watches and asks you to approve each change on the website, where your wallet signs it.`,
+          `🔐 Your funds and positions stay in this wallet. ${BRAND} holds no key: the agent watches and asks you to approve each change on the website, where your wallet signs it.`,
         keyboard: [[{ text: '🌐 Open website', url: `${d.appUrl}/app` }], [{ text: '⬅️ Menu', callback_data: 'menu' }]],
       };
     if (!live(c)) return paperWallet;
@@ -590,7 +590,7 @@ export function makeBot(d: BotDeps) {
           ? `➕ <b>Deposit</b>: send SOL (and/or USDC) to the address above, ${from}. ` +
             `Keep at least ${MIN_SOL} SOL in it for fees and rent; the agent puts the rest to work.` +
             (h != null && sol < MIN_SOL ? `\n\n⚠️ Needs at least ${MIN_SOL} SOL before the agent can add LP.` : '')
-          : `🔐 <b>Binwise no longer keeps funds for you.</b> This wallet takes no new money; open positions are looked after until you close them. ` +
+          : `🔐 <b>${BRAND} no longer keeps funds for you.</b> This wallet takes no new money; open positions are looked after until you close them. ` +
             (isBotWallet(c.user, c.vault)
               ? `Move it into a wallet app you control: tap 🔐 Move to my wallet app.`
               : `Withdraw what's in it to your own wallet (💸 Withdraw), then switch on the website.`)),
@@ -658,8 +658,8 @@ export function makeBot(d: BotDeps) {
   const keyWarning: Screen = {
     text:
       '🔑 <b>Private key</b>\n\nAnyone with this key controls the wallet and every coin in it.\n\n' +
-      '• Never share it, never paste it on a website. Binwise will never ask you for it.\n' +
-      '• Use it to open this wallet in Phantom or Solflare (Add account → Import private key), e.g. if Binwise is ever unavailable.\n' +
+      `• Never share it, never paste it on a website. ${BRAND} will never ask you for it.\n` +
+      `• Use it to open this wallet in Phantom or Solflare (Add account → Import private key), e.g. if ${BRAND} is ever unavailable.\n` +
       '• To take money out, prefer 💸 Withdraw here: it keeps your stats right. Moving funds yourself makes the agent see a drop, and it may close positions and pause.\n' +
       '• The message deletes itself after 60 seconds.\n\nShow it now?',
     keyboard: [
@@ -689,7 +689,7 @@ export function makeBot(d: BotDeps) {
       text:
         `📥 <b>Import wallet</b>\n\nPaste the wallet's <b>private key</b> as your next message (from Phantom: Settings → Manage accounts → Show private key). ` +
         `Your message is deleted right away and the key is stored encrypted.\n\n` +
-        `⚠️ <b>Use a wallet just for Binwise.</b> The agent may trade everything in it on mainnet with <b>real funds</b>` +
+        `⚠️ <b>Use a wallet just for ${BRAND}.</b> The agent may trade everything in it on mainnet with <b>real funds</b>` +
         `${capNote()}. What's in it now counts as your starting deposit.\n` +
         `No strategy is guaranteed to profit. Only use what you can afford to lose.`,
       keyboard: [[{ text: '✖️ Cancel', callback_data: 'start' }]],
@@ -707,7 +707,7 @@ export function makeBot(d: BotDeps) {
       };
     return {
       text:
-        `🆕 <b>Create your Binwise wallet</b>\n\n` +
+        `🆕 <b>Create your ${BRAND} wallet</b>\n\n` +
         `• A new Solana wallet is made for you. The agent trades from it on mainnet with <b>real funds</b>.\n` +
         `• You can see its private key anytime (💳 Wallet → 🔑) and withdraw anytime.\n` +
         (Number.isFinite(liveLimits().maxUsd) ? `• While live trading is new, the agent puts at most ${usd(liveLimits().maxUsd)} into positions per wallet.\n` : '') +
@@ -759,7 +759,7 @@ export function makeBot(d: BotDeps) {
     await state.del(chatId);
     const taken = (await db.user.findUnique({ where: { wallet: key.pubkey } })) ?? (await db.vault.findFirst({ where: { agentPubkey: key.pubkey } }));
     if (taken)
-      return tg.send(chatId, '🗑 Deleted your message. This wallet is already used on Binwise (on the website or in another chat), so it can\'t be imported here.', {
+      return tg.send(chatId, `🗑 Deleted your message. This wallet is already used on ${BRAND} (on the website or in another chat), so it can't be imported here.`, {
         keyboard: notLinked.keyboard,
       });
     const c = await openVault(chatId, key, true);
@@ -788,7 +788,7 @@ export function makeBot(d: BotDeps) {
     // A wallet created in this chat is only reachable from here: never cut it off by linking another.
     const here = await context(chatId);
     if (here && here.user.id !== user.id && isBotWallet(here.user, here.vault))
-      return tg.send(chatId, 'This chat already has a Binwise wallet created here, so it can\'t also connect a website wallet. Use another Telegram account for that one.');
+      return tg.send(chatId, `This chat already has a ${BRAND} wallet created here, so it can't also connect a website wallet. Use another Telegram account for that one.`);
     // One chat per wallet: unlink this chat from anyone else first.
     await db.user.updateMany({ where: { telegramChatId: chatId, NOT: { id: user.id } }, data: { telegramChatId: null } });
     await db.user.update({ where: { id: user.id }, data: { telegramChatId: chatId, telegramLinkCode: null, telegramLinkCodeAt: null } });
@@ -1038,25 +1038,25 @@ export function makeBot(d: BotDeps) {
         if (op === 'own')
           return show({
             text:
-              `🔐 <b>Move to your own wallet app</b>\n\nBinwise no longer keeps keys. Move this wallet into an app you control; the address, funds and positions stay the same.\n\n` +
+              `🔐 <b>Move to your own wallet app</b>\n\n${BRAND} no longer keeps keys. Move this wallet into an app you control; the address, funds and positions stay the same.\n\n` +
               `1. Tap 🔑 <b>Private key</b> and import it in Phantom or Solflare (Add account → Import private key).\n` +
               `2. Check the app shows <code>${c.vault.agentPubkey}</code>.\n` +
-              `3. Tap <b>Delete key from Binwise</b>.\n\n` +
+              `3. Tap <b>Delete key from ${BRAND}</b>.\n\n` +
               `Then open ${esc(d.appUrl)}/app with that wallet: the agent keeps watching your positions and asks you to approve each change there.`,
             keyboard: [
               [
                 { text: '🔑 Private key', callback_data: 'key' },
-                { text: '🗑 Delete key from Binwise', callback_data: 'ownx' },
+                { text: `🗑 Delete key from ${BRAND}`, callback_data: 'ownx' },
               ],
               ...backToWallet,
             ],
           });
         const shown = await db.decision.findFirst({ where: { vaultId: c.vault.id, title: 'Private key shown' } });
-        if (!shown) return show({ text: '🔑 First tap <b>Private key</b>, save it in your wallet app, and check the address there. Then delete it from Binwise.', keyboard: [[{ text: '🔑 Private key', callback_data: 'key' }], ...backToWallet] });
+        if (!shown) return show({ text: `🔑 First tap <b>Private key</b>, save it in your wallet app, and check the address there. Then delete it from ${BRAND}.`, keyboard: [[{ text: '🔑 Private key', callback_data: 'key' }], ...backToWallet] });
         if (op === 'ownx')
           return show({
             text:
-              `⚠️ <b>Delete the key from Binwise?</b>\n\nBinwise can never show it again. If it isn't saved in your wallet app, everything in <code>${c.vault.agentPubkey}</code> is lost for good.\n\n` +
+              `⚠️ <b>Delete the key from ${BRAND}?</b>\n\n${BRAND} can never show it again. If it isn't saved in your wallet app, everything in <code>${c.vault.agentPubkey}</code> is lost for good.\n\n` +
               `Only continue if your wallet app shows this address.`,
             keyboard: [
               [
@@ -1072,13 +1072,13 @@ export function makeBot(d: BotDeps) {
             ts: new Date(now()),
             type: 'hold',
             title: 'Switched to your own wallet',
-            reason: "Binwise deleted this wallet's key at the owner's request in Telegram. Funds and positions stay in the owner's wallet; every change is approved there.",
+            reason: `${BRAND} deleted this wallet's key at the owner's request in Telegram. Funds and positions stay in the owner's wallet; every change is approved there.`,
             inputs: { manual: true },
           },
         });
         return show(
           {
-            text: `✅ <b>Done.</b> Binwise no longer has this wallet's key.\n\nOpen ${esc(d.appUrl)}/app and connect the wallet from your app: your funds and positions are there, and you approve every change.`,
+            text: `✅ <b>Done.</b> ${BRAND} no longer has this wallet's key.\n\nOpen ${esc(d.appUrl)}/app and connect the wallet from your app: your funds and positions are there, and you approve every change.`,
             keyboard: [[{ text: '🌐 Open website', url: `${d.appUrl}/app` }], [{ text: '⬅️ Menu', callback_data: 'menu' }]],
           },
           'Key deleted',

@@ -3,6 +3,7 @@ import { createVault, ensureUser, getDb } from '@binwise/db';
 import { PaperExecutor, SOL_MINT, createAgentKey, exportAgentSecret, sealImportedKey, type Holdings } from '@binwise/chain';
 import { Keypair } from '@solana/web3.js';
 import { randomBytes } from 'node:crypto';
+import { BRAND } from '@binwise/core';
 import { collectOnce, DEFAULT_COLLECTOR } from './collector';
 import { runManualAction, runManualDeploy, runVaultCycle, type AgentDeps, type VaultWithStrategy } from './agent';
 import { makeBot, memoryChatState, proposalMessage, resultMessage, type ManualRequest } from './bot';
@@ -356,7 +357,7 @@ describe('telegram bot', () => {
     expect(await db.user.count({ where: { telegramChatId: String(CHAT) } })).toBe(1);
     // Linking a website wallet here would cut it off: refused.
     await say('/start code123');
-    expect(last().text).toMatch(/already has a Binwise wallet/);
+    expect(last().text).toContain(`already has a ${BRAND} wallet`);
   });
 
   it("doesn't create wallets while live is limited to other users, and shows the Telegram id to allow", async () => {
@@ -466,7 +467,7 @@ describe('telegram bot', () => {
     await say('/start');
     expect(callbackOf('📥 Import wallet')).toBe('iw');
     await press('iw');
-    expect(last().text).toMatch(/Use a wallet just for Binwise/);
+    expect(last().text).toContain(`Use a wallet just for ${BRAND}`);
     await say('not a key');
     expect(deleted).toEqual([updateId]);
     expect(last().text).toMatch(/isn't a valid Solana private key/);
@@ -488,7 +489,7 @@ describe('telegram bot', () => {
       bot()({ update_id: ++updateId, message: { message_id: updateId, chat: { id: 999, type: 'private' }, text } } as TgUpdate);
     await bot()({ update_id: ++updateId, callback_query: { id: 'x', data: 'iw', message: { message_id: 5, chat: { id: 999, type: 'private' } } } });
     await other(kp.b58);
-    expect(last().text).toMatch(/already used on Binwise/);
+    expect(last().text).toContain(`already used on ${BRAND}`);
     expect(await db.vault.count({ where: { agentPubkey: kp.pubkey } })).toBe(1);
   });
 
@@ -563,14 +564,14 @@ describe('telegram bot', () => {
     expect((await db.vault.findUniqueOrThrow({ where: { id: v0.id } })).encSecret).not.toBeNull();
     await press('keyx');
     await press('ownx');
-    expect(last().text).toMatch(/Delete the key from Binwise\?/);
+    expect(last().text).toContain(`Delete the key from ${BRAND}?`);
     await press('ownxx');
     expect(last().text).toMatch(/no longer has this wallet's key/);
     const v1 = await db.vault.findUniqueOrThrow({ where: { id: v0.id } });
     expect([v1.mode, v1.custody, v1.agentPubkey, v1.encSecret]).toEqual(['live', 'wallet', null, null]);
     // From now on it is the owner's own wallet: the bot sends them to the website to approve.
     await press('wal');
-    expect(last().text).toMatch(/Binwise holds no key/);
+    expect(last().text).toContain(`${BRAND} holds no key`);
 
     // A new chat: no Create / Import, and a pasted key is still deleted, never imported.
     const other = (data: string) => bot()({ update_id: ++updateId, callback_query: { id: 'x', data, message: { message_id: 5, chat: { id: 999, type: 'private' } } } });
