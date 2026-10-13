@@ -57,7 +57,7 @@ export function makeAgentDeps(redis: Redis, db: PrismaClient = getDb(), telegram
       ? async (vault, proposal) => {
           const user = await db.user.findUnique({ where: { id: vault.userId } });
           if (!user?.telegramChatId) return;
-          const m = proposalMessage(proposal, Date.now(), isSelfCustody(vault) ? `https://${process.env.PUBLIC_DOMAIN || 'binwise.org'}/app` : undefined);
+          const m = proposalMessage(proposal, Date.now(), isSelfCustody(vault) ? `https://${process.env.PUBLIC_DOMAIN || 'kovra.live'}/app` : undefined);
           await telegram.send(user.telegramChatId, m.text, { html: true, keyboard: m.keyboard });
         }
       : undefined,

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Binwise: update to the latest code. Asks nothing: keys and settings stay in .env, data stays in the database.
+# Kovra: update to the latest code. Asks nothing: keys and settings stay in .env, data stays in the database.
 # Run as root on the server:
 #
 #   bash /home/binwise/binwise/deploy/update.sh

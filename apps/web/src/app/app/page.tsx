@@ -103,14 +103,18 @@ export default function OverviewPage() {
               <button className="btn btn-white" onClick={openConnect}>
                 Connect wallet
               </button>
-              <a className="btn btn-dark" href={BOT_URL} target="_blank" rel="noreferrer">
-                Or use the Telegram bot
-              </a>
+              {BOT_URL && (
+                <a className="btn btn-dark" href={BOT_URL} target="_blank" rel="noreferrer">
+                  Or use the Telegram bot
+                </a>
+              )}
             </div>
           ) : (
-            <a className="btn btn-white" href={BOT_URL} target="_blank" rel="noreferrer">
-              Open Telegram bot
-            </a>
+            BOT_URL && (
+              <a className="btn btn-white" href={BOT_URL} target="_blank" rel="noreferrer">
+                Open Telegram bot
+              </a>
+            )
           )}
         </div>
       </div>

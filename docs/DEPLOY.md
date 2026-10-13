@@ -15,7 +15,7 @@ You need: SSH access as root to the VPS (Ubuntu 22.04/24.04), and a domain whose
 
 ```bash
 curl -fsSL -o install.sh https://raw.githubusercontent.com/fourtisf/binwise-lp/refs/heads/main/deploy/install.sh
-bash install.sh binwise.org
+bash install.sh kovra.live
 ```
 
 It takes about 10 minutes and does everything:
@@ -23,7 +23,7 @@ It takes about 10 minutes and does everything:
 - Installs Node 22, pnpm, PM2, PostgreSQL, Redis, Nginx and certbot. Adds swap on small servers.
 - Creates a `binwise` system user and puts the code in `/home/binwise/binwise`.
 - Creates the database and `/home/binwise/binwise/.env` with fresh random secrets (readable by that user only). `LIVE_TRADING_ENABLED=false`.
-- Installs dependencies, migrates the database, and builds the website for `https://binwise.org`.
+- Installs dependencies, migrates the database, and builds the website for `https://kovra.live`.
 - Starts web, API, collector and agent under PM2, set to restart on reboot, with log rotation.
 - Schedules the weekly backtest and settings search with cron (Monday 03:00 and 03:30).
 - Private ports: the website and API (3100/4100), Postgres and Redis listen on 127.0.0.1 only; nginx is the only way in.
@@ -48,7 +48,7 @@ Optional keys (edit `.env`, then `sudo -u binwise pm2 restart all`):
 ```bash
 sudo -u binwise pm2 ls                      # status
 sudo -u binwise pm2 logs binwise-agent      # live agent log (also: binwise-collector, binwise-api, binwise-web)
-bash install.sh binwise.org                 # re-install (keeps .env and data)
+bash install.sh kovra.live                 # re-install (keeps .env and data)
 bash /home/binwise/binwise/deploy/update.sh   # update to the latest code: asks nothing, keeps .env and data
 ```
 
@@ -110,7 +110,7 @@ Stops every trade, paper and live, at the next transaction:
 ```bash
 sudo -u binwise -H bash -lc 'cd ~/binwise && pnpm --filter @binwise/agent kill on'   # off / status
 # or over HTTP:
-curl -X POST https://binwise.org/api/admin/kill -H "x-admin-token: $ADMIN_TOKEN" -H 'content-type: application/json' -d '{"on":true}'
+curl -X POST https://kovra.live/api/admin/kill -H "x-admin-token: $ADMIN_TOKEN" -H 'content-type: application/json' -d '{"on":true}'
 ```
 
 ## Go live (one command)

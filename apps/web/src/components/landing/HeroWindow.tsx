@@ -7,7 +7,6 @@ import { getDemoSource, type DemoSource } from '@/lib/api/demo';
 import { emitDemo } from '@/lib/demo-bus';
 import { LiveChart } from '@/lib/charts/LiveChart';
 import { hhmm, pct, prefersReducedMotion, usd } from '@/lib/format';
-import { SITE_HOST } from '@/lib/site';
 import { Icon } from '../Sprite';
 import { PairIcon } from '../Tokens';
 
@@ -109,7 +108,7 @@ export function HeroWindow() {
         </div>
         <div className="url">
           <Icon id="i-lock" />
-          {SITE_HOST}/app
+          {BRAND} demo vault
         </div>
         <div style={{ width: 47 }}></div>
       </div>

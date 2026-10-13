@@ -36,9 +36,9 @@ export function Palette() {
     const cmds: Cmd[] = [
       ...PAGES.map((p) => ({ group: 'Go to', label: p.title, icon: p.icon, run: () => router.push(p.href) })),
       ...(client?.kind === 'http' && me ? [{ group: 'Go to', label: 'Portfolio', icon: 'i-wallet' as IconId, run: () => router.push('/app/portfolio') }] : []),
-      ...(WALLET_LOGIN
+      ...(WALLET_LOGIN || !BOT_URL
         ? []
-        : [{ group: 'Actions', label: 'Open Telegram bot', icon: 'i-plus' as IconId, run: () => window.open(BOT_URL, '_blank', 'noopener') }]),
+        : [{ group: 'Actions', label: 'Open Telegram bot', icon: 'i-plus' as IconId, run: () => window.open(BOT_URL!, '_blank', 'noopener') }]),
       { group: 'Actions', label: paused ? 'Resume agent' : 'Pause agent', icon: paused ? 'i-play' : 'i-pause', run: togglePause },
       ...(LIVE_DEFAULT
         ? []

@@ -122,18 +122,19 @@ export function AccountMenu() {
           <Icon id="i-ext" />
           View on Solscan
         </a>
-        {me.telegramLinked ? (
-          <a role="menuitem" tabIndex={open ? 0 : -1} href={BOT_URL} target="_blank" rel="noreferrer" onClick={close}>
-            <Icon id="i-send" />
-            Open Telegram bot
-            <span className="pill in">Linked</span>
-          </a>
-        ) : (
-          <button role="menuitem" tabIndex={open ? 0 : -1} onClick={linkTelegram}>
-            <Icon id="i-send" />
-            Link Telegram
-          </button>
-        )}
+        {BOT_URL &&
+          (me.telegramLinked ? (
+            <a role="menuitem" tabIndex={open ? 0 : -1} href={BOT_URL} target="_blank" rel="noreferrer" onClick={close}>
+              <Icon id="i-send" />
+              Open Telegram bot
+              <span className="pill in">Linked</span>
+            </a>
+          ) : (
+            <button role="menuitem" tabIndex={open ? 0 : -1} onClick={linkTelegram}>
+              <Icon id="i-send" />
+              Link Telegram
+            </button>
+          ))}
         <div className="acct-sep"></div>
         <button role="menuitem" tabIndex={open ? 0 : -1} onClick={signOut}>
           <Icon id="i-exit" />

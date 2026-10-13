@@ -4,6 +4,7 @@ import { BRAND } from '@binwise/core/brand';
 import { STRATEGY_LIMITS, STRATEGY_PRESETS, type RiskProfile, type StrategySettings, type StrategyToggles } from '@binwise/core';
 import { Switch } from '@/components/Switch';
 import { fmt, fmtM, usd } from '@/lib/format';
+import { BOT_URL } from '@/lib/site';
 import { useAppData } from '@/lib/store';
 import { useUi } from '@/lib/ui';
 
@@ -118,7 +119,7 @@ export default function StrategyPage() {
           <div className="ph">
             <h3>Behavior</h3>
           </div>
-          {TOGGLES.map((t) => (
+          {TOGGLES.filter((t) => t.key !== 'telegramAlerts' || BOT_URL || me?.telegramLinked).map((t) => (
             <div className="tg" key={t.key}>
               <div>
                 <b>{t.title}</b>

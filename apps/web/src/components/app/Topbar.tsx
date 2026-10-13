@@ -39,7 +39,7 @@ export function Topbar({ title }: { title: string }) {
             </button>
           </div>
         )}
-        {!WALLET_LOGIN && (
+        {!WALLET_LOGIN && BOT_URL && (
           // Vaults live in the Telegram bot: create or import a wallet, deposit and add LP there.
           <a className="btn btn-white btn-sm" href={BOT_URL} target="_blank" rel="noreferrer">
             <Icon id="i-plus" />

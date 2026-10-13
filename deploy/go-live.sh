@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Binwise: switch a running install to Solana mainnet (live trading) and turn on the Telegram bot.
+# Kovra: switch a running install to Solana mainnet (live trading) and turn on the Telegram bot.
 # Run as root on the server, after deploy/install.sh:
 #
 #   bash /home/binwise/binwise/deploy/go-live.sh
@@ -209,7 +209,7 @@ as_app "pm2 ls"
 domain=$(env_get PUBLIC_DOMAIN)
 cat <<EOF
 
-$(printf '\033[1;32m')Binwise LIVE di https://${domain}  (Solana mainnet, dana asli)$(printf '\033[0m')
+$(printf '\033[1;32m')Kovra LIVE di https://${domain}  (Solana mainnet, dana asli)$(printf '\033[0m')
 
 Langkah berikutnya:
   1. Bot: buka @${tg_user:-bot Anda} → /start → 🆕 Create wallet.$( [[ -n "$wallet" ]] && echo " Atau website: https://${domain}/app → Connect wallet (${wallet:0:4}…${wallet: -4})." )

@@ -3,11 +3,11 @@ import type { ReactNode } from 'react';
 import { BRAND } from '@binwise/core/brand';
 import { Sprite } from '@/components/Sprite';
 import { Spotlight } from '@/components/Spotlight';
-import { X_HANDLE } from '@/lib/site';
+import { SITE_URL } from '@/lib/site';
 import './globals.css';
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || 'https://binwise.org'),
+  metadataBase: new URL(SITE_URL),
   title: BRAND,
   description: `${BRAND} is an autonomous LP agent for Solana DLMM pools.`,
   // The card X, Telegram and others show when someone shares a link to the site.
@@ -20,7 +20,6 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: 'summary_large_image',
-    site: X_HANDLE,
     title: `${BRAND}: liquidity that manages itself`,
     description: 'An autonomous LP agent for Meteora DLMM on Solana. It finds the pools that pay, keeps your liquidity in range and explains every move.',
     images: ['/og.png'],

@@ -153,6 +153,7 @@ export default function PortfolioPage() {
               </a>
             )}
             {p &&
+              BOT_URL &&
               (p.telegramLinked ? (
                 <a className="btn btn-dark btn-sm" href={BOT_URL} target="_blank" rel="noreferrer">
                   <Icon id="i-send" />
@@ -203,10 +204,15 @@ export default function PortfolioPage() {
               To let the agent use it, send SOL or USDC from this wallet to your vault wallet{' '}
               <Address address={p.vaultWallet} onCopy={() => copy(p.vaultWallet!, 'Vault wallet address')} />.
               <br />
-              Keep about 0.25 SOL in the vault for network fees. The agent picks up the transfer within a few minutes, or use 💳 Wallet in the{' '}
-              <a href={BOT_URL} target="_blank" rel="noreferrer" style={{ textDecoration: 'underline' }}>
-                Telegram bot
-              </a>
+              Keep about 0.25 SOL in the vault for network fees. The agent picks up the transfer within a few minutes
+              {BOT_URL ? (
+                <>
+                  , or use 💳 Wallet in the{' '}
+                  <a href={BOT_URL} target="_blank" rel="noreferrer" style={{ textDecoration: 'underline' }}>
+                    Telegram bot
+                  </a>
+                </>
+              ) : null}
               .
             </p>
           )}

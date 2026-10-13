@@ -1,7 +1,6 @@
 import Link from 'next/link';
 import { BRAND } from '@binwise/core/brand';
 import { BinRing } from '@/components/landing/BinRing';
-import { CaPill } from '@/components/landing/CaPill';
 import { Bento } from '@/components/landing/Sections';
 import { Faq } from '@/components/landing/Faq';
 import { HeroWindow } from '@/components/landing/HeroWindow';
@@ -9,7 +8,7 @@ import { Nav } from '@/components/landing/Nav';
 import { Reveal } from '@/components/landing/Reveal';
 import { Logo } from '@/components/Logo';
 import { Icon } from '@/components/Sprite';
-import { LIVE_DEFAULT, WALLET_LOGIN, X_URL } from '@/lib/site';
+import { LIVE_DEFAULT, WALLET_LOGIN } from '@/lib/site';
 
 const Check = () => <Icon id="i-check" />;
 
@@ -45,8 +44,6 @@ export default function Landing() {
                 ? 'Real funds on mainnet. Start small: your funds stay in your own wallet, and you approve every move.'
                 : 'No deposit needed to try. With real funds, everything stays in your own wallet.'}
             </p>
-            {/* The project token's contract address, with a copy button. */}
-            <CaPill />
           </div>
           <BinRing />
         </div>
@@ -271,13 +268,6 @@ export default function Landing() {
               <i></i>FAQ
             </span>
             <h2 className="sec-h">Questions, answered.</h2>
-            <p className="sec-p">
-              Anything else? Ask us on{' '}
-              <a href={X_URL} target="_blank" rel="noreferrer">
-                X
-              </a>
-              .
-            </p>
           </div>
           <Faq />
         </div>
@@ -323,14 +313,6 @@ export default function Landing() {
               <a href="#faq">FAQ</a>
               <a href="#">Docs</a>
               <a href="#">Risk disclosure</a>
-            </div>
-            <div>
-              <h4>Community</h4>
-              <a href={X_URL} target="_blank" rel="noreferrer">
-                X
-              </a>
-              <a href="#">Telegram</a>
-              <a href="#">Discord</a>
             </div>
           </div>
           <div className="fbot">

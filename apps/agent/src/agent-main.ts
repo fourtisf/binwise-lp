@@ -9,7 +9,7 @@ import { Telegram } from './telegram';
 import { tickOnce } from './ticker';
 
 /** The website, where self-custody owners approve in their wallet */
-const SITE = `https://${process.env.PUBLIC_DOMAIN || 'binwise.org'}`;
+const SITE = `https://${process.env.PUBLIC_DOMAIN || 'kovra.live'}`;
 
 /** Agent worker (PM2): runs every running vault once per minute, plus live price ticks and Telegram. */
 const db = getDb();
