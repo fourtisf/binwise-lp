@@ -1,7 +1,7 @@
 import type { Redis } from 'ioredis';
-import type { CycleState, StreamEvent } from '@binwise/core';
+import type { CycleState, StreamEvent } from '@kovra/core';
 
-const PREFIX = 'binwise:events:';
+const PREFIX = 'kovra:events:';
 
 /**
  * Fans agent events from Redis pub/sub out to WebSocket clients and keeps the

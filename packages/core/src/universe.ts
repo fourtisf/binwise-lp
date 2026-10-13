@@ -1,5 +1,5 @@
 /**
- * Which pools Binwise covers: the Solana ecosystem. Tokens bridged in from other chains (wrapped
+ * Which pools Kovra covers: the Solana ecosystem. Tokens bridged in from other chains (wrapped
  * BTC/ETH, wNEAR, DOGE, …) are left out, and each pair is listed once (its most liquid pool).
  */
 

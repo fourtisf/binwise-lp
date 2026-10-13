@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import type { FastifyInstance } from 'fastify';
-import { DEFAULT_STRATEGY } from '@binwise/core';
-import { MockEngine } from '@binwise/mock';
+import { DEFAULT_STRATEGY } from '@kovra/core';
+import { MockEngine } from '@kovra/mock';
 import { buildApp } from './mock-app';
 
 let app: FastifyInstance;

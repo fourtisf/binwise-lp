@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_STRATEGY, type StreamEvent } from '@binwise/core';
+import { DEFAULT_STRATEGY, type StreamEvent } from '@kovra/core';
 import { MockEngine, MockError, startDemo } from './engine';
 import { PriceSim } from './price-sim';
 import { DEMO_PAIRS } from './data';

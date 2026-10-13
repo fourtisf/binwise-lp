@@ -9,7 +9,7 @@ import {
   type AgentParams,
   type StrategySettings,
   type TokenRef,
-} from '@binwise/core';
+} from '@kovra/core';
 import {
   activeParams,
   assessmentInput,
@@ -24,7 +24,7 @@ import {
   type SnapshotWithPool,
   type Strategy,
   type Token,
-} from '@binwise/db';
+} from '@kovra/db';
 
 /** Maps database rows to the API shapes the website renders. */
 

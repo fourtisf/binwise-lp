@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { poolMatches } from '@binwise/core';
+import { poolMatches } from '@kovra/core';
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { BOT_URL, LIVE_DEFAULT, WALLET_LOGIN } from '@/lib/site';
 import { useAppData } from '@/lib/store';

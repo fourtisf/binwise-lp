@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { poolMatches, type AgentCall, type PoolRow } from '@binwise/core';
+import { poolMatches, type AgentCall, type PoolRow } from '@kovra/core';
 import { Chips } from '@/components/Chips';
 import { Icon } from '@/components/Sprite';
 import { PairIcon } from '@/components/Tokens';

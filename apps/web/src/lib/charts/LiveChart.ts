@@ -1,4 +1,4 @@
-import type { LiquidityShape, PositionChart } from '@binwise/core';
+import type { LiquidityShape, PositionChart } from '@kovra/core';
 import { clamp, ease, lerp, prefersReducedMotion } from '../format';
 import { alpha, token } from '../theme';
 

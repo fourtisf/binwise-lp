@@ -1,11 +1,11 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { MeteoraClient } from '@binwise/chain';
-import type { RiskProfile } from '@binwise/core';
+import { MeteoraClient } from '@kovra/chain';
+import type { RiskProfile } from '@kovra/core';
 import { DEFAULT_BACKTEST, runPoolBacktests } from './backtest';
 
 /**
- * pnpm --filter @binwise/agent backtest [--days 38] [--pools 15] [--profile balanced]
+ * pnpm --filter @kovra/agent backtest [--days 38] [--pools 15] [--profile balanced]
  * Writes reports/backtest-YYYY-MM-DD.md and stores the run in the database (if DATABASE_URL is set).
  */
 const arg = (name: string) => {
@@ -30,7 +30,7 @@ writeFileSync(file, run.report);
 console.log(`\nReport written to ${file}`);
 
 if (process.env.DATABASE_URL) {
-  const { getDb } = await import('@binwise/db');
+  const { getDb } = await import('@kovra/db');
   const db = getDb();
   await db.backtestRun.create({
     data: {

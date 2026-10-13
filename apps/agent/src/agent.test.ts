@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import type { StreamEvent } from '@binwise/core';
-import { approveProposal, createVault, ensureUser, getDb, rejectProposal } from '@binwise/db';
+import type { StreamEvent } from '@kovra/core';
+import { approveProposal, createVault, ensureUser, getDb, rejectProposal } from '@kovra/db';
 import { collectOnce, DEFAULT_COLLECTOR } from './collector';
 import { runApprovedProposal, runManualDeploy, runVaultCycle, type AgentDeps, type VaultWithStrategy } from './agent';
 import { FakeMeteora, JUP, POOL, USDC, asMeteora, resetDb } from './test-helpers';
-import { PaperExecutor, SetupTooCostly, type Executor, type Holdings } from '@binwise/chain';
+import { PaperExecutor, SetupTooCostly, type Executor, type Holdings } from '@kovra/chain';
 
 const db = getDb();
 let meteora: FakeMeteora;
@@ -31,8 +31,8 @@ beforeAll(async () => {
   // Use a dedicated test database.
   const { execSync } = await import('node:child_process');
   const dbName = new URL(process.env.DATABASE_URL!).pathname.slice(1);
-  execSync(`psql -h localhost -U binwise -d postgres -c "create database ${dbName}" 2>/dev/null || true`, { stdio: 'ignore' });
-  execSync('pnpm --filter @binwise/db exec prisma migrate deploy', { stdio: 'ignore', env: { ...process.env } });
+  execSync(`psql -h localhost -U kovra -d postgres -c "create database ${dbName}" 2>/dev/null || true`, { stdio: 'ignore' });
+  execSync('pnpm --filter @kovra/db exec prisma migrate deploy', { stdio: 'ignore', env: { ...process.env } });
 });
 
 beforeEach(async () => {
@@ -237,7 +237,7 @@ describe('agent cycle (paper)', () => {
     expect(opens).toBe(2);
   });
 
-  it('puts no new money to work in a vault Binwise holds the key for', async () => {
+  it('puts no new money to work in a vault Kovra holds the key for', async () => {
     await db.vault.updateMany({ data: { mode: 'live', custody: 'agent', agentPubkey: 'Agent11111111111111111111111111111111111111', encSecret: new Uint8Array(8) } });
     const d = (): AgentDeps => ({ ...deps(), executorFor: async (v) => Object.defineProperty(new PaperExecutor({ ...(v.cash as Holdings) }), 'mode', { value: 'live' }) });
     await collect();
@@ -562,7 +562,7 @@ describe('agent cycle (self-custody: the owner\'s wallet signs)', () => {
     expect(await db.decision.count({ where: { type: 'exit' } })).toBe(0);
   });
 
-  it('records a position closed from the wallet outside Binwise as money leaving the vault', async () => {
+  it('records a position closed from the wallet outside Kovra as money leaving the vault', async () => {
     await selfCustodyWithPosition();
     const pos = await db.position.findFirstOrThrow();
     const before = (await vault()).deposits as Record<string, number>;

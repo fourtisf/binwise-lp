@@ -1,4 +1,4 @@
-import type { DemoEvent, DemoPair } from '@binwise/core';
+import type { DemoEvent, DemoPair } from '@kovra/core';
 import { getClient } from './client';
 
 export interface DemoSource {
@@ -19,7 +19,7 @@ export function getDemoSource(): Promise<DemoSource> {
     const client = await getClient();
     const pairs = await client.demoPairs();
     if (client.kind === 'http' && pairs.length) return { pairs, bentoId: pairs[0].id, subscribe: client.demo };
-    const { startDemo } = await import('@binwise/mock');
+    const { startDemo } = await import('@kovra/mock');
     const { MOCK_DEMO_PAIRS } = await import('./mock');
     return { pairs: MOCK_DEMO_PAIRS, bentoId: 'bento', subscribe: (id, fn) => startDemo(id, fn) };
   })();

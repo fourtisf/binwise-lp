@@ -1,4 +1,4 @@
-import type { PositionChart, RangeEvent } from '@binwise/core';
+import type { PositionChart, RangeEvent } from '@kovra/core';
 import { gauss, rng } from './random';
 
 export interface SimConfig {

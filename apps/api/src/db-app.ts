@@ -35,7 +35,7 @@ import {
   type TokenRef,
   type VaultBalance,
   type Withdrawable,
-} from '@binwise/core';
+} from '@kovra/core';
 import {
   JupiterClient,
   LiveExecutor,
@@ -55,7 +55,7 @@ import {
   createAgentKey,
   loadAgentKey,
   makeConnection,
-} from '@binwise/chain';
+} from '@kovra/chain';
 import {
   ProposalError,
   activeParams,
@@ -75,7 +75,7 @@ import {
   type PrismaClient,
   type Strategy,
   type Vault,
-} from '@binwise/db';
+} from '@kovra/db';
 import { SESSION_COOKIE, SIGN_IN_STATEMENT, SESSION_DAYS, makeSession, newNonce, readSession, signInMessage, verifyWalletSignature } from './auth';
 import { ApiError } from './errors';
 import { EventHub } from './events';
@@ -99,7 +99,7 @@ export interface DbAppOptions {
   sub: Redis;
   corsOrigins?: string[];
   logger?: boolean;
-  /** e.g. binwise.org, shown in the sign-in message */
+  /** e.g. kovra.live, shown in the sign-in message */
   domain?: string;
   secureCookies?: boolean;
   rpc?: () => Connection;
@@ -182,7 +182,7 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     if (isSelfCustody(v)) throw new ApiError(400, 'self_custody', `Your funds stay in your own wallet: nothing to deposit to or withdraw from ${BRAND}.`);
   };
   /**
-   * Vault wallets Binwise holds the key of are winding down: no new money goes in and no new positions open.
+   * Vault wallets Kovra holds the key of are winding down: no new money goes in and no new positions open.
    * Owners withdraw to their own wallet; open positions are still looked after until they close them.
    */
   const noNewCustody = (v: { mode: string; custody: string; encSecret: unknown }) => {
@@ -278,7 +278,7 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
       if (t) out.set(m, { ref: tokenRef(m === SOL_MINT ? 'SOL' : t.symbol, t), priceUsd: t.priceUsd ?? null });
     }
     const missing = mints.filter((m) => !out.has(m));
-    const cacheKey = (m: string) => `binwise:tokinfo:${m}`;
+    const cacheKey = (m: string) => `kovra:tokinfo:${m}`;
     const cached = missing.length ? await redis.mget(...missing.map(cacheKey)) : [];
     const lookup: string[] = [];
     missing.forEach((m, i) => {
@@ -320,7 +320,7 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     return Object.entries(amounts).reduce((s, [m, a]) => s + a * (tokens.find((t) => t.mint === m)?.priceUsd ?? 0), 0);
   }
 
-  /** See shrinkDeposits in @binwise/db. */
+  /** See shrinkDeposits in @kovra/db. */
   const shrinkDeposits = (deposits: Record<string, number>, withdrawnUsd: number) => shrinkDepositsOf(db, deposits, withdrawnUsd);
 
   const moneyLimit = { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } };
@@ -389,7 +389,7 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     const user = await ensureUser(db, wallet);
     if (!(await db.vault.count({ where: { userId: user.id } }))) {
       if (liveByDefault(wallet)) {
-        // Mainnet by default, self-custody: the funds stay in the owner's own wallet and Binwise holds no key.
+        // Mainnet by default, self-custody: the funds stay in the owner's own wallet and Kovra holds no key.
         const v = await createVault(db, user.id, { selfCustody: true });
         await logDecision(v.id, 'scan', 'Vault created', `Your funds stay in your own wallet: ${BRAND} holds no key. Add LP from a pool and approve it in your wallet; the agent watches your positions and asks before any change.`);
       } else {
@@ -772,7 +772,7 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
 
   app.get<VP>('/vaults/:id/strategy', async (req) => {
     const { vault } = await readable(req, req.params.id);
-    const { strategySettings } = await import('@binwise/db');
+    const { strategySettings } = await import('@kovra/db');
     return strategySettings(vault.strategy!);
   });
 
@@ -1018,7 +1018,7 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
   });
 
   /**
-   * Ends Binwise's custody of a vault wallet from before self-custody: deletes the vault's key, and from then on
+   * Ends Kovra's custody of a vault wallet from before self-custody: deletes the vault's key, and from then on
    * the vault works from the owner's own wallet (they approve every change there). Only once the vault wallet is
    * empty: no position, no tokens, at most dust SOL. A key deleted with funds behind it would lose them.
    */

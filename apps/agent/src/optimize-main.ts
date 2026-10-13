@@ -1,12 +1,12 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { MeteoraClient } from '@binwise/chain';
-import { DEFAULT_PARAMS, optimizeParams, type RiskProfile } from '@binwise/core';
+import { MeteoraClient } from '@kovra/chain';
+import { DEFAULT_PARAMS, optimizeParams, type RiskProfile } from '@kovra/core';
 import { DEFAULT_BACKTEST, loadBacktestData } from './backtest';
 import { renderOptimizeReport, searchable } from './optimize';
 
 /**
- * pnpm --filter @binwise/agent optimize [--days 60] [--pools 15] [--profile balanced] [--candidates 60] [--apply]
+ * pnpm --filter @kovra/agent optimize [--days 60] [--pools 15] [--profile balanced] [--candidates 60] [--apply]
  * Searches agent settings on past data (walk-forward: tune on the first part, judge on the rest).
  * Writes reports/optimize-YYYY-MM-DD.md. With DATABASE_URL, stores the result; `--apply` makes the new
  * settings active only if they beat the current ones on unseen data.
@@ -28,8 +28,8 @@ const opts = {
 };
 const candidates = Number(arg('candidates') ?? 60);
 
-const db = process.env.DATABASE_URL ? (await import('@binwise/db')).getDb() : null;
-const base = db ? await (await import('@binwise/db')).activeParams(db) : DEFAULT_PARAMS;
+const db = process.env.DATABASE_URL ? (await import('@kovra/db')).getDb() : null;
+const base = db ? await (await import('@kovra/db')).activeParams(db) : DEFAULT_PARAMS;
 
 const data = await loadBacktestData(meteora, opts);
 console.log(`Searching ${candidates} setting combinations over ${data.pools.length} pools…`);

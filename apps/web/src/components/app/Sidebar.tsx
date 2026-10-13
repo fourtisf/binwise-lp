@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { BRAND } from '@binwise/core/brand';
+import { BRAND } from '@kovra/core/brand';
 import { useAppData } from '@/lib/store';
 import { useUi } from '@/lib/ui';
 import { Icon } from '../Sprite';

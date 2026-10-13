@@ -1,5 +1,5 @@
-import { BRAND, STRATEGY_LIMITS, STRATEGY_PRESETS, assessPool, bestPerPair, pairKey, positionCapUsd, positionSizeUsd, type AgentParams, type CustomRange, type LiquidityShape, type RiskProfile, type StrategySettings } from '@binwise/core';
-import { SOL_MINT, isLiveTelegram, liveLimits, walletAddress } from '@binwise/chain';
+import { BRAND, STRATEGY_LIMITS, STRATEGY_PRESETS, assessPool, bestPerPair, pairKey, positionCapUsd, positionSizeUsd, type AgentParams, type CustomRange, type LiquidityShape, type RiskProfile, type StrategySettings } from '@kovra/core';
+import { SOL_MINT, isLiveTelegram, liveLimits, walletAddress } from '@kovra/chain';
 import {
   ProposalError,
   activeParams,
@@ -19,13 +19,13 @@ import {
   type Strategy,
   type User,
   type Vault,
-} from '@binwise/db';
+} from '@kovra/db';
 import { MIN_POSITION_USD } from './agent';
 import { isBotWallet, shortAddress } from './wallet';
 import type { Keyboard, TelegramApi, TgCallback, TgMessage, TgUpdate } from './telegram';
 
 /**
- * The Binwise Telegram bot: one simple button menu.
+ * The Kovra Telegram bot: one simple button menu.
  *   📊 Status · ➕ Add LP · 💼 Positions · 💳 Wallet · 🗳 Approvals · Mode · ⏸ Pause / ▶️ Resume
  * The agent runs on its own; the bot lets the owner check on it and add or close LP by hand.
  * New users can create a wallet right in the chat (no website needed), deposit to it, see its
@@ -81,15 +81,15 @@ export interface BotDeps {
   enqueue: (vaultId: string, req: ManualRequest) => Promise<void>;
   /** Tell the app a vault was paused (so its live cycle card updates). */
   onPaused?: (vault: Vault) => Promise<void>;
-  /** e.g. https://binwise.org */
+  /** e.g. https://kovra.live */
   appUrl: string;
   params?: () => Promise<AgentParams>;
   now?: () => number;
   /** On-chain balances of a wallet by mint (live vaults' Wallet screen). */
   balances?: (address: string) => Promise<Record<string, number>>;
   /**
-   * Binwise no longer creates, imports or keeps wallets: funds stay in owners' own wallets. Wallets made here
-   * before can still withdraw, and move into a wallet app (Binwise then deletes the key).
+   * Kovra no longer creates, imports or keeps wallets: funds stay in owners' own wallets. Wallets made here
+   * before can still withdraw, and move into a wallet app (Kovra then deletes the key).
    */
   keysClosed?: boolean;
   /** A new agent wallet: address + sealed secret (Create wallet). */
@@ -196,7 +196,7 @@ export function makeBot(d: BotDeps) {
     return vault ? { chatId, user, vault } : null;
   }
 
-  /** Wallets made or imported in this chat, whose key Binwise keeps: closed once funds stay in owners' own wallets. */
+  /** Wallets made or imported in this chat, whose key Kovra keeps: closed once funds stay in owners' own wallets. */
   const keepsWallets = !d.keysClosed;
   const notLinked: Screen = keepsWallets
     ? {
@@ -221,7 +221,7 @@ export function makeBot(d: BotDeps) {
           `<b>Start</b>\n1. Open ${esc(d.appUrl)}/app and connect your wallet (Phantom, Solflare, Backpack, Bitget…)\n2. Go to <b>Strategy</b> → turn on <b>Telegram alerts</b>\n3. Press <b>Start</b> in the chat that opens: alerts and approvals come here`,
         keyboard: [[{ text: '🌐 Open website', url: `${d.appUrl}/app` }]],
       };
-  /** Create / Import when Binwise no longer keeps wallets. */
+  /** Create / Import when Kovra no longer keeps wallets. */
   const walletsClosed: Screen = {
     text:
       `🔐 <b>${BRAND} no longer keeps wallets</b>\n\nYour funds stay in your own wallet, and you approve every change there. ` +

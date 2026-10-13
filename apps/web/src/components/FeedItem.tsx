@@ -1,4 +1,4 @@
-import type { Decision, DecisionType } from '@binwise/core';
+import type { Decision, DecisionType } from '@kovra/core';
 import { hhmm } from '@/lib/format';
 import { Icon, type IconId } from './Sprite';
 

@@ -1,4 +1,4 @@
-// Binwise database. Started from CLAUDE.md §4, extended for real data, paper and live trading.
+// Kovra database. Started from CLAUDE.md §4, extended for real data, paper and live trading.
 
 generator client {
   provider = "prisma-client"
@@ -14,8 +14,8 @@ enum VaultMode {
   live
 }
 
-/// Who holds a live vault's funds. agent: a vault wallet whose key Binwise keeps (sealed) and signs with.
-/// wallet: the owner's own wallet; Binwise holds no key, builds transactions and the owner approves each.
+/// Who holds a live vault's funds. agent: a vault wallet whose key Kovra keeps (sealed) and signs with.
+/// wallet: the owner's own wallet; Kovra holds no key, builds transactions and the owner approves each.
 enum VaultCustody {
   agent
   wallet
@@ -91,7 +91,7 @@ model Vault {
   /// Paper mode: the simulated wallet deposits come from
   paperWallet   Json            @default("{}")
   cycle         Int             @default(0)
-  /// agent: Binwise signs with the vault wallet's key; wallet: funds stay in the owner's own wallet (no key here)
+  /// agent: Kovra signs with the vault wallet's key; wallet: funds stay in the owner's own wallet (no key here)
   custody       VaultCustody    @default(agent)
   agentPubkey   String?
   /// Agent secret key, sealed with AGENT_KEY_ENCRYPTION_SECRET. Never plaintext. Never set for custody 'wallet'.

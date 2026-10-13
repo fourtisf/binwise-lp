@@ -12,7 +12,7 @@ import { getWallets } from '@wallet-standard/app';
 import type { Wallet, WalletAccount } from '@wallet-standard/base';
 import { StandardConnect, type StandardConnectFeature } from '@wallet-standard/features';
 import bs58 from 'bs58';
-import { BRAND } from '@binwise/core/brand';
+import { BRAND } from '@kovra/core/brand';
 import { ApiError } from './api/client';
 import { connectInjected, impostorOf, injectedFor, phantomDiagnostics, signMessageInjected } from './injected';
 
@@ -43,7 +43,7 @@ export interface SignInApi {
 
 /**
  * Why sign-in stopped. `rejected`: the user said no in the wallet. `pending`: the wallet already has
- * a request open. `impostor`: another extension answers in place of the picked wallet. `binwise`:
+ * a request open. `impostor`: another extension answers in place of the picked wallet. `server`:
  * our server failed. `wallet`: the wallet failed every way we asked (`tried` lists each answer).
  */
 export class SignInError extends Error {
@@ -52,7 +52,7 @@ export class SignInError extends Error {
      * account: the wallet is on another account than the one signed in. expired: approved too late, Solana no
      * longer takes the transaction. stopped: the page stopped waiting, so nothing more goes to the wallet.
      */
-    readonly kind: 'rejected' | 'pending' | 'impostor' | 'binwise' | 'wallet' | 'account' | 'expired' | 'stopped',
+    readonly kind: 'rejected' | 'pending' | 'impostor' | 'server' | 'wallet' | 'account' | 'expired' | 'stopped',
     message: string,
     readonly tried: string[] = [],
     readonly code?: string,
@@ -79,12 +79,12 @@ function walletFailure(e: unknown): SignInError | null {
 }
 
 /** Our server's answer. A message it can't check, after a one-step sign-in, is worth another try. */
-async function binwise<T>(p: Promise<T>): Promise<T> {
+async function fromServer<T>(p: Promise<T>): Promise<T> {
   try {
     return await p;
   } catch (e) {
-    if (e instanceof ApiError) throw new SignInError('binwise', e.message, [], e.code);
-    throw new SignInError('binwise', `Could not reach ${BRAND} (${errText(e)}). Check your connection and try again.`);
+    if (e instanceof ApiError) throw new SignInError('server', e.message, [], e.code);
+    throw new SignInError('server', `Could not reach ${BRAND} (${errText(e)}). Check your connection and try again.`);
   }
 }
 
@@ -102,7 +102,7 @@ const solanaAccount = (accounts: readonly WalletAccount[]) =>
  * 3. The wallet's classic injected API (window.phantom.solana, …), what older sites use.
  *
  * The next way is tried only when the wallet failed by itself; a "no" from the user, an open request
- * or a Binwise error stops right there. Returns the signed-in address.
+ * or a Kovra error stops right there. Returns the signed-in address.
  */
 export async function signInWithWallet(w: Wallet, api: SignInApi, onTry?: (n: number) => void): Promise<string> {
   const tried: string[] = [];
@@ -114,13 +114,13 @@ export async function signInWithWallet(w: Wallet, api: SignInApi, onTry?: (n: nu
     } catch (e) {
       if (e instanceof SignInError) {
         // A one-step message our server couldn't check (a wallet that builds it differently): try the classic message.
-        if (e.kind === 'binwise' && (e.code === 'bad_nonce' || e.code === 'bad_signature') && label === 'One-step sign-in') {
+        if (e.kind === 'server' && (e.code === 'bad_nonce' || e.code === 'bad_signature') && label === 'One-step sign-in') {
           tried.push(`${label}: ${BRAND} couldn't check the wallet's message (${e.message})`);
           return null;
         }
         throw e;
       }
-      console.error(`[binwise] ${w.name}: ${label} failed`, e);
+      console.error(`[kovra] ${w.name}: ${label} failed`, e);
       const stop = walletFailure(e);
       if (stop) throw stop;
       tried.push(`${label}: ${describe(e)}`);
@@ -131,7 +131,7 @@ export async function signInWithWallet(w: Wallet, api: SignInApi, onTry?: (n: nu
   // 1. Sign In With Solana. The wallet shows our domain; only ask when it is this page's, or the wallet warns.
   if (SolanaSignIn in w.features) {
     // An API from before one-step sign-in wants the wallet first: skip to the next way.
-    const c = await binwise(api.challenge()).catch((e) => {
+    const c = await fromServer(api.challenge()).catch((e) => {
       if (e instanceof SignInError && e.code === 'bad_wallet') return null;
       throw e;
     });
@@ -150,7 +150,7 @@ export async function signInWithWallet(w: Wallet, api: SignInApi, onTry?: (n: nu
         });
         if (!out) throw new Error('The wallet returned nothing.');
         const signed = new TextDecoder().decode(out.signedMessage);
-        await binwise(api.verify(out.account.address, signed, bs58.encode(out.signature)));
+        await fromServer(api.verify(out.account.address, signed, bs58.encode(out.signature)));
         return out.account.address;
       }));
     if (address) return address;
@@ -162,10 +162,10 @@ export async function signInWithWallet(w: Wallet, api: SignInApi, onTry?: (n: nu
       const accounts = w.accounts.length ? w.accounts : (await (w.features as StandardConnectFeature)[StandardConnect].connect()).accounts;
       const account = solanaAccount(accounts);
       if (!account) throw new Error('The wallet returned no Solana account.');
-      const c = await binwise(api.challenge(account.address));
+      const c = await fromServer(api.challenge(account.address));
       const [out] = await (w.features as SolanaSignMessageFeature)[SolanaSignMessage].signMessage({ account, message: new TextEncoder().encode(c.message!) });
       if (!out) throw new Error('The wallet returned no signature.');
-      await binwise(api.verify(account.address, c.message!, bs58.encode(out.signature)));
+      await fromServer(api.verify(account.address, c.message!, bs58.encode(out.signature)));
       return account.address;
     });
     if (address) return address;
@@ -175,25 +175,25 @@ export async function signInWithWallet(w: Wallet, api: SignInApi, onTry?: (n: nu
   const p = injectedFor(w.name);
   const thief = p && /phantom/i.test(w.name) ? impostorOf(p) : null;
   if (thief) {
-    console.error('[binwise] window.phantom.solana is not Phantom:', phantomDiagnostics());
+    console.error('[kovra] window.phantom.solana is not Phantom:', phantomDiagnostics());
     throw new SignInError('impostor', thief, tried);
   }
   if (p) {
     const address = await attempt('Classic connect', async () => {
       const address = await connectInjected(p);
-      const c = await binwise(api.challenge(address));
+      const c = await fromServer(api.challenge(address));
       const signature = await signMessageInjected(p, new TextEncoder().encode(c.message!));
-      await binwise(api.verify(address, c.message!, bs58.encode(signature)));
+      await fromServer(api.verify(address, c.message!, bs58.encode(signature)));
       return address;
     });
     if (address) return address;
   }
 
-  console.error(`[binwise] ${w.name} failed every way:`, tried, '|', phantomDiagnostics());
+  console.error(`[kovra] ${w.name} failed every way:`, tried, '|', phantomDiagnostics());
   throw new SignInError('wallet', tried.length ? tried.join('\n') : `${w.name} can't sign in to websites.`, tried);
 }
 
-const REMEMBERED = 'binwise:wallet';
+const REMEMBERED = 'kovra:wallet';
 /** The wallet `address` signed in with, so later approvals (moving SOL to the vault) go to the same one. */
 export const rememberWallet = (name: string, address: string) => {
   try {
@@ -246,7 +246,7 @@ export async function findWalletFor(wallets: Wallet[], owner: string): Promise<W
   return null;
 }
 
-/** Broadcasts a transaction the wallet signed but didn't send (base64 → Binwise → Solana); returns its signature. */
+/** Broadcasts a transaction the wallet signed but didn't send (base64 → Kovra → Solana); returns its signature. */
 export type Relay = (signed: Uint8Array) => Promise<string>;
 
 /** A wallet or Solana saying the transaction's blockhash is unknown or expired. */
@@ -269,7 +269,7 @@ const mainnetOf = (a: WalletAccount) =>
  * Each API connects first (it must show the signed-in account); if that fails, its two ways are skipped.
  * Wallet Standard connects silently first, so a wallet that already trusts this site asks only once.
  * Returns the signature (base58). A "no", an open request, the wallet being on another account, an
- * approval that came too late (expired) or a Binwise error (the relay refusing) stops right there; so
+ * approval that came too late (expired) or a Kovra error (the relay refusing) stops right there; so
  * does `stopped()` turning true (the page stopped waiting) before the next request.
  */
 export async function sendWithWallet(w: Wallet, owner: string, tx: Uint8Array, relay?: Relay, stopped?: () => boolean): Promise<string> {
@@ -282,7 +282,7 @@ export async function sendWithWallet(w: Wallet, owner: string, tx: Uint8Array, r
       return await run();
     } catch (e) {
       if (e instanceof SignInError) throw e;
-      console.error(`[binwise] ${w.name}: ${label} failed`, e);
+      console.error(`[kovra] ${w.name}: ${label} failed`, e);
       const stop = walletFailure(e);
       if (stop) throw stop;
       // Approved too late: the same transaction can't go through another way, Solana no longer takes it.
@@ -291,7 +291,7 @@ export async function sendWithWallet(w: Wallet, owner: string, tx: Uint8Array, r
       return null;
     }
   };
-  const relayed = (signed: Uint8Array) => binwise(relay!(signed));
+  const relayed = (signed: Uint8Array) => fromServer(relay!(signed));
 
   const send = SolanaSignAndSendTransaction in w.features;
   const signOnly = !!relay && SolanaSignTransaction in w.features;
@@ -349,7 +349,7 @@ export async function sendWithWallet(w: Wallet, owner: string, tx: Uint8Array, r
     const sig = await attempt('Classic sign', async () => relayed((await p.signTransaction!(Tx.from(tx))).serialize()));
     if (sig) return sig;
   }
-  console.error(`[binwise] ${w.name} could not send:`, tried, '|', phantomDiagnostics());
+  console.error(`[kovra] ${w.name} could not send:`, tried, '|', phantomDiagnostics());
   // Phantom's catch-all: an outdated app, Testnet mode, or another wallet extension in the way.
   const internal = tried.some((t) => /-32603|unexpected error/i.test(t));
   const help = internal
@@ -359,7 +359,7 @@ export async function sendWithWallet(w: Wallet, owner: string, tx: Uint8Array, r
 }
 
 /**
- * Whether the wallet signs versioned (v0) transactions, which Jupiter's swaps use. If not, Binwise builds
+ * Whether the wallet signs versioned (v0) transactions, which Jupiter's swaps use. If not, Kovra builds
  * legacy ones. Only Wallet Standard says so; a wallet reached only through its classic API gets legacy ones.
  */
 export function signsVersioned(w: Wallet): boolean {
@@ -368,7 +368,7 @@ export function signsVersioned(w: Wallet): boolean {
 }
 
 /**
- * Asks the wallet to sign every transaction of a plan (serialized, in order) without sending them: Binwise
+ * Asks the wallet to sign every transaction of a plan (serialized, in order) without sending them: Kovra
  * sends them one after the other, each once the one before landed. All in one request first (one approval in
  * Phantom, Solflare, Backpack and most others). A wallet that signs fewer than asked (one per request, like
  * Bitget) is asked for the rest one at a time through the same API: what it signed is kept and never asked
@@ -396,7 +396,7 @@ export async function signAllWithWallet(
       return await run();
     } catch (e) {
       if (e instanceof SignInError) throw e;
-      console.error(`[binwise] ${w.name}: ${label} failed`, e);
+      console.error(`[kovra] ${w.name}: ${label} failed`, e);
       const stop = walletFailure(e);
       if (stop) throw stop;
       tried.push(`${label}: ${describe(e)}`);
@@ -489,6 +489,6 @@ export async function signAllWithWallet(
     }
   }
   if (out.length) throw partly();
-  console.error(`[binwise] ${w.name} could not sign:`, tried, '|', phantomDiagnostics());
+  console.error(`[kovra] ${w.name} could not sign:`, tried, '|', phantomDiagnostics());
   throw new SignInError('wallet', tried.length ? tried.join('\n') : `${w.name} can't sign transactions from this page.`, tried);
 }

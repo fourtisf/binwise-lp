@@ -90,7 +90,7 @@ export interface BacktestEvent {
 
 export interface BacktestPoint {
   ts: number;
-  binwise: number;
+  agent: number;
   hold: number;
   unmanaged: number;
 }
@@ -98,10 +98,10 @@ export interface BacktestPoint {
 export interface BacktestStats {
   days: number;
   startUsd: number;
-  binwiseUsd: number;
+  agentUsd: number;
   holdUsd: number;
   unmanagedUsd: number;
-  /** Headline: (binwise / hold − 1) × 100 */
+  /** Headline: (agent / hold − 1) × 100 */
   netVsHoldPct: number;
   unmanagedVsHoldPct: number;
   feesUsd: number;
@@ -275,7 +275,7 @@ export function runBacktest(cfg: BacktestConfig, bars: BacktestBar[]): BacktestR
 
     // Daily loss stop.
     if (series.length >= perDay) {
-      const dayAgoUsd = series[series.length - perDay].binwise;
+      const dayAgoUsd = series[series.length - perDay].agent;
       if (dailyStopHit(vaultY(b.price) * b.quoteUsd, dayAgoUsd, s.dailyStopPct) && pos) {
         closePos(b.price);
         pay(txUsd(TX.close), b.quoteUsd, b.price);
@@ -372,12 +372,12 @@ export function runBacktest(cfg: BacktestConfig, bars: BacktestBar[]): BacktestR
       }
     }
 
-    const binwiseUsd = vaultY(b.price) * b.quoteUsd;
+    const agentUsd = vaultY(b.price) * b.quoteUsd;
     const holdUsd = (holdX * b.price + holdY) * b.quoteUsd;
     const unmanagedUsd = unmanaged ? (positionValueY(unmanaged, b.price) + unmanagedFeesY + unmanagedCashY) * b.quoteUsd : holdUsd;
-    series.push({ ts: b.ts, binwise: binwiseUsd, hold: holdUsd, unmanaged: unmanagedUsd });
-    peak = Math.max(peak, binwiseUsd);
-    if (peak > 0) maxDd = Math.max(maxDd, (1 - binwiseUsd / peak) * 100);
+    series.push({ ts: b.ts, agent: agentUsd, hold: holdUsd, unmanaged: unmanagedUsd });
+    peak = Math.max(peak, agentUsd);
+    if (peak > 0) maxDd = Math.max(maxDd, (1 - agentUsd / peak) * 100);
   }
 
   const last = series.at(-1)!;
@@ -387,11 +387,11 @@ export function runBacktest(cfg: BacktestConfig, bars: BacktestBar[]): BacktestR
     events,
     stats: {
       days: (series.length - 1) / perDay,
-      startUsd: series[0].binwise,
-      binwiseUsd: last.binwise,
+      startUsd: series[0].agent,
+      agentUsd: last.agent,
       holdUsd: last.hold,
       unmanagedUsd: last.unmanaged,
-      netVsHoldPct: (last.binwise / last.hold - 1) * 100,
+      netVsHoldPct: (last.agent / last.hold - 1) * 100,
       unmanagedVsHoldPct: (last.unmanaged / last.hold - 1) * 100,
       feesUsd: feesTotalUsd,
       costsUsd,

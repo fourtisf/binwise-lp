@@ -1,7 +1,7 @@
 import { Redis } from 'ioredis';
-import { MockEngine } from '@binwise/mock';
-import { getDb } from '@binwise/db';
-import { BRAND } from '@binwise/core';
+import { MockEngine } from '@kovra/mock';
+import { getDb } from '@kovra/db';
+import { BRAND } from '@kovra/core';
 import { buildApp } from './mock-app';
 import { buildDbApp } from './db-app';
 

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import type { PoolDetail } from '@binwise/core';
+import type { PoolDetail } from '@kovra/core';
 import { fmt, fmtM, usd } from '@/lib/format';
 import { useAppData } from '@/lib/store';
 import { ErrorBoundary } from '../ErrorBoundary';

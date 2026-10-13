@@ -1,4 +1,4 @@
-import { BRAND, PARAM_SPACE, type AgentParams, type OptimizeResult } from '@binwise/core';
+import { BRAND, PARAM_SPACE, type AgentParams, type OptimizeResult } from '@kovra/core';
 
 /** Settings the optimiser can change, with plain-language names for the report. */
 const LABELS: Record<keyof typeof PARAM_SPACE, string> = {

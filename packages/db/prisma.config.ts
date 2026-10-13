@@ -10,6 +10,6 @@ export default defineConfig({
     path: 'prisma/migrations',
   },
   datasource: {
-    url: process.env.DATABASE_URL ?? 'postgresql://binwise:binwise@localhost:5432/binwise',
+    url: process.env.DATABASE_URL ?? 'postgresql://kovra:kovra@localhost:5432/kovra',
   },
 });

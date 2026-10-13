@@ -2,8 +2,8 @@
 
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
-import { BRAND } from '@binwise/core/brand';
-import type { PerformanceRange, PerformanceSeries } from '@binwise/core';
+import { BRAND } from '@kovra/core/brand';
+import type { PerformanceRange, PerformanceSeries } from '@kovra/core';
 import { FeedItem } from '@/components/FeedItem';
 import { CustodyNotice } from '@/components/app/CustodyNotice';
 import { PositionChart } from '@/components/PositionChart';

@@ -1,4 +1,4 @@
-import type { VaultMode } from '@binwise/core';
+import type { VaultMode } from '@kovra/core';
 
 export class LiveTradingBlocked extends Error {}
 

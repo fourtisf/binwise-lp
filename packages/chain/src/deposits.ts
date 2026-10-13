@@ -43,7 +43,7 @@ const WALLET_ADDED = new Set([ComputeBudgetProgram.programId.toBase58(), 'L2TExM
 export class NotADeposit extends Error {}
 
 /**
- * Lamports a transfer signed by the owner's wallet moves into the agent wallet, before Binwise broadcasts
+ * Lamports a transfer signed by the owner's wallet moves into the agent wallet, before Kovra broadcasts
  * it on the wallet's behalf. Only one plain SOL transfer from the owner (also the fee payer) to the agent
  * passes, beside what wallets add on their own; anything else throws NotADeposit.
  */

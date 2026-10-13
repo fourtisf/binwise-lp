@@ -2,8 +2,8 @@
 
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { BRAND } from '@binwise/core/brand';
-import type { Portfolio } from '@binwise/core';
+import { BRAND } from '@kovra/core/brand';
+import type { Portfolio } from '@kovra/core';
 import { Icon } from '@/components/Sprite';
 import { PairIcon, Tok } from '@/components/Tokens';
 import { fmt, pct, usd } from '@/lib/format';

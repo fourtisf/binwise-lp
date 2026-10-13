@@ -14,8 +14,8 @@ The look is **Kovra direction B, "cinematic"** (owner's choice, Oct 2026; refere
 - Landing: headline bottom-left with a **live bin ring** (chrome core, the demo vault's liquidity bin by bin, following the live window) on the right; centred section heads with pill kickers; the live demo window in its own section; steps as a timeline; one glass panel of example metrics; FAQ in two columns; the final call to action inside a ring of bins.
 - App: floating glass sidebar and pill topbar, white pill for the current page, pill buttons and segmented controls, 24px cards, a floating dock on phones.
 - Premium black with a titanium (silver) accent, mint for gains and red for losses, Space Grotesk for headings and big numbers, Inter for body text. Every color is a token on `:root` in `apps/web/src/app/globals.css`; charts read the same tokens (`apps/web/src/lib/theme.ts`). Don't hardcode colors in components.
-- `design/binwise-prototype.html` is still the source for content: copy, labels, data shown, empty/error wording and interactions. Don't drop features or disclaimers from it.
-- The name users see comes from `BRAND` in `packages/core/src/brand.ts` (web imports `@binwise/core/brand`). Internal identifiers keep the code name `binwise` on purpose: `@binwise/*` packages, Redis keys (kill switch), session cookie, database, PM2 processes, server paths.
+- `design/original-prototype.html` is still the source for content: copy, labels, data shown, empty/error wording and interactions. Don't drop features or disclaimers from it.
+- The name users see comes from `BRAND` in `packages/core/src/brand.ts` (web imports `@kovra/core/brand`). Everything else is `kovra` too: `@kovra/*` packages, Redis keys, database, server user `kovra`, `/home/kovra/kovra`, PM2 `kovra-*`. Only the GitHub repo is still `binwise-lp`, and applied database migrations are never edited.
 - Every simulated number must be replaced by real data from the backend (see §5).
 - Owner dislikes: black-and-gold palettes and white/light backgrounds. Keep the dark theme. Don't restyle again without the owner asking.
 
@@ -41,7 +41,7 @@ Always verify SDK method names against the **current** docs/npm versions. Do not
 
 ### Monorepo layout
 ```
-binwise/
+kovra/
   apps/
     web/        # Next.js (landing + app)
     api/        # Fastify REST + WS/SSE
@@ -50,7 +50,7 @@ binwise/
     core/       # shared types, scoring, strategy math (pure, unit-tested)
     chain/      # Meteora/Jupiter/Jito wrappers, tx builder, simulator
     db/         # Prisma schema + client
-  design/binwise-prototype.html
+  design/original-prototype.html
   .env.example
 ```
 

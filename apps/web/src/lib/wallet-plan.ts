@@ -1,5 +1,5 @@
-import { BRAND } from '@binwise/core/brand';
-import { ApiError, type BinwiseClient, type WalletAction, type WalletTxStatus } from './api/client';
+import { BRAND } from '@kovra/core/brand';
+import { ApiError, type KovraClient, type WalletAction, type WalletTxStatus } from './api/client';
 import { SignInError, signAllWithWallet, signsVersioned, type Wallet } from './wallets';
 
 /** Where a plan is: being built, waiting for the wallet's approval, sending step `step` of `steps`, being recorded. */
@@ -35,8 +35,8 @@ const toBase64 = (bytes: Uint8Array) => btoa(Array.from(bytes, (b) => String.fro
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Carries out an action in the owner's own wallet (self-custody): Binwise builds the transactions, the
- * wallet signs them all in one approval, Binwise sends them one after the other (each once the one before
+ * Carries out an action in the owner's own wallet (self-custody): Kovra builds the transactions, the
+ * wallet signs them all in one approval, Kovra sends them one after the other (each once the one before
  * landed, since the next one uses what it produced), then records what Solana shows. Nothing moves
  * without the approval, and everything stays in the owner's wallet. Returns what was recorded.
  *
@@ -44,7 +44,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * would leave, say, a swap without its LP.
  */
 export async function runWalletPlan(o: {
-  client: BinwiseClient;
+  client: KovraClient;
   owner: string;
   wallet: Wallet;
   action: WalletAction;
@@ -132,7 +132,7 @@ export async function runWalletPlan(o: {
  * it was a swap (no position opened yet). What it spends: its budget, minus the swaps' inputs, plus their
  * guaranteed outputs (a little more usually arrives and stays in the wallet).
  */
-function resumeAfterSwaps(action: WalletAction, plan: Awaited<ReturnType<BinwiseClient['walletPrepare']>>, i: number): WalletAction | undefined {
+function resumeAfterSwaps(action: WalletAction, plan: Awaited<ReturnType<KovraClient['walletPrepare']>>, i: number): WalletAction | undefined {
   if (action.action !== 'open' || !plan.budget || !plan.swaps || !plan.steps.slice(0, i).every((s) => s.kind === 'swap')) return undefined;
   const hold: Record<string, number> = { [SOL]: plan.budget.sol, ...plan.budget.use };
   for (const sw of plan.swaps.slice(0, i)) {
@@ -148,7 +148,7 @@ function resumeAfterSwaps(action: WalletAction, plan: Awaited<ReturnType<Binwise
  * Records plans an earlier visit approved but didn't get to record (closed tab, lost connection). Returns
  * the titles of what it recorded now. Quiet: anything it can't record yet stays for the next time.
  */
-export async function finishPendingPlans(client: BinwiseClient): Promise<string[]> {
+export async function finishPendingPlans(client: KovraClient): Promise<string[]> {
   const pending = await client.walletPending().catch(() => []);
   const titles: string[] = [];
   for (const p of pending) {

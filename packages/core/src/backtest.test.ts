@@ -41,7 +41,7 @@ describe('runBacktest', () => {
   it('stays out of a steady downtrend instead of farming a falling token', () => {
     const r = runBacktest({ pool, strategy: DEFAULT_STRATEGY }, bars(24 * 40, -0.002, 0.003, 600_000, 7));
     expect(r.stats.deployedPct).toBeLessThan(10);
-    expect(r.stats.binwiseUsd).toBeGreaterThanOrEqual(r.stats.holdUsd * 0.99);
+    expect(r.stats.agentUsd).toBeGreaterThanOrEqual(r.stats.holdUsd * 0.99);
   });
 
   it('beats an unmanaged LP when volume is high', () => {

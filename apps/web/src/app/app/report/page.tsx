@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, type ReactNode } from 'react';
-import type { BacktestSummary } from '@binwise/core';
+import type { BacktestSummary } from '@kovra/core';
 import { useAppData } from '@/lib/store';
 
 /** Minimal Markdown for the backtest report: headings, lists, bold, tables, paragraphs. */
@@ -71,7 +71,7 @@ export default function ReportPage() {
           <p className="muted">Loading…</p>
         ) : r === null ? (
           <p className="muted">
-            No backtest yet. Run <code>pnpm --filter @binwise/agent backtest</code> on the server; the report shows up here.
+            No backtest yet. Run <code>pnpm --filter @kovra/agent backtest</code> on the server; the report shows up here.
           </p>
         ) : (
           <>

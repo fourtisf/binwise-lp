@@ -1,4 +1,4 @@
-import { fetchJson } from '@binwise/chain';
+import { fetchJson } from '@kovra/chain';
 
 /**
  * Minimal Telegram Bot API client (https://core.telegram.org/bots/api): long polling with

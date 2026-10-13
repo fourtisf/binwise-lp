@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BRAND } from '@binwise/core';
+import { BRAND } from '@kovra/core';
 import { DEFAULT_BACKTEST, runPoolBacktests } from './backtest';
 import { FakeMeteora, asMeteora } from './test-helpers';
 

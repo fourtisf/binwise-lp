@@ -1,22 +1,22 @@
 {
-  "name": "binwise",
+  "name": "kovra",
   "private": true,
   "packageManager": "pnpm@10.28.0",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "dev": "pnpm --parallel --filter @binwise/web --filter @binwise/api dev",
-    "dev:web": "pnpm --filter @binwise/web dev",
-    "dev:api": "pnpm --filter @binwise/api dev",
+    "dev": "pnpm --parallel --filter @kovra/web --filter @kovra/api dev",
+    "dev:web": "pnpm --filter @kovra/web dev",
+    "dev:api": "pnpm --filter @kovra/api dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
-    "lint": "pnpm --filter @binwise/web lint",
+    "lint": "pnpm --filter @kovra/web lint",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
-    "db:generate": "pnpm --filter @binwise/db generate",
-    "db:migrate": "pnpm --filter @binwise/db migrate"
+    "db:generate": "pnpm --filter @kovra/db generate",
+    "db:migrate": "pnpm --filter @kovra/db migrate"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

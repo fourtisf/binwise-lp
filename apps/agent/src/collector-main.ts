@@ -1,5 +1,5 @@
-import { JupiterClient, MeteoraClient, activeBinLiquidityUsd, makeConnection, metadataCheck, rpcConcentrationCheck, type HolderCheck } from '@binwise/chain';
-import { activeParams, getDb } from '@binwise/db';
+import { JupiterClient, MeteoraClient, activeBinLiquidityUsd, makeConnection, metadataCheck, rpcConcentrationCheck, type HolderCheck } from '@kovra/chain';
+import { activeParams, getDb } from '@kovra/db';
 import { collectOnce, prune } from './collector';
 
 /** Data collector (PM2): pool snapshots every minute into Postgres. */

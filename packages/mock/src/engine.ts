@@ -18,7 +18,7 @@ import {
   type VaultLive,
   type VaultMode,
   type VaultOverview,
-} from '@binwise/core';
+} from '@kovra/core';
 import { DEMO_PAIRS, POOLS, POSITIONS, TOKENS, fmtMcap, pairName, poolDetail, poolRow, type MockPosition } from './data';
 import { PriceSim } from './price-sim';
 import { gauss, rng, walk } from './random';

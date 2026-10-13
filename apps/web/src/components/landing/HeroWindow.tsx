@@ -1,8 +1,8 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { BRAND } from '@binwise/core/brand';
-import type { DemoPair, DemoStats } from '@binwise/core';
+import { BRAND } from '@kovra/core/brand';
+import type { DemoPair, DemoStats } from '@kovra/core';
 import { getDemoSource, type DemoSource } from '@/lib/api/demo';
 import { emitDemo } from '@/lib/demo-bus';
 import { LiveChart } from '@/lib/charts/LiveChart';

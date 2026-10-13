@@ -1,7 +1,7 @@
 'use client';
 
-import { BRAND } from '@binwise/core/brand';
-import { STRATEGY_LIMITS, STRATEGY_PRESETS, type RiskProfile, type StrategySettings, type StrategyToggles } from '@binwise/core';
+import { BRAND } from '@kovra/core/brand';
+import { STRATEGY_LIMITS, STRATEGY_PRESETS, type RiskProfile, type StrategySettings, type StrategyToggles } from '@kovra/core';
 import { Switch } from '@/components/Switch';
 import { fmt, fmtM, usd } from '@/lib/format';
 import { BOT_URL } from '@/lib/site';

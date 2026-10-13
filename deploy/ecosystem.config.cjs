@@ -22,11 +22,11 @@ const app = (name, dir, args, mem) => ({
 
 module.exports = {
   apps: [
-    { ...app('binwise-web', 'apps/web', 'start', '600M'), env: { NODE_ENV: 'production', PORT: webPort } },
-    app('binwise-api', 'apps/api', 'start', '500M'),
+    { ...app('kovra-web', 'apps/web', 'start', '600M'), env: { NODE_ENV: 'production', PORT: webPort } },
+    app('kovra-api', 'apps/api', 'start', '500M'),
     // Pool snapshots every minute (build step 3)
-    app('binwise-collector', 'apps/agent', 'collector', '600M'),
+    app('kovra-collector', 'apps/agent', 'collector', '600M'),
     // Agent loop for every vault, price ticks, Telegram (build step 5)
-    app('binwise-agent', 'apps/agent', 'agent', '800M'),
+    app('kovra-agent', 'apps/agent', 'agent', '800M'),
   ],
 };

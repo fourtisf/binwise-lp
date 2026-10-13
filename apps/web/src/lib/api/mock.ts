@@ -1,6 +1,6 @@
-import { MockEngine, MockError, startDemo, TOKENS } from '@binwise/mock';
-import type { DemoPair } from '@binwise/core';
-import { ApiError, type BinwiseClient } from './client';
+import { MockEngine, MockError, startDemo, TOKENS } from '@kovra/mock';
+import type { DemoPair } from '@kovra/core';
+import { ApiError, type KovraClient } from './client';
 
 export const MOCK_DEMO_PAIRS: DemoPair[] = [
   { id: 'jup-sol', pair: 'JUP / SOL', tokenA: TOKENS.JUP, tokenB: TOKENS.SOL, shape: 'spot' },
@@ -9,7 +9,7 @@ export const MOCK_DEMO_PAIRS: DemoPair[] = [
 ];
 
 /** In-browser simulated vault. Each visitor gets their own. */
-export function createMockClient(): BinwiseClient {
+export function createMockClient(): KovraClient {
   const engine = new MockEngine().start();
   const call = <T>(fn: () => T): Promise<T> => {
     try {

@@ -22,7 +22,7 @@ import {
 } from '@solana/spl-token';
 import BN from 'bn.js';
 import bs58 from 'bs58';
-import { DEFAULT_COSTS, composition, openPosition, sideOfRange, type CostModel, type LiquidityShape } from '@binwise/core';
+import { DEFAULT_COSTS, composition, openPosition, sideOfRange, type CostModel, type LiquidityShape } from '@kovra/core';
 import { TX_COUNT, type ActionResult, type Executor, type Holdings, type MarkResult, type OpenRequest, type OpenResult, type PoolCtx, type PositionRef } from './executor';
 import { JitoClient } from './jito';
 import { parseDeposit } from './deposits';

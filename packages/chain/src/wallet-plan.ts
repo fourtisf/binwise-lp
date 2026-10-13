@@ -21,7 +21,7 @@ import {
   getAssociatedTokenAddressSync,
 } from '@solana/spl-token';
 import BN from 'bn.js';
-import { DEFAULT_COSTS, composition, openPosition, type CostModel, type CustomRange, type LiquidityShape, type LiquiditySide } from '@binwise/core';
+import { DEFAULT_COSTS, composition, openPosition, type CostModel, type CustomRange, type LiquidityShape, type LiquiditySide } from '@kovra/core';
 import type { ActionResult, Executor, Holdings, MarkResult, OpenResult, PoolCtx, PositionRef } from './executor';
 import { withRetry } from './http';
 import type { JupiterClient, JupiterInstruction, JupiterQuote } from './jupiter';
@@ -31,7 +31,7 @@ import { priorityFeeMicroLamports } from './rpc';
 import { DLMM, dlmmClass, sdk } from './sdk';
 
 /**
- * Self-custody: Binwise holds no key. For each action it builds the transactions the owner's own wallet
+ * Self-custody: Kovra holds no key. For each action it builds the transactions the owner's own wallet
  * signs (any Wallet Standard wallet), with the owner as fee payer and signer: Jupiter swaps, and Meteora
  * DLMM open / add / remove / claim. A new position's account is the only other signer; its key is made
  * here, signs that one transaction and is thrown away (the account never holds funds of its own).
@@ -714,7 +714,7 @@ export class WalletReader implements Executor {
     return markPosition(this.d.conn, p, pool);
   }
 
-  /** DLMM positions the owner's wallet holds, with amounts (raw), for adopting ones opened through Binwise. */
+  /** DLMM positions the owner's wallet holds, with amounts (raw), for adopting ones opened through Kovra. */
   async listPositions() {
     const all = await withRetry(() => dlmmClass().getAllLbPairPositionsByUser(this.d.conn, new PublicKey(this.d.owner)), 2, 'getAllLbPairPositionsByUser');
     const out: { address: string; pool: string; lowerBin: number; upperBin: number; amountX: string; amountY: string }[] = [];

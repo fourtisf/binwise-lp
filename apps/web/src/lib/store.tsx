@@ -10,7 +10,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { BRAND } from '@binwise/core/brand';
+import { BRAND } from '@kovra/core/brand';
 import type {
   CustomRange,
   CycleState,
@@ -26,8 +26,8 @@ import type {
   StreamEvent,
   VaultMode,
   VaultOverview,
-} from '@binwise/core';
-import { ApiError, getClient, type BinwiseClient, type WalletAction } from './api/client';
+} from '@kovra/core';
+import { ApiError, getClient, type KovraClient, type WalletAction } from './api/client';
 import { usd } from './format';
 import { LIVE_DEFAULT, WALLET_LOGIN } from './site';
 import { useUi } from './ui';
@@ -47,7 +47,7 @@ export interface WalletTask {
 }
 
 interface AppData {
-  client: BinwiseClient | null;
+  client: KovraClient | null;
   /** Signed-in user (API mode only) */
   me: Me | null;
   /** True once we know which vault is shown */
@@ -85,7 +85,7 @@ interface AppData {
   inWallet: (action: WalletAction, title: string, wallet?: Wallet) => Promise<boolean>;
   /** Stops waiting for the wallet (before its approval), or hides the card (after) */
   stopWalletTask: () => void;
-  /** A vault wallet from before self-custody, once empty: Binwise deletes its key; the vault then works from the owner's wallet */
+  /** A vault wallet from before self-custody, once empty: Kovra deletes its key; the vault then works from the owner's wallet */
   releaseCustody: () => void;
   /** Re-reads who is signed in and which vault to show */
   reload: () => void;
@@ -103,7 +103,7 @@ const errorText = (e: unknown) => (e instanceof ApiError ? e.message : 'Somethin
 /** Loads the vault, keeps it live from the stream, and exposes the actions the app needs. */
 export function AppDataProvider({ children }: { children: ReactNode }) {
   const { toast, openConnect, openConfirmLive } = useUi();
-  const [client, setClient] = useState<BinwiseClient | null>(null);
+  const [client, setClient] = useState<KovraClient | null>(null);
   const [me, setMe] = useState<Me | null>(null);
   const [ready, setReady] = useState(false);
   const [empty, setEmpty] = useState(false);
@@ -130,14 +130,14 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     else if (c.step >= 4 && c.decision) setDecisionText(c.decision.text);
   }, []);
 
-  const reloadPositions = useCallback(async (c: BinwiseClient) => {
+  const reloadPositions = useCallback(async (c: KovraClient) => {
     const ps = await c.positions();
     ps.forEach((p) => seriesRef.current.set(p.id, structuredClone(p.chart)));
     setPositions(ps);
   }, []);
 
   const onEvent = useCallback(
-    (e: StreamEvent, c: BinwiseClient) => {
+    (e: StreamEvent, c: KovraClient) => {
       switch (e.type) {
         case 'tick': {
           const t = e.tick;

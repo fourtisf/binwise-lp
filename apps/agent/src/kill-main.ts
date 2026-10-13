@@ -1,6 +1,6 @@
 import { KEYS, makeRedis } from './redis';
 
-/** Global kill switch: `pnpm --filter @binwise/agent kill on|off|status` */
+/** Global kill switch: `pnpm --filter @kovra/agent kill on|off|status` */
 const arg = process.argv[2] ?? 'status';
 const r = makeRedis();
 if (arg === 'on') await r.set(KEYS.kill, '1');

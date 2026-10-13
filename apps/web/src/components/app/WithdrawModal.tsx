@@ -2,7 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
-import type { Withdrawable } from '@binwise/core';
+import type { Withdrawable } from '@kovra/core';
 import { ApiError } from '@/lib/api/client';
 import { usd } from '@/lib/format';
 import { useAppData } from '@/lib/store';

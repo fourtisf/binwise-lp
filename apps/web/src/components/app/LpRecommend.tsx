@@ -1,4 +1,4 @@
-import type { LiquidityShape, PoolDetail } from '@binwise/core';
+import type { LiquidityShape, PoolDetail } from '@kovra/core';
 
 const NAME: Record<LiquidityShape, string> = { spot: 'Spot', curve: 'Curve', bidask: 'Bid-Ask' };
 

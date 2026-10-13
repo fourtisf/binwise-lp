@@ -4,7 +4,7 @@ import { useEffect } from 'react';
 
 /** Last resort for a crash outside the app's own error boundaries: the real message, and a way back. */
 export default function AppError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
-  useEffect(() => console.error('[binwise] page crashed:', error), [error]);
+  useEffect(() => console.error('[kovra] page crashed:', error), [error]);
   return (
     <div style={{ minHeight: '100dvh', display: 'grid', placeItems: 'center', padding: 16 }}>
       <div className="verdict stop" role="alert" style={{ maxWidth: 520 }}>

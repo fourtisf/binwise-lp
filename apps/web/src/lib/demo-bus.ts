@@ -1,4 +1,4 @@
-import type { DemoStats, LiquidityShape } from '@binwise/core';
+import type { DemoStats, LiquidityShape } from '@kovra/core';
 
 /** What the landing page's live demo window shows right now; the hero ring and its chips follow it. */
 export interface DemoFrame {

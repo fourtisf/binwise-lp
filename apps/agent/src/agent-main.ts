@@ -1,5 +1,5 @@
-import { JupiterClient, createAgentKey, exportAgentSecret, makeConnection, sealImportedKey, walletBalances } from '@binwise/chain';
-import { getDb, isSelfCustody } from '@binwise/db';
+import { JupiterClient, createAgentKey, exportAgentSecret, makeConnection, sealImportedKey, walletBalances } from '@kovra/chain';
+import { getDb, isSelfCustody } from '@kovra/db';
 import { CYCLE_MS, runApprovedProposal, runManualAction, runManualDeploy, runVaultCycle, type ManualResult } from './agent';
 import { BOT_COMMANDS, makeBot, resultMessage, type ManualRequest } from './bot';
 import { KEYS, makeRedis, publish, withVaultLock } from './redis';
@@ -133,9 +133,9 @@ if (telegram) {
     },
     deleteMessage: (chatId, id) => telegram.deleteMessage(chatId, id),
     state: {
-      get: (chatId) => redis.get(`binwise:tg:state:${chatId}`),
-      set: async (chatId, value, ttl) => void (await redis.set(`binwise:tg:state:${chatId}`, value, 'EX', ttl)),
-      del: async (chatId) => void (await redis.del(`binwise:tg:state:${chatId}`)),
+      get: (chatId) => redis.get(`kovra:tg:state:${chatId}`),
+      set: async (chatId, value, ttl) => void (await redis.set(`kovra:tg:state:${chatId}`, value, 'EX', ttl)),
+      del: async (chatId) => void (await redis.del(`kovra:tg:state:${chatId}`)),
     },
   });
   telegram.setCommands(BOT_COMMANDS).catch((e) => console.error(`[telegram] ${(e as Error).message}`));

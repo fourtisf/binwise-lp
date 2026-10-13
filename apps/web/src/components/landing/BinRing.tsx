@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { LiquidityShape } from '@binwise/core';
+import type { LiquidityShape } from '@kovra/core';
 import { onDemo, type DemoFrame } from '@/lib/demo-bus';
 import { pct, prefersReducedMotion } from '@/lib/format';
 import { token } from '@/lib/theme';

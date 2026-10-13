@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { BRAND } from '@binwise/core/brand';
+import { BRAND } from '@kovra/core/brand';
 import { LIVE_DEFAULT } from '@/lib/site';
 
 const FAQ: [string, string][] = [

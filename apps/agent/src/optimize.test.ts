@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BRAND, DEFAULT_PARAMS, type OptimizeResult } from '@binwise/core';
+import { BRAND, DEFAULT_PARAMS, type OptimizeResult } from '@kovra/core';
 import { renderOptimizeReport, searchable } from './optimize';
 
 const score = (test: number, params = DEFAULT_PARAMS) => ({ params, train: test + 1, test, testNetVsHoldPct: test, testBeatHold: 3 });

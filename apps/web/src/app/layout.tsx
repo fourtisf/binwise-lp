@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
-import { BRAND } from '@binwise/core/brand';
+import { BRAND } from '@kovra/core/brand';
 import { Sprite } from '@/components/Sprite';
 import { Spotlight } from '@/components/Spotlight';
 import { SITE_URL } from '@/lib/site';

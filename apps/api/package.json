@@ -1,5 +1,5 @@
 {
-  "name": "@binwise/api",
+  "name": "@kovra/api",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -10,10 +10,10 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@binwise/chain": "workspace:*",
-    "@binwise/core": "workspace:*",
-    "@binwise/db": "workspace:*",
-    "@binwise/mock": "workspace:*",
+    "@kovra/chain": "workspace:*",
+    "@kovra/core": "workspace:*",
+    "@kovra/db": "workspace:*",
+    "@kovra/mock": "workspace:*",
     "@fastify/cookie": "11.1.2",
     "@fastify/cors": "11.3.1",
     "@fastify/rate-limit": "11.2.0",

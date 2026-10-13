@@ -21,7 +21,7 @@ import type {
   VaultMode,
   VaultOverview,
   Withdrawable,
-} from '@binwise/core';
+} from '@kovra/core';
 
 export class ApiError extends Error {
   constructor(
@@ -70,7 +70,7 @@ export interface DecisionFilter {
 }
 
 /** Everything the website reads or changes. Matches the API routes in CLAUDE.md §5. */
-export interface BinwiseClient {
+export interface KovraClient {
   /** 'mock' runs the simulated vault in the browser; 'http' talks to the real API */
   readonly kind: 'mock' | 'http';
   readonly vaultId: string;
@@ -127,7 +127,7 @@ export interface BinwiseClient {
   depositLive(signature: string): Promise<VaultOverview>;
   /** Live: record transfers the owner sent to the vault address by hand (found on-chain); what it recorded now, by mint */
   depositScan(): Promise<{ recorded: Record<string, number> }>;
-  /** A vault wallet from before self-custody, once empty: Binwise deletes its key and the vault works from the owner's wallet */
+  /** A vault wallet from before self-custody, once empty: Kovra deletes its key and the vault works from the owner's wallet */
   releaseCustody(): Promise<VaultOverview>;
   /** Live: what can be withdrawn to the owner's own wallet now, by token */
   withdrawable(): Promise<Withdrawable>;
@@ -150,13 +150,13 @@ export interface BinwiseClient {
 const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? '').replace(/\/$/, '');
 const WS_URL = (process.env.NEXT_PUBLIC_WS_URL ?? '').replace(/\/$/, '');
 
-let instance: Promise<BinwiseClient> | null = null;
+let instance: Promise<KovraClient> | null = null;
 
 /**
  * Real API when NEXT_PUBLIC_API_URL is set; otherwise the simulated paper
  * vault runs in the browser so the site works with no backend.
  */
-export function getClient(): Promise<BinwiseClient> {
+export function getClient(): Promise<KovraClient> {
   if (!instance)
     instance = API_URL
       ? import('./http').then((m) => m.createHttpClient(API_URL, WS_URL || API_URL.replace(/^http/, 'ws')))

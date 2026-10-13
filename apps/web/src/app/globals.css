@@ -1,5 +1,5 @@
 /* Kovra design system, direction B "cinematic" (design/kovra-direction-b.html). Copy, data and interactions come from
-   design/binwise-prototype.html (routes replace its #app/#landing toggling).
+   design/original-prototype.html (routes replace its #app/#landing toggling).
    Colour and type are the Kovra theme: premium black, titanium accent, Space Grotesk + Inter.
    Every colour is a token below; the SVG charts read the same tokens (lib/theme.ts). */
 :root{

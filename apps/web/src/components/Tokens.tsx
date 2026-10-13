@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import type { TokenRef } from '@binwise/core';
+import type { TokenRef } from '@kovra/core';
 
 type TokLike = Pick<TokenRef, 'letter' | 'color'> & Partial<Pick<TokenRef, 'logo' | 'symbol' | 'mint'>>;
 

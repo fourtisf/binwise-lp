@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createVault, ensureUser, getDb } from '@binwise/db';
-import { PaperExecutor, SOL_MINT, createAgentKey, exportAgentSecret, sealImportedKey, type Holdings } from '@binwise/chain';
+import { createVault, ensureUser, getDb } from '@kovra/db';
+import { PaperExecutor, SOL_MINT, createAgentKey, exportAgentSecret, sealImportedKey, type Holdings } from '@kovra/chain';
 import { Keypair } from '@solana/web3.js';
 import { randomBytes } from 'node:crypto';
-import { BRAND } from '@binwise/core';
+import { BRAND } from '@kovra/core';
 import { collectOnce, DEFAULT_COLLECTOR } from './collector';
 import { runManualAction, runManualDeploy, runVaultCycle, type AgentDeps, type VaultWithStrategy } from './agent';
 import { makeBot, memoryChatState, proposalMessage, resultMessage, type ManualRequest } from './bot';
@@ -30,7 +30,7 @@ const freshKey = () => {
 let deleted: number[];
 let chatState = memoryChatState();
 let liveOk = true;
-/** Production: Binwise keeps no wallets any more */
+/** Production: Kovra keeps no wallets any more */
 let keysClosed = false;
 let walletBalances: Record<string, number> = {};
 const tg: TelegramApi = {
@@ -46,7 +46,7 @@ const bot = () =>
     db,
     tg,
     enqueue: async (_v, r) => void queue.push(r),
-    appUrl: 'https://binwise.org',
+    appUrl: 'https://kovra.live',
     now: () => now,
     balances: async () => walletBalances,
     newWallet: () => {
@@ -88,8 +88,8 @@ const vault = async (): Promise<VaultWithStrategy> => db.vault.findFirstOrThrow(
 beforeAll(async () => {
   const { execSync } = await import('node:child_process');
   const dbName = new URL(process.env.DATABASE_URL!).pathname.slice(1);
-  execSync(`psql -h localhost -U binwise -d postgres -c "create database ${dbName}" 2>/dev/null || true`, { stdio: 'ignore' });
-  execSync('pnpm --filter @binwise/db exec prisma migrate deploy', { stdio: 'ignore', env: { ...process.env } });
+  execSync(`psql -h localhost -U kovra -d postgres -c "create database ${dbName}" 2>/dev/null || true`, { stdio: 'ignore' });
+  execSync('pnpm --filter @kovra/db exec prisma migrate deploy', { stdio: 'ignore', env: { ...process.env } });
 });
 
 beforeEach(async () => {
@@ -292,8 +292,8 @@ describe('telegram bot', () => {
     expect(msg.text).toMatch(/Approval needed/);
     expect(msg.text).toMatch(/Expires in 60 min/);
     // Self-custody: Approve opens the website, where the owner's wallet signs.
-    const own = proposalMessage(p, now, 'https://binwise.org/app');
-    expect(own.keyboard[0][0]).toEqual({ text: '✍️ Approve in wallet', url: 'https://binwise.org/app' });
+    const own = proposalMessage(p, now, 'https://kovra.live/app');
+    expect(own.keyboard[0][0]).toEqual({ text: '✍️ Approve in wallet', url: 'https://kovra.live/app' });
     expect(own.text).toMatch(/your wallet signs it/);
     await press('apv');
     expect(last().text).toMatch(/Waiting for your approval/);
@@ -423,7 +423,7 @@ describe('telegram bot', () => {
       holdings: async () => ({ [USDC]: 50 }),
       withdrawableSol: async () => 1.999,
       withdraw: async (mint, amount, key) => {
-        if (used.has(key)) throw new (await import('@binwise/chain')).DuplicateAction('dup');
+        if (used.has(key)) throw new (await import('@kovra/chain')).DuplicateAction('dup');
         used.add(key);
         calls.push({ mint, amount, to, key });
         return 'SIG';
@@ -544,7 +544,7 @@ describe('telegram bot', () => {
   });
 
   it('keeps no new wallets once funds stay in owners\' wallets, and moves a wallet made here into the owner\'s app', async () => {
-    // Made here earlier, while Binwise still kept wallets.
+    // Made here earlier, while Kovra still kept wallets.
     await press('cw');
     walletBalances = { [SOL_MINT]: 1 };
     await press('cwx');

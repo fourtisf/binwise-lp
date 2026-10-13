@@ -1,5 +1,5 @@
 {
-  "name": "@binwise/db",
+  "name": "@kovra/db",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -17,7 +17,7 @@
     "typecheck": "prisma generate && tsc --noEmit"
   },
   "dependencies": {
-    "@binwise/core": "workspace:*",
+    "@kovra/core": "workspace:*",
     "@prisma/adapter-pg": "7.10.0",
     "@prisma/client": "7.10.0",
     "dotenv": "^16.4.7"

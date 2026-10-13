@@ -1,6 +1,6 @@
-import { JupiterClient } from '@binwise/chain';
-import type { StreamEvent } from '@binwise/core';
-import type { PrismaClient } from '@binwise/db';
+import { JupiterClient } from '@kovra/chain';
+import type { StreamEvent } from '@kovra/core';
+import type { PrismaClient } from '@kovra/db';
 import { rangePrices } from './agent';
 
 /**

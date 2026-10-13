@@ -1,8 +1,8 @@
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import Fastify, { type FastifyInstance } from 'fastify';
-import type { DecisionType, PerformanceRange, StrategySettings, VaultMode } from '@binwise/core';
-import { DEMO_IDS, MockEngine, MockError, startDemo } from '@binwise/mock';
+import type { DecisionType, PerformanceRange, StrategySettings, VaultMode } from '@kovra/core';
+import { DEMO_IDS, MockEngine, MockError, startDemo } from '@kovra/mock';
 
 export interface AppOptions {
   engine: MockEngine;

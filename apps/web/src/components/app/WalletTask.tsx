@@ -1,6 +1,6 @@
 'use client';
 
-import { BRAND } from '@binwise/core/brand';
+import { BRAND } from '@kovra/core/brand';
 import { useAppData } from '@/lib/store';
 import { WalletWaiting } from './WalletWait';
 

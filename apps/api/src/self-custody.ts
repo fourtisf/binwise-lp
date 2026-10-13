@@ -11,7 +11,7 @@ import {
   type LiquidityShape,
   type LiquiditySide,
   type StreamEvent,
-} from '@binwise/core';
+} from '@kovra/core';
 import {
   ALLOWED_PROGRAMS,
   PolicyViolation,
@@ -29,8 +29,8 @@ import {
   type SwapCheck,
   type WalletPlanDeps,
   type WalletStep,
-} from '@binwise/chain';
-import { isSelfCustody, shrinkDeposits, type Decision, type PrismaClient, type Strategy, type User, type Vault } from '@binwise/db';
+} from '@kovra/chain';
+import { isSelfCustody, shrinkDeposits, type Decision, type PrismaClient, type Strategy, type User, type Vault } from '@kovra/db';
 import { ApiError } from './errors';
 
 const SOL = 'So11111111111111111111111111111111111111112';
@@ -41,7 +41,7 @@ const PLAN_TTL_S = 6 * 3600;
 /** After this, none of a plan's transactions can land any more (a blockhash lives about a minute). */
 const PLAN_LANDS_MS = 3 * 60_000;
 /**
- * Programs a signed transaction may call on its way through the relay: Binwise's own, plus Lighthouse, the guard
+ * Programs a signed transaction may call on its way through the relay: Kovra's own, plus Lighthouse, the guard
  * program Phantom may add to a transaction when it signs (github.com/Jac0xb/lighthouse, same id on mainnet).
  */
 const RELAY_PROGRAMS = new Set([...ALLOWED_PROGRAMS, 'L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95']);
@@ -116,7 +116,7 @@ const pairOf = (p: { tokenA: string; tokenB: string }) => `${p.tokenA} / ${p.tok
 const usdText = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 /**
- * Self-custody routes: Binwise never holds the funds or a key. It prepares the transactions for an action
+ * Self-custody routes: Kovra never holds the funds or a key. It prepares the transactions for an action
  * (Add LP, close, claim, an approved proposal), the owner's own wallet signs them all in one approval, the
  * page sends them in order through POST /wallet/send, and POST /wallet/plans/:id/done records what the
  * chain shows happened.
@@ -401,7 +401,7 @@ export function registerSelfCustody(app: FastifyInstance, c: SelfCustodyCtx) {
     }
     if (!tx.message.staticAccountKeys[0]?.equals(new PublicKey(v.user.wallet))) throw new ApiError(400, 'bad_tx', 'Only transactions paid by your own wallet can be sent here.');
     if (tx.signatures[0].every((b) => b === 0)) throw new ApiError(400, 'unsigned', 'Your wallet did not sign this transaction. Nothing was sent.');
-    // Only the programs Binwise's own transactions use (programs always sit in the static keys, never in lookup tables).
+    // Only the programs Kovra's own transactions use (programs always sit in the static keys, never in lookup tables).
     const keys = tx.message.staticAccountKeys;
     if (tx.message.compiledInstructions.some((ix) => !RELAY_PROGRAMS.has(keys[ix.programIdIndex]?.toBase58() ?? '')))
       throw new ApiError(400, 'bad_tx', `${BRAND} only sends its own liquidity transactions. Nothing was sent.`);

@@ -1,4 +1,4 @@
-import { BRAND } from '@binwise/core/brand';
+import { BRAND } from '@kovra/core/brand';
 import { Icon } from './Sprite';
 
 export function Logo() {

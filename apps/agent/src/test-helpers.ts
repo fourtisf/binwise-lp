@@ -1,5 +1,5 @@
-import type { MeteoraClient, MeteoraOhlcv, MeteoraPool, MeteoraTimeframe } from '@binwise/chain';
-import { getDb } from '@binwise/db';
+import type { MeteoraClient, MeteoraOhlcv, MeteoraPool, MeteoraTimeframe } from '@kovra/chain';
+import { getDb } from '@kovra/db';
 
 export const JUP = 'JUPmint1111111111111111111111111111111111111';
 export const USDC = 'USDCmint111111111111111111111111111111111111';

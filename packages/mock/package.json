@@ -1,5 +1,5 @@
 {
-  "name": "@binwise/mock",
+  "name": "@kovra/mock",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -14,7 +14,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@binwise/core": "workspace:*"
+    "@kovra/core": "workspace:*"
   },
   "devDependencies": {
     "vitest": "3.2.7"

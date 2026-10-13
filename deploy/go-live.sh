@@ -2,7 +2,7 @@
 # Kovra: switch a running install to Solana mainnet (live trading) and turn on the Telegram bot.
 # Run as root on the server, after deploy/install.sh:
 #
-#   bash /home/binwise/binwise/deploy/go-live.sh
+#   bash /home/kovra/kovra/deploy/go-live.sh
 #
 # It asks only for keys that aren't saved yet (they are typed here and stored only in the server's .env),
 # checks that each one works, updates the code, rebuilds and restarts. Safe to run again; to change keys
@@ -12,8 +12,8 @@ set -Eeuo pipefail
 # may replace this file while it runs.
 {
 
-APP_USER="binwise"
-APP_DIR="/home/${APP_USER}/binwise"
+APP_USER="kovra"
+APP_DIR="/home/${APP_USER}/kovra"
 ENV_FILE="${APP_DIR}/.env"
 BRANCH="${BRANCH:-main}"
 
@@ -47,7 +47,7 @@ sudo -u "$APP_USER" -H git -C "$APP_DIR" fetch -q origin "+refs/heads/${BRANCH}:
 sudo -u "$APP_USER" -H git -C "$APP_DIR" checkout -q -f -B "$BRANCH" "origin/$BRANCH"
 ok "Kode: $(sudo -u "$APP_USER" -H git -C "$APP_DIR" log -1 --format='%h %s')"
 as_app "pnpm install --frozen-lockfile --reporter=silent"
-as_app "pnpm --filter @binwise/db migrate:deploy" >/dev/null 2>&1 || die "Migrasi database gagal: jalankan  sudo -u $APP_USER -H bash -lc 'cd ~/binwise && pnpm --filter @binwise/db migrate:deploy'  untuk melihat pesannya."
+as_app "pnpm --filter @kovra/db migrate:deploy" >/dev/null 2>&1 || die "Migrasi database gagal: jalankan  sudo -u $APP_USER -H bash -lc 'cd ~/kovra && pnpm --filter @kovra/db migrate:deploy'  untuk melihat pesannya."
 ok "Dependencies dan database terbaru"
 
 # ---------------------------------------------------------------- keys
@@ -179,14 +179,14 @@ ok "Live: ON · $( [[ "$limits" == 1 ]] && echo 'tanpa batas dana' || echo "bata
 
 # ---------------------------------------------------------------- build + restart
 step "Build website dan nyalakan ulang (± 3 menit)"
-as_app "pnpm --filter @binwise/web build" >/tmp/binwise-web-build.log 2>&1 || { tail -20 /tmp/binwise-web-build.log; die "Build website gagal."; }
+as_app "pnpm --filter @kovra/web build" >/tmp/kovra-web-build.log 2>&1 || { tail -20 /tmp/kovra-web-build.log; die "Build website gagal."; }
 ok "Website dibangun untuk mainnet"
 # Older installs: take the client address from nginx itself, not from the request.
-if [[ -f /etc/nginx/sites-available/binwise ]] && grep -q 'proxy_add_x_forwarded_for' /etc/nginx/sites-available/binwise; then
-  sed -i 's#X-Forwarded-For $proxy_add_x_forwarded_for#X-Forwarded-For $remote_addr#g' /etc/nginx/sites-available/binwise
+if [[ -f /etc/nginx/sites-available/kovra ]] && grep -q 'proxy_add_x_forwarded_for' /etc/nginx/sites-available/kovra; then
+  sed -i 's#X-Forwarded-For $proxy_add_x_forwarded_for#X-Forwarded-For $remote_addr#g' /etc/nginx/sites-available/kovra
   nginx -t -q && systemctl reload nginx && ok "Nginx diperbarui"
 fi
-if as_app "pm2 describe binwise-api" >/dev/null 2>&1; then as_app "pm2 restart all --update-env" >/dev/null; else as_app "pm2 start deploy/ecosystem.config.cjs" >/dev/null; fi
+if as_app "pm2 describe kovra-api" >/dev/null 2>&1; then as_app "pm2 restart all --update-env" >/dev/null; else as_app "pm2 start deploy/ecosystem.config.cjs" >/dev/null; fi
 as_app "pm2 save" >/dev/null
 
 # ---------------------------------------------------------------- checks
@@ -198,11 +198,11 @@ for _ in $(seq 1 30); do
   [[ "$health" == *'"mode":"db"'* ]] && break
   sleep 2
 done
-[[ "$health" == *'"liveTrading":true'* ]] && ok "API: live trading aktif" || die "API belum menjawab dengan benar: ${health:-tidak ada jawaban}. Lihat: sudo -u $APP_USER pm2 logs binwise-api"
+[[ "$health" == *'"liveTrading":true'* ]] && ok "API: live trading aktif" || die "API belum menjawab dengan benar: ${health:-tidak ada jawaban}. Lihat: sudo -u $APP_USER pm2 logs kovra-api"
 if [[ -n "$tg" ]]; then
   sleep 5
-  logs=$(as_app "pm2 logs binwise-agent --lines 60 --nostream" 2>/dev/null || true)
-  [[ "$logs" == *'[telegram] bot running'* ]] && ok "Bot Telegram berjalan (@${tg_user})" || warn "Bot belum terlihat di log. Cek: sudo -u $APP_USER pm2 logs binwise-agent"
+  logs=$(as_app "pm2 logs kovra-agent --lines 60 --nostream" 2>/dev/null || true)
+  [[ "$logs" == *'[telegram] bot running'* ]] && ok "Bot Telegram berjalan (@${tg_user})" || warn "Bot belum terlihat di log. Cek: sudo -u $APP_USER pm2 logs kovra-agent"
 fi
 as_app "pm2 ls"
 
@@ -219,7 +219,7 @@ $( [[ -n "$wallet" && -n "$tg" ]] && echo "  Website: vault lama masih Paper →
 $( [[ "$who" == 1 ]] && echo "  Setelah uji lancar, buka untuk semua orang: jalankan script ini lagi dan pilih 2." )
 
 Rem darurat (hentikan semua transaksi):
-  sudo -u ${APP_USER} -H bash -lc 'cd ~/binwise && pnpm --filter @binwise/agent kill on'
+  sudo -u ${APP_USER} -H bash -lc 'cd ~/kovra && pnpm --filter @kovra/agent kill on'
 EOF
 exit 0
 }

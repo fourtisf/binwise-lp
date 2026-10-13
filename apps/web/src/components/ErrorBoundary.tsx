@@ -31,7 +31,7 @@ export class ErrorBoundary extends Component<Props, State> {
   componentDidCatch(error: Error, info: ErrorInfo) {
     // The innermost component that failed, e.g. "AddLp", so a screenshot of the message says where.
     const where = /at (\w+)/.exec(info.componentStack ?? '')?.[1] ?? '';
-    console.error(`[binwise] ${this.props.area} crashed${where ? ` in ${where}` : ''}:`, error, info.componentStack);
+    console.error(`[kovra] ${this.props.area} crashed${where ? ` in ${where}` : ''}:`, error, info.componentStack);
     if (Date.now() - this.lastRetry > AUTO_RETRY_MS) {
       this.lastRetry = Date.now();
       this.setState((s) => ({ error: null, where: '', key: s.key + 1 }));

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { MeteoraPool, MeteoraToken } from '@binwise/chain';
+import type { MeteoraPool, MeteoraToken } from '@kovra/chain';
 import { bigCapPools } from './collector';
 
 const tok = (symbol: string, market_cap: number | null, is_verified = true): MeteoraToken => ({

@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BRAND } from '@binwise/core/brand';
+import { BRAND } from '@kovra/core/brand';
 import {
   binIdForPrice,
   binPrice,
@@ -13,7 +13,7 @@ import {
   type LiquidityShape,
   type PoolDetail,
   type VaultBalance,
-} from '@binwise/core';
+} from '@kovra/core';
 import { usd } from '@/lib/format';
 import { useAppData } from '@/lib/store';
 import { useUi } from '@/lib/ui';
@@ -63,7 +63,7 @@ const segBtn = { flex: 1, padding: '6px 4px' } as const;
  *
  * Self-custody (live): paid with SOL from the owner's own wallet, which approves the swaps and the new
  * position in one go; the position belongs to that wallet. Paper: from the simulated vault, by the agent.
- * A live vault whose funds Binwise still holds takes no new LP: its owner withdraws to their wallet.
+ * A live vault whose funds Kovra still holds takes no new LP: its owner withdraws to their wallet.
  */
 export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }) {
   const { client, overview, positions, deploy, selfCustody, walletTask, inWallet, releaseCustody } = useAppData();
@@ -312,7 +312,7 @@ export function AddLp({ pool: x, active }: { pool: PoolDetail; active: boolean }
         reload();
       }
     });
-  // A live vault whose funds Binwise still holds: no new LP, its owner moves the funds to their own wallet.
+  // A live vault whose funds Kovra still holds: no new LP, its owner moves the funds to their own wallet.
   const custodyClosing = overview?.mode === 'live' && !selfCustody;
 
   const disabled = selfCustody

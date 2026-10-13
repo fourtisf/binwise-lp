@@ -1,5 +1,5 @@
-import type { DemoEvent, StreamEvent } from '@binwise/core';
-import { ApiError, type BinwiseClient } from './client';
+import type { DemoEvent, StreamEvent } from '@kovra/core';
+import { ApiError, type KovraClient } from './client';
 
 /** Opens a WebSocket that reconnects with backoff until closed by the caller. */
 function socket<T>(url: string, fn: (e: T) => void): () => void {
@@ -26,7 +26,7 @@ function socket<T>(url: string, fn: (e: T) => void): () => void {
   };
 }
 
-export function createHttpClient(api: string, ws: string): BinwiseClient {
+export function createHttpClient(api: string, ws: string): KovraClient {
   let vault = '';
   const req = async <T>(path: string, init?: { method?: string; body?: unknown }): Promise<T> => {
     const res = await fetch(api + path, {

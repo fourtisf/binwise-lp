@@ -34,8 +34,8 @@ import {
   sideForRegime,
   singleSidedAfterExit,
   useSingleRebalance,
-} from '@binwise/core';
-import { SetupTooCostly, TX_COUNT, liveLimits, minPositionUsd, type Executor, type Holdings, type KillSwitch, type PoolCtx, type PositionRef } from '@binwise/chain';
+} from '@kovra/core';
+import { SetupTooCostly, TX_COUNT, liveLimits, minPositionUsd, type Executor, type Holdings, type KillSwitch, type PoolCtx, type PositionRef } from '@kovra/chain';
 import {
   activeParams,
   assessmentInput,
@@ -57,7 +57,7 @@ import {
   type Strategy,
   type Token,
   type Vault,
-} from '@binwise/db';
+} from '@kovra/db';
 
 /**
  * The agent loop (CLAUDE.md §2): Scan → Score → Check positions → Decide → Execute,
@@ -84,7 +84,7 @@ export interface AgentDeps {
   /** Claims an idempotency key; false means the action already ran */
   claimKey: (key: string) => Promise<boolean>;
   executorFor: (vault: VaultWithStrategy) => Promise<Executor>;
-  emit: (vaultId: string, e: import('@binwise/core').StreamEvent) => void;
+  emit: (vaultId: string, e: import('@kovra/core').StreamEvent) => void;
   notify?: (vault: VaultWithStrategy, text: string) => Promise<void>;
   log?: (msg: string) => void;
   now?: () => number;
@@ -199,7 +199,7 @@ const holdingsUsd = (h: Holdings, tokens: Map<string, Token>) =>
   Object.entries(h).reduce((sum, [mint, amt]) => sum + amt * (tokens.get(mint)?.priceUsd ?? 0), 0);
 
 /** Runs one full cycle for a vault. Returns the decision shown in the UI. */
-/** A live vault whose key Binwise still holds (from before self-custody): it takes no new money. */
+/** A live vault whose key Kovra still holds (from before self-custody): it takes no new money. */
 const keyHeldHere = (v: Vault) => v.mode === 'live' && v.custody === 'agent' && !!v.encSecret;
 
 export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): Promise<CycleDecision> {
@@ -316,7 +316,7 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
       // Closed on-chain already (e.g. an earlier action stopped halfway): its funds are back in the wallet.
       await db.position.update({ where: { id: p.id }, data: { status: 'closed', closedAt: new Date(now), feesUnclaimedUsd: 0 } });
       if (selfCustody) {
-        // Closed from the owner's wallet outside Binwise: what came out left the vault's view, like a withdrawal.
+        // Closed from the owner's wallet outside Kovra: what came out left the vault's view, like a withdrawal.
         const outUsd = p.valueUsd + p.feesUnclaimedUsd;
         const v = await db.vault.findUniqueOrThrow({ where: { id: vault.id } });
         await db.vault.update({ where: { id: vault.id }, data: { deposits: await shrinkDeposits(db, v.deposits as Holdings, outUsd) } });
@@ -528,7 +528,7 @@ export async function runVaultCycle(deps: AgentDeps, vault: VaultWithStrategy): 
     const live = executor.mode === 'live' ? liveLimits() : null;
     const maxPositions = Math.min(Math.max(1, Math.floor(100 / s.maxAllocPct)), live?.maxPositions ?? Infinity);
     let openCount = marked.length;
-    // A vault whose key Binwise holds takes no new LP: its owner moves the idle funds to their own wallet.
+    // A vault whose key Kovra holds takes no new LP: its owner moves the idle funds to their own wallet.
     let idleUsd = custodyClosing ? 0 : holdingsUsd(cash, tokens);
     let liveRoomUsd = live
       ? Math.min(live.maxUsd - marked.reduce((sum, x) => sum + x.pos.valueUsd, 0), live.maxTotalUsd - (await liveTotalUsd(db)))

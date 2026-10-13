@@ -13,12 +13,12 @@ import {
   type FeeModel,
   type RiskProfile,
   type StrategySettings,
-} from '@binwise/core';
-import { metadataCheck, type MeteoraClient, type MeteoraOhlcv, type MeteoraPool } from '@binwise/chain';
+} from '@kovra/core';
+import { metadataCheck, type MeteoraClient, type MeteoraOhlcv, type MeteoraPool } from '@kovra/chain';
 
 /**
  * Backtest (build step 4): replay the agent's rules over ≥30 days of Meteora
- * hourly candles for the top pools and report Binwise vs hold vs unmanaged LP, after costs.
+ * hourly candles for the top pools and report Kovra vs hold vs unmanaged LP, after costs.
  */
 
 const H = 3600;

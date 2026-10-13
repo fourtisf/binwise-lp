@@ -6,7 +6,7 @@ import type {
   ScoreComponent,
   StrategySettings,
   TokenRef,
-} from '@binwise/core';
+} from '@kovra/core';
 import { clamp, walk } from './random';
 import type { SimConfig } from './price-sim';
 

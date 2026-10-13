@@ -5,9 +5,9 @@ import bs58 from 'bs58';
 import WebSocket from 'ws';
 import { Redis } from 'ioredis';
 import type { FastifyInstance } from 'fastify';
-import { BRAND, REDIS_KEYS, DEFAULT_STRATEGY } from '@binwise/core';
+import { BRAND, REDIS_KEYS, DEFAULT_STRATEGY } from '@kovra/core';
 import { ComputeBudgetProgram, Keypair, PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
-import { createVault, ensureUser, getDb } from '@binwise/db';
+import { createVault, ensureUser, getDb } from '@kovra/db';
 import { buildDbApp } from './db-app';
 
 const db = getDb();
@@ -41,8 +41,8 @@ async function signIn(w = wallet(), remoteAddress?: string) {
 
 beforeAll(async () => {
   const dbName = new URL(process.env.DATABASE_URL!).pathname.slice(1);
-  execSync(`psql -h localhost -U binwise -d postgres -c "create database ${dbName}" 2>/dev/null || true`, { stdio: 'ignore' });
-  execSync('pnpm --filter @binwise/db exec prisma migrate deploy', { stdio: 'ignore', env: { ...process.env } });
+  execSync(`psql -h localhost -U kovra -d postgres -c "create database ${dbName}" 2>/dev/null || true`, { stdio: 'ignore' });
+  execSync('pnpm --filter @kovra/db exec prisma migrate deploy', { stdio: 'ignore', env: { ...process.env } });
   await db.$executeRawUnsafe('TRUNCATE "Tx","Decision","PositionMark","Position","VaultSnapshot","Strategy","Vault","User","Candle","PoolSnapshot","Pool","Token","BacktestRun","Proposal" CASCADE');
   await redis.flushdb();
   await db.token.createMany({
@@ -51,9 +51,9 @@ beforeAll(async () => {
       { mint: USDC, symbol: 'USDC', decimals: 6, isVerified: true, priceUsd: 1, mcapUsd: 6e10 },
     ],
   });
-  const demoUser = await ensureUser(db, 'binwise-demo-vault');
+  const demoUser = await ensureUser(db, 'kovra-demo-vault');
   demoId = (await createVault(db, demoUser.id, { name: 'Demo vault', isDemo: true, cash: { [USDC]: 10_000 } })).id;
-  app = await buildDbApp({ db, redis, sub, domain: 'test.binwise' });
+  app = await buildDbApp({ db, redis, sub, domain: 'test.kovra' });
   await app.listen({ port: 0, host: '127.0.0.1' });
 });
 
@@ -188,7 +188,7 @@ describe('vaults', () => {
     expect(res.json().error).toBe('live_disabled');
   });
 
-  it('allows live mode only for approved wallets (self-custody: no key at Binwise), and lets vault wallets withdraw even with the flag off', async () => {
+  it('allows live mode only for approved wallets (self-custody: no key at Kovra), and lets vault wallets withdraw even with the flag off', async () => {
     const owner = wallet();
     const { headers } = await signIn(owner);
     const id = (await app.inject({ url: '/me', headers })).json().vaults[0].id;
@@ -204,11 +204,11 @@ describe('vaults', () => {
       const ok = await app.inject({ method: 'POST', url: `/vaults/${id}/mode`, headers, payload: { mode: 'live', confirm: true } });
       expect(ok.statusCode).toBe(200);
       expect(ok.json()).toMatchObject({ mode: 'live', custody: 'wallet' });
-      // Self-custody: no vault wallet, no key, nothing to withdraw from Binwise.
+      // Self-custody: no vault wallet, no key, nothing to withdraw from Kovra.
       const row = await db.vault.findUniqueOrThrow({ where: { id } });
       expect([row.agentPubkey, row.encSecret]).toEqual([null, null]);
       expect((await app.inject({ method: 'POST', url: `/vaults/${id}/withdraw`, headers, payload: { token: 'SOL', amount: 1 } })).json().error).toBe('self_custody');
-      // A vault wallet from before (Binwise holds its key): turning the global flag off must not trap its funds.
+      // A vault wallet from before (Kovra holds its key): turning the global flag off must not trap its funds.
       await db.vault.update({ where: { id }, data: { custody: 'agent', agentPubkey: owner.address.split('').reverse().join(''), encSecret: new Uint8Array(8) } });
       process.env.LIVE_TRADING_ENABLED = 'false';
       const w = await app.inject({ method: 'POST', url: `/vaults/${id}/withdraw`, headers, payload: { token: 'NOPE', amount: 1 } });
@@ -270,7 +270,7 @@ describe('vaults', () => {
       const live = await signIn();
       const v = (await app.inject({ url: '/me', headers: live.headers })).json().vaults[0];
       expect(v.mode).toBe('live');
-      // Self-custody: the funds stay in the owner's wallet, Binwise holds no key.
+      // Self-custody: the funds stay in the owner's wallet, Kovra holds no key.
       const row = await db.vault.findUniqueOrThrow({ where: { id: v.id } });
       expect(row.custody).toBe('wallet');
       expect([row.agentPubkey, row.encSecret]).toEqual([null, null]);
@@ -369,7 +369,7 @@ describe('vault balance (Add LP)', () => {
       }),
     };
     const sub2 = new Redis(process.env.REDIS_URL!);
-    const liveApp = await buildDbApp({ db, redis, sub: sub2, domain: 'test.binwise', rpc: () => conn as never });
+    const liveApp = await buildDbApp({ db, redis, sub: sub2, domain: 'test.kovra', rpc: () => conn as never });
     try {
       const owner = wallet();
       const user = await ensureUser(db, owner.address);
@@ -445,7 +445,7 @@ describe('portfolio (live)', () => {
       getParsedTokenAccountsByOwner: async () => ({ value: [] }),
     };
     const sub2 = new Redis(process.env.REDIS_URL!);
-    const liveApp = await buildDbApp({ db, redis, sub: sub2, domain: 'test.binwise', rpc: () => conn as never });
+    const liveApp = await buildDbApp({ db, redis, sub: sub2, domain: 'test.kovra', rpc: () => conn as never });
     try {
       const user = await ensureUser(db, owner.address);
       const v = await createVault(db, user.id, { live: { agentPubkey: agent, encSecret: new Uint8Array(8) } });
@@ -507,7 +507,7 @@ describe('portfolio tokens', () => {
       },
     };
     const sub2 = new Redis(process.env.REDIS_URL!);
-    const liveApp = await buildDbApp({ db, redis, sub: sub2, domain: 'test.binwise', rpc: () => conn as never, jupiter });
+    const liveApp = await buildDbApp({ db, redis, sub: sub2, domain: 'test.kovra', rpc: () => conn as never, jupiter });
     try {
       const user = await ensureUser(db, owner.address);
       const v = await createVault(db, user.id, { live: { agentPubkey: agent, encSecret: new Uint8Array(8) } });
@@ -578,7 +578,7 @@ describe('add LP by hand: options and funding from the wallet', () => {
     expect((await app.inject({ method: 'POST', url: `/vaults/${id}/deploy`, headers, payload: { poolId: 'PL1', usd: 50, range: { below: 1.5, above: 2 } } })).statusCode).toBe(400);
   });
 
-  it('takes no new money into a vault Binwise holds the key for: the drawer still shows balances, new LP is refused', async () => {
+  it('takes no new money into a vault Kovra holds the key for: the drawer still shows balances, new LP is refused', async () => {
     const owner = wallet();
     const agent = wallet().address;
     const conn = {
@@ -586,7 +586,7 @@ describe('add LP by hand: options and funding from the wallet', () => {
       getParsedTokenAccountsByOwner: async () => ({ value: [] }),
     };
     const sub2 = new Redis(process.env.REDIS_URL!);
-    const liveApp = await buildDbApp({ db, redis, sub: sub2, domain: 'test.binwise', rpc: () => conn as never });
+    const liveApp = await buildDbApp({ db, redis, sub: sub2, domain: 'test.kovra', rpc: () => conn as never });
     try {
       const user = await ensureUser(db, owner.address);
       const v = await createVault(db, user.id, { live: { agentPubkey: agent, encSecret: new Uint8Array(8) } });
@@ -630,7 +630,7 @@ describe('add LP by hand: options and funding from the wallet', () => {
       getParsedTransaction: async (sig: string) => onChain[sig]?.parsed ?? null,
     };
     const sub2 = new Redis(process.env.REDIS_URL!);
-    const liveApp = await buildDbApp({ db, redis, sub: sub2, domain: 'test.binwise', rpc: () => conn as never });
+    const liveApp = await buildDbApp({ db, redis, sub: sub2, domain: 'test.kovra', rpc: () => conn as never });
     try {
       const user = await ensureUser(db, owner.address);
       const v = await createVault(db, user.id, { live: { agentPubkey: agent, encSecret: new Uint8Array(8) } });
@@ -659,7 +659,7 @@ describe('add LP by hand: options and funding from the wallet', () => {
   });
 });
 
-describe('self-custody: the owner\'s wallet signs, Binwise holds nothing', () => {
+describe('self-custody: the owner\'s wallet signs, Kovra holds nothing', () => {
   it('prepares Add LP for the owner\'s wallet, relays only what that wallet signed, and records what the chain shows', async () => {
     const owner = wallet();
     const kp = owner.keypair();
@@ -694,7 +694,7 @@ describe('self-custody: the owner\'s wallet signs, Binwise holds nothing', () =>
       read: async (_c: unknown, _p: unknown, address: string) => chainPositions[address] ?? null,
     };
     const sub2 = new Redis(process.env.REDIS_URL!);
-    const scApp = await buildDbApp({ db, redis, sub: sub2, domain: 'test.binwise', rpc: () => conn as never, planner: planner as never });
+    const scApp = await buildDbApp({ db, redis, sub: sub2, domain: 'test.kovra', rpc: () => conn as never, planner: planner as never });
     const prev = process.env.LIVE_TRADING_ENABLED;
     process.env.LIVE_TRADING_ENABLED = 'true';
     try {
@@ -711,7 +711,7 @@ describe('self-custody: the owner\'s wallet signs, Binwise holds nothing', () =>
       const relay = (tx: Buffer | string) => scApp.inject({ method: 'POST', url: `/vaults/${v.id}/wallet/send`, headers, payload: { tx: typeof tx === 'string' ? tx : tx.toString('base64') } });
       const done = (planId: string, signatures: string[]) => scApp.inject({ method: 'POST', url: `/vaults/${v.id}/wallet/plans/${planId}/done`, headers, payload: { signatures } });
 
-      // The old ways in are closed: nothing is ever sent to a Binwise wallet, the agent never queues a deploy.
+      // The old ways in are closed: nothing is ever sent to a Kovra wallet, the agent never queues a deploy.
       expect((await scApp.inject({ method: 'POST', url: `/vaults/${v.id}/deploy`, headers, payload: { poolId: 'PS1', usd: 50 } })).json().error).toBe('approve_in_wallet');
       expect((await scApp.inject({ method: 'POST', url: `/vaults/${v.id}/deposit`, headers, payload: { signature: 'x' } })).json().error).toBe('self_custody');
 
@@ -731,7 +731,7 @@ describe('self-custody: the owner\'s wallet signs, Binwise holds nothing', () =>
       expect((await prepare({ action: 'open', poolId: 'PS1', sol: 0 })).json().error).toBe('invalid_amount');
       expect((await prepare({ action: 'open', poolId: 'PS1', sol: 1, shape: 'zigzag' })).json().error).toBe('invalid_shape');
 
-      // The relay: only transactions the owner's wallet paid for and signed, calling Binwise's programs.
+      // The relay: only transactions the owner's wallet paid for and signed, calling Kovra's programs.
       const blockhash = Keypair.generate().publicKey.toBase58();
       const build = (payer: Keypair, program = ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 })) =>
         new VersionedTransaction(new TransactionMessage({ payerKey: payer.publicKey, recentBlockhash: blockhash, instructions: [program] }).compileToV0Message());
@@ -799,8 +799,8 @@ describe('self-custody: the owner\'s wallet signs, Binwise holds nothing', () =>
       // A plan the wallet never carried out: after a few minutes nothing can land any more, so it is dropped.
       const never = (await prepare({ action: 'open', poolId: 'PS1', sol: 1, override: true })).json();
       expect((await done(never.planId, [])).json().error).toBe('not_yet');
-      const stored = JSON.parse((await redis.get(`binwise:wplan:${never.planId}`))!);
-      await redis.set(`binwise:wplan:${never.planId}`, JSON.stringify({ ...stored, createdAt: Date.now() - 4 * 60_000 }));
+      const stored = JSON.parse((await redis.get(`kovra:wplan:${never.planId}`))!);
+      await redis.set(`kovra:wplan:${never.planId}`, JSON.stringify({ ...stored, createdAt: Date.now() - 4 * 60_000 }));
       expect((await done(never.planId, [])).json()).toMatchObject({ ok: false, dropped: true });
       expect((await scApp.inject({ url: `/vaults/${v.id}/wallet/pending`, headers })).json()).toEqual([]);
       expect(await db.position.count({ where: { vaultId: v.id, status: 'open' } })).toBe(0);
@@ -889,7 +889,7 @@ describe('self-custody: checks before anything is sent, and recording once', () 
       read: async (_c: unknown, _p: unknown, address: string) => onChain[address] ?? null,
     };
     const sub2 = new Redis(process.env.REDIS_URL!);
-    const scApp = await buildDbApp({ db, redis, sub: sub2, domain: 'test.binwise', rpc: () => conn as never, planner: planner as never });
+    const scApp = await buildDbApp({ db, redis, sub: sub2, domain: 'test.kovra', rpc: () => conn as never, planner: planner as never });
     const prev = process.env.LIVE_TRADING_ENABLED;
     process.env.LIVE_TRADING_ENABLED = 'true';
     try {
@@ -976,7 +976,7 @@ describe('ending custody of an old vault wallet', () => {
       }),
     };
     const sub2 = new Redis(process.env.REDIS_URL!);
-    const relApp = await buildDbApp({ db, redis, sub: sub2, domain: 'test.binwise', rpc: () => conn as never, positionsOf: async () => positions });
+    const relApp = await buildDbApp({ db, redis, sub: sub2, domain: 'test.kovra', rpc: () => conn as never, positionsOf: async () => positions });
     try {
       const user = await ensureUser(db, owner.address);
       const v = await createVault(db, user.id, { live: { agentPubkey: agent, encSecret: new Uint8Array(8) } });
@@ -1025,7 +1025,7 @@ describe('withdraw (live)', () => {
       }),
     };
     const sub2 = new Redis(process.env.REDIS_URL!);
-    const liveApp = await buildDbApp({ db, redis, sub: sub2, domain: 'test.binwise', rpc: () => conn as never });
+    const liveApp = await buildDbApp({ db, redis, sub: sub2, domain: 'test.kovra', rpc: () => conn as never });
     const login = async (w: ReturnType<typeof wallet>, remoteAddress: string) => {
       const nonce = (await liveApp.inject({ url: `/auth/nonce?wallet=${w.address}`, remoteAddress })).json();
       const r = await liveApp.inject({ method: 'POST', url: '/auth/verify', remoteAddress, payload: { wallet: w.address, message: nonce.message, signature: w.signMsg(nonce.message) } });

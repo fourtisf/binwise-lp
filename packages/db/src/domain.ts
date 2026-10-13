@@ -5,9 +5,9 @@ import {
   type ScoreWeights,
   type StrategySettings,
   type StrategyToggles,
-} from '@binwise/core';
+} from '@kovra/core';
 import type { Prisma, PrismaClient, Strategy, Token } from './generated/prisma/client';
-import type { Proposal as ProposalView, ProposalKind } from '@binwise/core';
+import type { Proposal as ProposalView, ProposalKind } from '@kovra/core';
 
 /** Shared rules about tokens, strategies and vaults used by the agent and the API. */
 
@@ -68,7 +68,7 @@ export async function ensureUser(db: PrismaClient, wallet: string) {
 
 /**
  * New vault with the default (balanced) strategy: paper unless asked otherwise. `selfCustody`: live, with the
- * funds in the owner's own wallet (no key at Binwise). `live`: live with a vault wallet whose key Binwise keeps.
+ * funds in the owner's own wallet (no key at Kovra). `live`: live with a vault wallet whose key Kovra keeps.
  */
 export async function createVault(
   db: PrismaClient,
@@ -95,12 +95,12 @@ export async function createVault(
   });
 }
 
-/** True when the vault's funds stay in the owner's own wallet and Binwise holds no key. */
+/** True when the vault's funds stay in the owner's own wallet and Kovra holds no key. */
 export const isSelfCustody = (vault: { mode: string; custody: string }) => vault.mode === 'live' && vault.custody === 'wallet';
 
 /**
  * The address that holds a live vault's funds and positions: the owner's own wallet (self-custody), or the
- * vault wallet Binwise keeps the key of. Null for paper vaults and a live vault without a wallet yet.
+ * vault wallet Kovra keeps the key of. Null for paper vaults and a live vault without a wallet yet.
  */
 export const fundsAddress = (vault: { mode: string; custody: string; agentPubkey: string | null }, owner: { wallet: string }) =>
   vault.mode !== 'live' ? null : vault.custody === 'wallet' ? owner.wallet : vault.agentPubkey;
@@ -130,7 +130,7 @@ export type SnapshotWithPool = Awaited<ReturnType<typeof latestSnapshots>>[numbe
 
 /** The active agent parameter set, or the defaults. */
 export async function activeParams(db: PrismaClient) {
-  const { DEFAULT_PARAMS } = await import('@binwise/core');
+  const { DEFAULT_PARAMS } = await import('@kovra/core');
   const row = await db.paramSet.findFirst({ where: { active: true }, orderBy: { createdAt: 'desc' } });
   return { ...DEFAULT_PARAMS, ...((row?.params as object) ?? {}) } as typeof DEFAULT_PARAMS;
 }
@@ -188,7 +188,7 @@ export async function assessmentInput(
   tokenY: Pick<Token, 'allowed' | 'isVerified' | 'freezeAuthorityDisabled' | 'symbol' | 'mcapUsd'> | undefined,
   params: { regimeEr: number; regimeMinMovePct: number },
 ) {
-  const { regimeFrom } = await import('@binwise/core');
+  const { regimeFrom } = await import('@kovra/core');
   // Missing inputs (stable pairs, too little history) count as a ranging market.
   const regime =
     snap.efficiency != null && snap.change24hPct != null && snap.aboveEma50 != null

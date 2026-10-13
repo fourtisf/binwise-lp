@@ -18,7 +18,7 @@ const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   // Workspace packages ship TypeScript sources.
-  transpilePackages: ['@binwise/core', '@binwise/mock'],
+  transpilePackages: ['@kovra/core', '@kovra/mock'],
 };
 
 export default nextConfig;

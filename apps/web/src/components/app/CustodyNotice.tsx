@@ -1,14 +1,14 @@
 'use client';
 
 import { useState } from 'react';
-import { BRAND } from '@binwise/core/brand';
+import { BRAND } from '@kovra/core/brand';
 import { useAppData } from '@/lib/store';
 import { useUi } from '@/lib/ui';
 import { Icon } from '../Sprite';
 
 /**
- * A live vault whose wallet Binwise still holds the key of (from before self-custody): it takes no new money.
- * The owner withdraws to their own wallet, then switches; Binwise deletes the key and the vault works from
+ * A live vault whose wallet Kovra still holds the key of (from before self-custody): it takes no new money.
+ * The owner withdraws to their own wallet, then switches; Kovra deletes the key and the vault works from
  * the owner's wallet from then on.
  */
 export function CustodyNotice() {

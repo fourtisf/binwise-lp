@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import type { LiquidityShape } from '@binwise/core';
+import type { LiquidityShape } from '@kovra/core';
 import { LiveChart } from '@/lib/charts/LiveChart';
 import { useAppData } from '@/lib/store';
 

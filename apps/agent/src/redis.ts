@@ -1,6 +1,6 @@
 import { Redis } from 'ioredis';
-import { REDIS_KEYS, type StreamEvent } from '@binwise/core';
-import type { IdempotencyGuard, KillSwitch } from '@binwise/chain';
+import { REDIS_KEYS, type StreamEvent } from '@kovra/core';
+import type { IdempotencyGuard, KillSwitch } from '@kovra/chain';
 
 /** Redis keys and channels shared with the API. */
 export const KEYS = REDIS_KEYS;

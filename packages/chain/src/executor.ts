@@ -13,7 +13,7 @@ import {
   type LiquidityShape,
   type LiquiditySide,
   type PositionBins,
-} from '@binwise/core';
+} from '@kovra/core';
 
 /**
  * Executor: the only part that differs between paper and live mode

@@ -1,8 +1,8 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { gauss, rng, walk } from '@binwise/mock';
-import { BRAND } from '@binwise/core/brand';
+import { gauss, rng, walk } from '@kovra/mock';
+import { BRAND } from '@kovra/core/brand';
 import { getDemoSource } from '@/lib/api/demo';
 import { LiveChart } from '@/lib/charts/LiveChart';
 import { dayLabels, lineChart, stepDecimals } from '@/lib/charts/lineChart';

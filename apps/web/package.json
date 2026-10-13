@@ -1,5 +1,5 @@
 {
-  "name": "@binwise/web",
+  "name": "@kovra/web",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -10,8 +10,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@binwise/core": "workspace:*",
-    "@binwise/mock": "workspace:*",
+    "@kovra/core": "workspace:*",
+    "@kovra/mock": "workspace:*",
     "@solana/wallet-standard-features": "1.5.0",
     "@solana/web3.js": "1.98.4",
     "@wallet-standard/app": "1.1.1",

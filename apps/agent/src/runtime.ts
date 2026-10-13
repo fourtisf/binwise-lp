@@ -1,4 +1,4 @@
-import { DEFAULT_COSTS, REDIS_KEYS } from '@binwise/core';
+import { DEFAULT_COSTS, REDIS_KEYS } from '@kovra/core';
 import {
   JitoClient,
   LiveExecutor,
@@ -10,8 +10,8 @@ import {
   makeConnection,
   type Executor,
   type Holdings,
-} from '@binwise/chain';
-import { getDb, isSelfCustody, type PrismaClient } from '@binwise/db';
+} from '@kovra/chain';
+import { getDb, isSelfCustody, type PrismaClient } from '@kovra/db';
 import { PublicKey } from '@solana/web3.js';
 import type { Redis } from 'ioredis';
 import { publish, redisIdempotency, redisKillSwitch, withVaultLock } from './redis';

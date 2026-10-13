@@ -1,5 +1,5 @@
 {
-  "name": "@binwise/agent",
+  "name": "@kovra/agent",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -17,9 +17,9 @@
     "vitest": "3.2.7"
   },
   "dependencies": {
-    "@binwise/chain": "workspace:*",
-    "@binwise/core": "workspace:*",
-    "@binwise/db": "workspace:*",
+    "@kovra/chain": "workspace:*",
+    "@kovra/core": "workspace:*",
+    "@kovra/db": "workspace:*",
     "@solana/web3.js": "1.98.4",
     "ioredis": "5.11.1",
     "tsx": "4.23.15"

@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { BRAND } from '@binwise/core/brand';
+import { BRAND } from '@kovra/core/brand';
 import { BinRing } from '@/components/landing/BinRing';
 import { Bento } from '@/components/landing/Sections';
 import { Faq } from '@/components/landing/Faq';

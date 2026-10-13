@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
-import { BRAND } from '@binwise/core/brand';
+import { BRAND } from '@kovra/core/brand';
 import { BOT_URL } from '@/lib/site';
 import { useAppData } from '@/lib/store';
 import { useUi } from '@/lib/ui';

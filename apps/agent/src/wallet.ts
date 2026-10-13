@@ -1,5 +1,5 @@
-import { DuplicateAction, SOL_MINT, walletAddress, type KillSwitch } from '@binwise/chain';
-import { shrinkDeposits, type PrismaClient, type Vault } from '@binwise/db';
+import { DuplicateAction, SOL_MINT, walletAddress, type KillSwitch } from '@kovra/chain';
+import { shrinkDeposits, type PrismaClient, type Vault } from '@kovra/db';
 import type { ManualResult } from './agent';
 
 /**

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isAllowed } from '@binwise/db';
+import { isAllowed } from '@kovra/db';
 
 const t = (symbol: string, isVerified: boolean, freezeAuthorityDisabled: boolean | null, allowed: boolean | null = null, mcapUsd: number | null = 5e6) => ({ symbol, isVerified, freezeAuthorityDisabled, allowed, mcapUsd });
 

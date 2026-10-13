@@ -1,6 +1,6 @@
 import { createHmac, createPublicKey, randomBytes, timingSafeEqual, verify } from 'node:crypto';
 import bs58 from 'bs58';
-import { BRAND } from '@binwise/core';
+import { BRAND } from '@kovra/core';
 
 /**
  * Sign-In With Solana: the wallet signs a one-time message; we verify the

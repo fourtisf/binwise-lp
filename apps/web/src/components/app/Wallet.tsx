@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { BRAND } from '@binwise/core/brand';
+import { BRAND } from '@kovra/core/brand';
 import { SignInError, rememberWallet, signInWithWallet, watchSolanaWallets, type Wallet } from '@/lib/wallets';
 import { useAppData } from '@/lib/store';
 import { useUi } from '@/lib/ui';
@@ -59,7 +59,7 @@ function Problem({ wallet, err, others }: { wallet: string; err: SignInError; ot
       </div>
     );
   const body = { color: 'var(--soft)', fontWeight: 400, fontSize: 13, marginTop: 6 } as const;
-  if (err.kind === 'binwise')
+  if (err.kind === 'server')
     return (
       <div className="verdict stop" style={{ marginTop: 0, marginBottom: 12 }}>
         {BRAND} didn&apos;t finish the sign-in.
@@ -139,7 +139,7 @@ export function ConnectModal() {
       reload();
     } catch (e) {
       if (run.current !== id) return;
-      setProblem({ wallet: w.name, err: e instanceof SignInError ? e : new SignInError('binwise', (e as Error)?.message || 'Something went wrong. Try again.') });
+      setProblem({ wallet: w.name, err: e instanceof SignInError ? e : new SignInError('server', (e as Error)?.message || 'Something went wrong. Try again.') });
     } finally {
       if (run.current === id) setBusy(null);
     }

@@ -14,9 +14,9 @@ import {
   volumeForScoring,
   type AgentParams,
   isBridgedSymbol,
-} from '@binwise/core';
-import { JupiterClient, MeteoraClient, metadataCheck, runHolderChecks, type HolderCheck, type MeteoraPool, type MeteoraToken } from '@binwise/chain';
-import { assessmentInput, isAllowed, isEstablished, isStable, isStableSymbol, type PrismaClient, type Token } from '@binwise/db';
+} from '@kovra/core';
+import { JupiterClient, MeteoraClient, metadataCheck, runHolderChecks, type HolderCheck, type MeteoraPool, type MeteoraToken } from '@kovra/chain';
+import { assessmentInput, isAllowed, isEstablished, isStable, isStableSymbol, type PrismaClient, type Token } from '@kovra/db';
 
 /**
  * Data collector (build step 3): every minute, scan Meteora DLMM pools,
