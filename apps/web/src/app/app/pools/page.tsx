@@ -16,6 +16,7 @@ import { useUi } from '@/lib/ui';
  * floor, or a short dip on the hourly chart. Never: unsafe tokens, holder or pool risk, 7-day downtrends.
  */
 const NEAR_MISS = new Set(['Watch', 'Below cap floor', 'Avoid, short-term dip']);
+const scoreColor = (score: number) => (score >= 62 ? 'var(--up)' : score >= 40 ? 'var(--accent-hi)' : 'var(--down)');
 const recommended = (r: PoolRow) => r.call === 'in' || (NEAR_MISS.has(r.callLabel) && r.score >= 45 && r.trend7d > 0);
 
 export default function PoolsPage() {
@@ -27,9 +28,56 @@ export default function PoolsPage() {
   const rows = pools
     .filter((r) => (filter === 'all' || (filter === 'rec' ? recommended(r) : r.call === filter)) && poolMatches(r, q))
     .sort((a, b) => b.score - a.score);
+  // The three best scores get the stage, unless the list is a search or the Avoid/Watch tabs.
+  const podium = (filter === 'all' || filter === 'rec' || filter === 'in') && !q.trim() && rows.length >= 3 ? rows.slice(0, 3) : [];
 
   return (
     <div className="page on" id="p-pools">
+      {podium.length > 0 && (
+        <div className="podium" aria-label="Top scores right now">
+          {podium.map((x, i) => (
+            <button className="pod card spot" key={x.id} onClick={() => openPool(x.id)}>
+              <span className="pod-rk num">{String(i + 1).padStart(2, '0')}</span>
+              <span className="pod-h">
+                <span className="pairname">
+                  <PairIcon a={x.tokenA} b={x.tokenB} />
+                  {x.pair}
+                </span>
+                <span className={`pill ${x.call}`}>
+                  <span className="d"></span>
+                  {x.callLabel}
+                </span>
+              </span>
+              <span className="pod-score">
+                <span className="sring lg" style={{ ['--p' as string]: x.score, ['--c' as string]: scoreColor(x.score) }}>
+                  <b className="num">{x.score}</b>
+                </span>
+                <span className="pod-sc">
+                  <small>Agent score</small>
+                  <span>out of 100</span>
+                </span>
+              </span>
+              <svg className="pod-spark" viewBox="0 0 200 44" preserveAspectRatio="none" aria-hidden="true">
+                <path d={sparkPath(x.spark, 200, 44)} fill="none" style={{ stroke: x.trend7d >= 0 ? 'var(--up)' : 'var(--down)' }} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+              </svg>
+              <span className="pod-stats">
+                <span>
+                  <small>Vol / TVL</small>
+                  <b className="num">{fmt(x.volTvl, 2)}x</b>
+                </span>
+                <span>
+                  <small>Fee APR</small>
+                  <b className="num">{fmt(x.feeApr)}%</b>
+                </span>
+                <span>
+                  <small>7-day trend</small>
+                  <b className={`num ${x.trend7d >= 0 ? 'up' : 'down'}`}>{pct(x.trend7d, 1)}</b>
+                </span>
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
       <div className="toolbar">
         <Chips
           id="poolChips"
@@ -58,6 +106,7 @@ export default function PoolsPage() {
           <table>
             <thead>
               <tr>
+                <th className="rk">#</th>
                 <th>Pool</th>
                 <th className="r" title="Fully diluted: price × total supply, as GMGN and Dexscreener show it">Market cap</th>
                 <th className="r">TVL</th>
@@ -71,10 +120,11 @@ export default function PoolsPage() {
             </thead>
             <tbody id="poolRows">
               {rows.length ? (
-                rows.map((x) => {
-                  const col = x.score >= 62 ? 'var(--up)' : x.score >= 40 ? 'var(--accent-hi)' : 'var(--down)';
+                rows.map((x, i) => {
+                  const col = scoreColor(x.score);
                   return (
                     <tr key={x.id} onClick={() => openPool(x.id)}>
+                      <td className="rk num">{String(i + 1).padStart(2, '0')}</td>
                       <td>
                         <span className="pairname">
                           <PairIcon a={x.tokenA} b={x.tokenB} />
@@ -119,7 +169,7 @@ export default function PoolsPage() {
                 })
               ) : (
                 <tr>
-                  <td colSpan={9} className="muted" style={{ padding: '28px 16px', cursor: 'default' }}>
+                  <td colSpan={10} className="muted" style={{ padding: '28px 16px', cursor: 'default' }}>
                     {pools.length ? 'No pools match. Clear the filter or pick another tab.' : ready ? 'No pool data yet. The agent refreshes pools every minute.' : 'Loading pools…'}
                   </td>
                 </tr>

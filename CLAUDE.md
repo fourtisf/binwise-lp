@@ -12,17 +12,18 @@ The owner is non-technical. Work autonomously, make sensible decisions, and repo
 
 The look is **Kovra direction B, "cinematic"** (owner's choice, Oct 2026; reference: `design/kovra-direction-b.html`). It replaced the Binwise prototype's layout because the owner wanted the site to stop looking like Binwise.
 - Landing: headline bottom-left with a **live bin ring** (chrome core, the demo vault's liquidity bin by bin, following the live window) on the right; centred section heads with pill kickers; the live demo in its own section as an **agent console** (the reasoning in big type, the live chart, one readout strip; no fake browser frame or mini-app); steps as a timeline; one glass panel of example metrics; FAQ in two columns; the final call to action inside a ring of bins.
-- App: floating glass sidebar and pill topbar, white pill for the current page, pill buttons and segmented controls, 24px cards, a floating dock on phones.
-- App pages: Overview leads with net vs hold in big type beside a ring of bins for time in range, then the agent cycle as a horizontal pipeline with the decision, full-width performance, then position + activity. Positions are wide rows (net vs hold, live chart, numbers + actions). Activity is a timeline. Don't bring back the old Binwise grid (four KPI boxes, chart beside a reasoning card, three position cards).
+- App shell (owner, Oct 2026: "still looks the same", so the Binwise sidebar is gone): no sidebar. A floating glass top bar (name back to the site, page tabs with a white pill for the current page, ⌘K search, mode, account), a big page head (vault + mode kicker, title, live-position chips), and a floating agent capsule at the bottom (state, next-cycle ring, pause). On tablets and phones the page tabs move to a floating dock and the agent shows as a compact pill in the top bar (pause is in ⌘K there). Pill buttons and segmented controls, 24px cards.
+- App pages: Overview leads with net vs hold in big type beside a ring of bins for time in range, then the agent cycle as a horizontal pipeline with the decision, full-width performance, then position + activity. Pools put the three best scores on a podium above the ranked list. Positions are wide rows (net vs hold, live chart, numbers + actions). Activity is a timeline. Don't bring back the old Binwise layout (left sidebar, four KPI boxes, chart beside a reasoning card, three position cards).
 - Premium black with a titanium (silver) accent, mint for gains and red for losses, Space Grotesk for headings and big numbers, Inter for body text. Every color is a token on `:root` in `apps/web/src/app/globals.css`; charts read the same tokens (`apps/web/src/lib/theme.ts`). Don't hardcode colors in components.
 - `design/original-prototype.html` is still the source for content: copy, labels, data shown, empty/error wording and interactions. Don't drop features or disclaimers from it.
 - The name users see comes from `BRAND` in `packages/core/src/brand.ts` (web imports `@kovra/core/brand`). Everything else is `kovra` too: `@kovra/*` packages, Redis keys, database, server user `kovra`, `/home/kovra/kovra`, PM2 `kovra-*`. Only the GitHub repo is still `binwise-lp`, and applied database migrations are never edited.
+- Logo: today's K tile (`i-mark` in `apps/web/src/components/Sprite.tsx`, `apps/web/src/app/icon.svg`). Six proposed replacements are in `design/logos/` (sheet: `kovra-logo-options.png`); the owner hasn't picked one yet.
 - Every simulated number must be replaced by real data from the backend (see §5).
 - Owner dislikes: black-and-gold palettes and white/light backgrounds. Keep the dark theme. Don't restyle again without the owner asking.
 
 Pages:
 - **Landing**: hero (headline + live bin ring), live demo window (live chart + agent reasoning), "Built on" strip, bento features, how it works, metrics, pricing, FAQ, final CTA, footer.
-- **App**: sidebar (vault switcher, ⌘K search, nav, live positions, agent status card), Overview, Pools (+ score drawer), Positions, Strategy, Activity, Deposit modal, Command palette (⌘K).
+- **App**: top bar (name, nav, ⌘K search, mode, account), page head (vault, live positions), agent capsule (status, pause), Overview, Pools (+ score drawer), Positions, Strategy, Activity, Deposit modal, Command palette (⌘K).
 
 ---
 

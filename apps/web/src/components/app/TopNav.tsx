@@ -1,26 +1,44 @@
 'use client';
 
+import Link from 'next/link';
+import { BRAND } from '@kovra/core/brand';
 import { useAppData } from '@/lib/store';
 import { BOT_URL, LIVE_DEFAULT, WALLET_LOGIN } from '@/lib/site';
 import { useUi } from '@/lib/ui';
 import { Icon } from '../Sprite';
 import { AccountMenu } from './AccountMenu';
+import { AgentDock } from './AgentDock';
+import { PAGES, type PageKey } from './pages';
 
-export function Topbar({ title }: { title: string }) {
-  const { overview, setMode, client, me } = useAppData();
+/** The app's floating top bar: name (back to the site), the pages, search, trading mode and the account. */
+export function TopNav({ current }: { current: PageKey }) {
+  const { overview, pools, positions, setMode, client, me } = useAppData();
   const { openPalette, openConnect } = useUi();
   const api = client?.kind === 'http';
   const mode = overview?.mode ?? 'paper';
+  const counts: Partial<Record<PageKey, number>> = { pools: pools.length, positions: positions.length };
   return (
-    <header className="topbar">
-      <div className="crumbs">
-        <span className="wsname">{overview?.name ?? 'Main vault'}</span>
-        <Icon id="i-chev" className="wsname" />
-        <b id="pgCrumb">{title}</b>
-      </div>
+    <header className="deckbar">
+      <Link className="deck-brand" id="toLanding" title="Back to site" href="/">
+        <span className="mark">
+          <Icon id="i-mark" />
+        </span>
+        <b>{BRAND}</b>
+      </Link>
+      <nav className="deck-tabs" aria-label="App">
+        {PAGES.map((p) => (
+          <Link className="dtab" key={p.key} href={p.href} aria-current={p.key === current ? 'page' : undefined}>
+            {p.title}
+            {counts[p.key] ? <span className="cnt">{counts[p.key]}</span> : null}
+          </Link>
+        ))}
+      </nav>
       <div className="acts">
-        <button className="btn btn-dark btn-sm mob-only" onClick={openPalette} aria-label="Search">
+        <AgentDock compact />
+        <button className="deck-search" onClick={openPalette} aria-label="Search">
           <Icon id="i-search" />
+          <span className="lbl">Search</span>
+          <span className="kbd">⌘K</span>
         </button>
         {LIVE_DEFAULT ? (
           // Mainnet site: every vault trades real funds; there is no paper switch.
@@ -41,13 +59,13 @@ export function Topbar({ title }: { title: string }) {
         )}
         {!WALLET_LOGIN && BOT_URL && (
           // Vaults live in the Telegram bot: create or import a wallet, deposit and add LP there.
-          <a className="btn btn-white btn-sm" href={BOT_URL} target="_blank" rel="noreferrer">
+          <a className="btn btn-white btn-sm" href={BOT_URL} target="_blank" rel="noreferrer" aria-label="Open Telegram bot">
             <Icon id="i-plus" />
-            Open Telegram bot
+            <span className="lbl">Open Telegram bot</span>
           </a>
         )}
         {!WALLET_LOGIN ? null : api && !me ? (
-          <button className="btn btn-dark btn-sm" onClick={openConnect}>
+          <button className="btn btn-white btn-sm" onClick={openConnect}>
             Connect wallet
           </button>
         ) : (
