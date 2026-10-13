@@ -5,6 +5,7 @@ import { Bento } from '@/components/landing/Sections';
 import { Faq } from '@/components/landing/Faq';
 import { HeroWindow } from '@/components/landing/HeroWindow';
 import { Nav } from '@/components/landing/Nav';
+import { Reveal } from '@/components/landing/Reveal';
 import { Stage } from '@/components/landing/Stage';
 import { Logo } from '@/components/Logo';
 import { Icon } from '@/components/Sprite';
@@ -18,6 +19,7 @@ export default function Landing() {
       <div className="grid-bg"></div>
       <div className="topglow"></div>
       <Nav />
+      <Reveal />
 
       <section className="hero">
         <div className="wrap">
@@ -310,6 +312,9 @@ export default function Landing() {
             <span className="status">
               <i></i>All systems normal
             </span>
+          </div>
+          <div className="fmark" aria-hidden="true">
+            {BRAND}
           </div>
         </div>
       </footer>

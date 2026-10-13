@@ -31,8 +31,10 @@ button{cursor:pointer;border:0;background:none}
 
 .btn{position:relative;display:inline-flex;align-items:center;justify-content:center;gap:8px;height:42px;padding:0 18px;border-radius:10px;font-weight:500;font-size:14.5px;white-space:nowrap;transition:background .2s,box-shadow .2s,transform .15s,color .2s,border-color .2s;letter-spacing:-.005em}
 .btn:active{transform:scale(.98)}
-.btn-white{background:var(--text);color:#050506;box-shadow:0 0 0 1px rgba(255,255,255,.2),0 8px 24px -8px rgba(255,255,255,.25),inset 0 -2px 0 rgba(0,0,0,.08)}
-.btn-white:hover{background:#fff;box-shadow:0 0 0 1px rgba(255,255,255,.4),0 10px 34px -6px rgba(255,255,255,.35)}
+.btn-white{background:linear-gradient(180deg,#FFFFFF,#E2E4E9);color:#050506;overflow:hidden;box-shadow:0 0 0 1px rgba(255,255,255,.3),0 8px 24px -8px rgba(255,255,255,.28),inset 0 1px 0 #fff,inset 0 -2px 0 rgba(0,0,0,.1)}
+.btn-white::after{content:"";position:absolute;top:0;bottom:0;left:-70%;width:45%;background:linear-gradient(100deg,transparent,rgba(255,255,255,.95),transparent);transform:skewX(-20deg);transition:left .8s cubic-bezier(.2,.8,.2,1);pointer-events:none}
+.btn-white:hover::after{left:130%}
+.btn-white:hover{background:linear-gradient(180deg,#FFFFFF,#EDEFF2);box-shadow:0 0 0 1px rgba(255,255,255,.4),0 10px 34px -6px rgba(255,255,255,.35)}
 .btn-dark{background:rgba(255,255,255,.04);border:1px solid var(--line2);color:var(--text);box-shadow:inset 0 1px 0 rgba(255,255,255,.04)}
 .btn-dark:hover{background:rgba(255,255,255,.08);border-color:var(--line3)}
 .btn-sm{height:34px;padding:0 13px;font-size:13.5px;border-radius:9px}
@@ -40,6 +42,8 @@ button{cursor:pointer;border:0;background:none}
 .kbd{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 5px;border-radius:5px;font-size:11.5px;color:var(--muted);background:rgba(255,255,255,.06);border:1px solid var(--line2);font-family:var(--font)}
 
 .card{position:relative;background:linear-gradient(180deg,var(--card2),var(--card));border:1px solid var(--line);border-radius:16px;box-shadow:inset 0 1px 0 rgba(255,255,255,.04)}
+.card::before{content:"";position:absolute;inset:-1px;border-radius:inherit;padding:1px;pointer-events:none;background:linear-gradient(180deg,rgba(255,255,255,.16),rgba(255,255,255,.04) 38%,transparent 72%);-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask:linear-gradient(#000 0 0) content-box exclude,linear-gradient(#000 0 0)}
+.card.tbl::before{display:none}
 .spot{overflow:hidden}
 .spot::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;opacity:0;transition:opacity .3s;background:radial-gradient(420px circle at var(--mx,50%) var(--my,50%),rgba(255,255,255,.06),transparent 45%)}
 .spot:hover::after{opacity:1}
@@ -84,7 +88,7 @@ button{cursor:pointer;border:0;background:none}
 .announce:hover{border-color:var(--line3);background:rgba(255,255,255,.05)}
 .announce b{font-weight:500;font-size:12px;padding:3px 9px;border-radius:999px;background:linear-gradient(90deg,rgba(255,255,255,.14),rgba(var(--up-rgb),.16));color:var(--text);border:1px solid rgba(255,255,255,.18)}
 .announce svg{width:12px;height:12px;color:var(--dim)}
-.hero h1{font-size:clamp(46px,7.6vw,96px);max-width:12ch;margin:28px auto 0;letter-spacing:-.055em;background:linear-gradient(180deg,#FFFFFF 25%,rgba(255,255,255,.62));-webkit-background-clip:text;background-clip:text;color:transparent;padding-bottom:.06em}
+.hero h1{font-size:clamp(46px,7.6vw,96px);max-width:12ch;margin:28px auto 0;letter-spacing:-.055em;background:linear-gradient(180deg,#FFFFFF 22%,#D3D6DD 60%,rgba(255,255,255,.55));-webkit-background-clip:text;background-clip:text;color:transparent;padding-bottom:.06em}
 .hero .lead{font-size:clamp(16px,1.5vw,19px);color:var(--muted);max-width:52ch;margin:24px auto 0;letter-spacing:-.01em}
 .hero .ctas{display:flex;gap:10px;justify-content:center;margin-top:36px;flex-wrap:wrap}
 .hero .ctas .btn{height:46px;padding:0 22px;font-size:15px}
@@ -261,7 +265,7 @@ footer{margin-top:120px;border-top:1px solid var(--line);padding:56px 0 40px}
 .lc .mk text{font-size:11px;font-weight:500;fill:var(--accent-hi)}
 
 /* APP */
-.shell{display:grid;grid-template-columns:244px 1fr;min-height:100vh}
+.shell{display:grid;grid-template-columns:244px 1fr;min-height:100vh;background:radial-gradient(1000px 420px at 62% -12%,rgba(255,255,255,.035),transparent 70%)}
 .side{position:sticky;top:0;height:100vh;padding:14px 12px;border-right:1px solid var(--line);background:var(--bg1);display:flex;flex-direction:column;gap:2px;overflow:auto}
 .ws-switch{display:flex;align-items:center;gap:10px;padding:8px;border-radius:10px;width:100%;text-align:left;transition:background .2s}
 .ws-switch:hover{background:rgba(255,255,255,.04)}
@@ -277,7 +281,8 @@ footer{margin-top:120px;border-top:1px solid var(--line);padding:56px 0 40px}
 .navi{display:flex;align-items:center;gap:10px;height:34px;padding:0 10px;border-radius:8px;color:var(--muted);font-weight:500;font-size:14px;transition:background .15s,color .15s;width:100%;text-align:left}
 .navi svg{width:17px;height:17px;flex:none}
 .navi:hover{color:var(--text);background:rgba(255,255,255,.035)}
-.navi[aria-current=page]{color:var(--text);background:rgba(255,255,255,.065)}
+.navi[aria-current=page]{color:var(--text);background:rgba(255,255,255,.065);position:relative}
+.navi[aria-current=page]::before{content:"";position:absolute;left:-12px;top:9px;bottom:9px;width:2px;border-radius:0 2px 2px 0;background:linear-gradient(180deg,#fff,var(--accent))}
 .navi .cnt{margin-left:auto;font-size:11.5px;color:var(--dim)}
 .navi .sd{width:7px;height:7px;border-radius:50%;margin-left:auto;background:var(--up);box-shadow:0 0 8px var(--up)}
 .navi .sd.out{background:var(--down);box-shadow:0 0 8px var(--down)}
@@ -516,6 +521,25 @@ button.avatar:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .bnav{display:none}
 .mob-only{display:none}
 
+/* Premium finish: a light travelling round the product window and the Pro plan, scroll reveals,
+   the footer wordmark and quiet scrollbars. All decorative; reduced motion turns the movement off. */
+@property --beam{syntax:"<angle>";initial-value:0deg;inherits:false}
+.window::after,.plan.hl::before{content:"";position:absolute;inset:0;border-radius:inherit;padding:1px;pointer-events:none;
+  background:conic-gradient(from var(--beam),transparent 0 66%,rgba(255,255,255,.08) 74%,rgba(255,255,255,.85) 82%,rgba(var(--up-rgb),.7) 86%,transparent 92%);
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask:linear-gradient(#000 0 0) content-box exclude,linear-gradient(#000 0 0);
+  animation:beam 7s linear infinite}
+.plan.hl::before{inset:-1px;animation-duration:9s}
+@keyframes beam{to{--beam:360deg}}
+.rv{opacity:0;transform:translateY(18px);transition:opacity .8s cubic-bezier(.2,.8,.2,1) var(--d,0ms),transform .8s cubic-bezier(.2,.8,.2,1) var(--d,0ms)}
+.rv.in{opacity:1;transform:none}
+.fmark{margin-top:56px;text-align:center;font-family:var(--font-display);font-weight:600;font-size:clamp(96px,19vw,272px);letter-spacing:-.06em;line-height:.78;
+  background:linear-gradient(180deg,rgba(255,255,255,.11),rgba(255,255,255,0) 88%);-webkit-background-clip:text;background-clip:text;color:transparent;user-select:none;pointer-events:none}
+html{scrollbar-color:#26262A transparent}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#232326;border-radius:10px;border:2px solid var(--bg)}
+::-webkit-scrollbar-thumb:hover{background:#2E2E33}
+
 @media (max-width:1100px){
   .wgrid{grid-template-columns:1fr}
   .wreason{display:grid;grid-template-columns:1fr 1fr;align-items:start}
@@ -528,7 +552,7 @@ button.avatar:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
   .g2{grid-template-columns:minmax(0,1fr)}
   .posgrid{grid-template-columns:1fr 1fr}
   .g3{grid-template-columns:1fr 1fr}
-  .preview{grid-column:1/-1;position:static}
+  .preview{grid-column:1/-1;position:relative}
 }
 @media (max-width:860px){
   .nav-links,.nav-r .btn-dark{display:none}
@@ -582,7 +606,7 @@ button.avatar:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
   .eq{height:230px}
   .search{min-width:0;width:100%}
 }
-@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}.window{--tilt:0deg!important;--sc:1!important}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}.rv{opacity:1;transform:none}.window{--tilt:0deg!important;--sc:1!important}}
 /* Self-custody: an action running in the owner's own wallet (approve once, then each step lands) */
 .wtask{position:fixed;right:24px;bottom:24px;width:380px;max-width:calc(100vw - 32px);max-height:calc(100vh - 48px);overflow:auto;z-index:79;padding:16px;border-radius:14px;background:var(--raise);border:1px solid var(--line2);box-shadow:0 20px 50px -10px rgba(0,0,0,.7)}
 .wtask > div[role=status]{margin-top:10px}
