@@ -47,11 +47,15 @@ export default function PositionsPage() {
                 <b className="num up">{usd(x.fees, 2)}</b>
               </div>
               <div>
-                <span>Impermanent loss</span>
+                <span>
+                  Impermanent loss<small className="rowhint">vs just holding the tokens, before fees</small>
+                </span>
                 <b className={`num ${x.il >= 0 ? 'up' : 'down'}`}>{pct(x.il, 1)}</b>
               </div>
               <div>
-                <span>Net vs hold</span>
+                <span>
+                  Net vs hold<small className="rowhint">vs just holding the tokens, fees included</small>
+                </span>
                 <b className={`num ${x.netVsHold >= 0 ? 'up' : 'down'}`}>{pct(x.netVsHold, 1)}</b>
               </div>
               <div>
