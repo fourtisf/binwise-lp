@@ -129,6 +129,8 @@ def monolith():
 <div style="margin-top:8px;font-size:15px;color:#95959D">The autonomous LP agent for Meteora DLMM on Solana</div>{ROW}</div>{GRAIN}</body></html>'''
     return html
 
-for name,fn in [('a-skyline',skyline),('b-horizon',horizon),('c-monolith',monolith)]:
-    open(f'{name}.html','w').write(fn())
-print('ok')
+# Only when run directly: the post and article scripts import this file for the shared pieces.
+if __name__=='__main__':
+    for name,fn in [('a-skyline',skyline),('b-horizon',horizon),('c-monolith',monolith)]:
+        open(f'{name}.html','w').write(fn())
+    print('ok')
