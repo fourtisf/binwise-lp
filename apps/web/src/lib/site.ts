@@ -30,8 +30,11 @@ export const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || originOf(process.env
 export const X_HANDLE = '@kovrasol';
 export const X_URL = 'https://x.com/kovrasol';
 
+/** The Kovra token's contract address on Solana (pump.fun), from the owner, Oct 2026. */
+export const KOVRA_CA = 'DzBCYzmGHEVdh5HK8tFBgS72iNaCEqkSHDeCCTLSpump';
+
 /**
- * The token's contract address: NEXT_PUBLIC_TOKEN_CA, set once the token exists (then the landing page shows it
- * with a copy button). Until then the page says "Coming soon".
+ * The contract address the site shows, in full with a copy button. NEXT_PUBLIC_TOKEN_CA overrides it; when neither
+ * is set the page says "Coming soon".
  */
-export const TOKEN_CA: string | null = process.env.NEXT_PUBLIC_TOKEN_CA?.trim() || null;
+export const TOKEN_CA: string | null = process.env.NEXT_PUBLIC_TOKEN_CA?.trim() || KOVRA_CA;

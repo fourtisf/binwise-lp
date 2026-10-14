@@ -104,7 +104,7 @@ button{cursor:pointer;border:0;background:none}
 
 .hero{position:relative}
 .hero-grid{display:grid;grid-template-columns:minmax(0,1.08fr) minmax(0,1fr);align-items:center;gap:32px;min-height:min(100svh,980px);padding-top:120px;padding-bottom:72px}
-.hero-copy{position:relative;z-index:2;align-self:end;padding-bottom:12px}
+.hero-copy{position:relative;z-index:2;align-self:end;padding-bottom:12px;min-width:0}
 .announce{display:inline-flex;align-items:center;gap:10px;height:32px;padding:0 12px 0 4px;border-radius:999px;border:1px solid var(--line2);background:rgba(255,255,255,.03);font-size:13px;color:var(--soft);transition:border-color .2s,background .2s}
 .announce:hover{border-color:var(--line3);background:rgba(255,255,255,.05)}
 .announce b{font-weight:500;font-size:12px;padding:3px 9px;border-radius:999px;background:linear-gradient(90deg,rgba(255,255,255,.14),rgba(var(--up-rgb),.16));color:var(--text);border:1px solid rgba(255,255,255,.18)}
@@ -778,6 +778,9 @@ html{scrollbar-color:#26262A transparent}
   .profiles,.g3{grid-template-columns:1fr}
 }
 @media (max-width:640px){
+  /* The contract address in full on two lines, so it can be checked and Copy stays on screen */
+  .hero-top .ca-pill{height:auto;min-height:32px;padding:6px 4px 6px 12px;border-radius:16px}
+  .hero-top .ca-pill code{white-space:normal;word-break:break-all;line-height:1.4}
   .wrap{padding:0 18px}
   .hero-grid{padding-top:84px;padding-bottom:16px}
   .hero .ctas .btn{flex:1}

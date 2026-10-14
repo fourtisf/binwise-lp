@@ -26,7 +26,7 @@ export function Nav() {
         <a href="#faq">FAQ</a>
       </nav>
       <div className="nav-r">
-        <CaPill id="nav-ca" className="nav-ca" />
+        <CaPill id="nav-ca" className="nav-ca" short />
         <a className="nav-x" href={X_URL} target="_blank" rel="noreferrer" aria-label={`${BRAND} on X (${X_HANDLE})`} title={`${X_HANDLE} on X`}>
           <Icon id="i-xlogo" />
         </a>
