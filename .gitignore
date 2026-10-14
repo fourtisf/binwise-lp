@@ -17,3 +17,4 @@ dump.rdb
 # Python bytecode, and the HTML the brand scripts generate (render it, commit the PNG)
 __pycache__/
 design/brand/src/*.html
+design/video/live/tour/

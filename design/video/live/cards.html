@@ -1,0 +1,111 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<!-- The live video's title cards and captions. compose.mjs calls show(kind, data) and screenshots the page
+     (captions with a transparent background, laid over the recording). -->
+<style>
+@font-face{font-family:SG;src:url(../sg.woff2) format("woff2");font-weight:300 700}
+@font-face{font-family:IN;src:url(../inter.woff2) format("woff2");font-weight:100 900}
+:root{--bg:#030303;--text:#F5F5F6;--soft:#CFCFD4;--muted:#95959D;--dim:#5D5D65;--hi:#E7E9EE;--up:#3DDC97;--line2:rgba(255,255,255,.13)}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:1920px;height:1080px;overflow:hidden;color:var(--text);font-family:IN,sans-serif;-webkit-font-smoothing:antialiased;background:transparent}
+.card{position:absolute;inset:0;background:var(--bg);display:none}
+.on{display:block}
+.blob{position:absolute;border-radius:50%;filter:blur(110px)}
+.grain{position:absolute;inset:0;opacity:.07;mix-blend-mode:overlay;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+.vig{position:absolute;inset:0;background:radial-gradient(ellipse 75% 70% at 50% 50%,transparent 55%,rgba(0,0,0,.7))}
+.center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
+.grad{background:linear-gradient(180deg,#fff 35%,#9EA2AB);-webkit-background-clip:text;background-clip:text;color:transparent}
+.mint{background:linear-gradient(180deg,#B8F5D9 10%,#3DDC97 90%);-webkit-background-clip:text;background-clip:text;color:transparent}
+h1{font-family:SG;font-weight:600;letter-spacing:-.058em;line-height:1;padding-bottom:10px}
+.sub{font-size:32px;color:var(--muted);letter-spacing:-.005em;margin-top:18px}
+.pills{display:flex;gap:14px;margin-top:44px}
+.pills span{display:inline-flex;align-items:center;gap:12px;height:58px;padding:0 24px;border-radius:999px;border:1px solid var(--line2);background:rgba(255,255,255,.035);font-size:24px;font-weight:500}
+.pills i{width:9px;height:9px;border-radius:50%;background:var(--up);box-shadow:0 0 14px var(--up)}
+.pills svg{width:21px;height:21px}
+.pills em{font-style:normal;font-size:19px;color:var(--hi);background:rgba(201,205,214,.12);padding:5px 13px;border-radius:999px}
+.fine{position:absolute;left:0;right:0;bottom:56px;text-align:center;font-size:19px;color:var(--dim)}
+/* captions */
+#cap{position:absolute;inset:0;display:none}
+#cap .shade{position:absolute;left:0;right:0;bottom:0;height:420px;background:linear-gradient(0deg,rgba(0,0,0,.72),rgba(0,0,0,.35) 45%,transparent)}
+#cap .box{position:absolute;left:76px;bottom:76px;max-width:660px;padding:24px 30px 28px;border-radius:30px;border:1px solid rgba(255,255,255,.14);background:linear-gradient(180deg,rgba(20,20,22,.86),rgba(8,8,9,.86));box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 40px 80px -30px rgba(0,0,0,.95)}
+#cap .k{display:flex;align-items:center;gap:11px;font-size:20px;font-weight:500;color:var(--soft)}
+#cap .k i{width:9px;height:9px;border-radius:50%;background:var(--up);box-shadow:0 0 14px var(--up)}
+#cap .t{margin-top:12px;font-family:SG;font-weight:600;font-size:42px;letter-spacing:-.04em;line-height:1.08}
+/* the stamp on every shot of the site: where and when it was recorded */
+#stamp{position:absolute;right:76px;bottom:84px;display:none;align-items:center;gap:10px;height:46px;padding:0 20px 0 17px;border-radius:999px;border:1px solid rgba(255,255,255,.14);background:rgba(8,8,9,.8);font-size:18px;font-weight:500;color:var(--soft)}
+#stamp i{width:9px;height:9px;border-radius:50%;background:#FF6369;box-shadow:0 0 12px #FF6369}
+</style></head><body>
+<div class="card" id="intro">
+  <div class="blob" style="width:900px;height:900px;left:510px;top:-160px;background:rgba(255,255,255,.07)"></div>
+  <div class="blob" style="width:700px;height:500px;left:980px;top:120px;background:rgba(61,220,151,.11)"></div>
+  <svg id="ring1" style="position:absolute;left:50%;top:50%;width:1500px;height:1500px;margin:-750px 0 0 -750px" viewBox="-750 -750 1500 1500"></svg>
+  <div class="center">
+    <svg id="mark1" width="250" height="250" viewBox="-36 -36 72 72"></svg>
+    <h1 class="grad" style="font-size:136px;margin-top:34px">Kovra is <span class="mint">live.</span></h1>
+    <div class="sub">The autonomous LP agent for Meteora DLMM on Solana</div>
+    <div class="pills"><span><i></i>kovra.live</span></div>
+  </div>
+  <div class="vig"></div><div class="grain"></div>
+</div>
+<div class="card" id="outro">
+  <div class="blob" style="width:900px;height:900px;left:510px;top:-200px;background:rgba(255,255,255,.07)"></div>
+  <div class="blob" style="width:700px;height:500px;left:360px;top:420px;background:rgba(61,220,151,.10)"></div>
+  <div class="center" style="margin-top:-30px">
+    <svg id="mark2" width="150" height="150" viewBox="-36 -36 72 72"></svg>
+    <h1 class="grad" style="font-size:118px;margin-top:30px">Judged by <span class="mint">one number.</span></h1>
+    <div class="sub">Net return vs simply holding the same tokens.</div>
+    <div class="pills">
+      <span><i></i>kovra.live</span>
+      <span><svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>@kovrasol</span>
+      <span>CA<em>Coming soon</em></span>
+    </div>
+  </div>
+  <div class="fine">No strategy is guaranteed to profit. DeFi carries risk, including the loss of funds. Not financial advice.</div>
+  <div class="vig"></div><div class="grain"></div>
+</div>
+<div id="stamp"><i></i><span id="st"></span></div>
+<div id="cap"><div class="shade"></div><div class="box"><div class="k"><i></i><span id="ck"></span></div><div class="t" id="ct"></div></div></div>
+<script>
+const NS = 'http://www.w3.org/2000/svg', MINT = '#3DDC97';
+const noise = (i) => .5 + .5 * Math.sin(i * 12.9898) * Math.cos(i * 4.1414);
+/** The Kovra mark (A, Bin Ring): bins round a chrome core, the in-range arc in mint. */
+function mark(svg, uid) {
+  const n = 28, a0 = 3, a1 = 12, head = 8, r0 = 15.5;
+  let lines = '';
+  for (let i = 0; i < n; i++) {
+    const a = i / n * Math.PI * 2 - Math.PI / 2, inr = i >= a0 && i <= a1;
+    const L = inr ? 9 + 7 * noise(i) : 5 + 3 * noise(i);
+    const col = i === head ? '#fff' : inr ? MINT : '#C9CDD6', op = i === head ? 1 : inr ? .92 : .36;
+    lines += `<line x1="${(Math.cos(a) * r0).toFixed(2)}" y1="${(Math.sin(a) * r0).toFixed(2)}" x2="${(Math.cos(a) * (r0 + L)).toFixed(2)}" y2="${(Math.sin(a) * (r0 + L)).toFixed(2)}" stroke="${col}" stroke-opacity="${op}" stroke-width="2.6" stroke-linecap="round"/>`;
+  }
+  svg.innerHTML = `<defs><radialGradient id="c${uid}" cx=".34" cy=".28" r=".85"><stop offset="0" stop-color="#fff"/><stop offset=".42" stop-color="#C9CDD6"/><stop offset=".8" stop-color="#55585F"/><stop offset="1" stop-color="#1C1D20"/></radialGradient><filter id="g${uid}" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="1.6"/></filter></defs><g filter="url(#g${uid})" opacity=".6">${lines}</g>${lines}<circle r="13" fill="#fff" opacity=".12" filter="url(#g${uid})"/><circle r="11" fill="url(#c${uid})"/>`;
+}
+/** A faint ring of bins behind the intro. */
+function ring(svg) {
+  const n = 160, r0 = 420;
+  let out = '';
+  for (let i = 0; i < n; i++) {
+    const a = i / n * Math.PI * 2 - Math.PI / 2;
+    const d = Math.atan2(Math.sin(a + 1.0), Math.cos(a + 1.0)), inr = Math.abs(d) < .7;
+    const L = inr ? 60 + 90 * Math.exp(-Math.pow(d / .4, 2)) + 20 * noise(i) : 26 + 30 * noise(i);
+    out += `<line x1="${(Math.cos(a) * r0).toFixed(1)}" y1="${(Math.sin(a) * r0).toFixed(1)}" x2="${(Math.cos(a) * (r0 + L)).toFixed(1)}" y2="${(Math.sin(a) * (r0 + L)).toFixed(1)}" stroke="${inr ? MINT : '#fff'}" stroke-opacity="${inr ? .5 : .08}" stroke-width="3" stroke-linecap="round"/>`;
+  }
+  svg.innerHTML = `<circle r="560" fill="none" stroke="rgba(255,255,255,.05)" stroke-width="1.5" stroke-dasharray="3 12"/>${out}`;
+}
+mark(document.getElementById('mark1'), 'a');
+mark(document.getElementById('mark2'), 'b');
+ring(document.getElementById('ring1'));
+window.show = (kind, data = {}) => {
+  for (const id of ['intro', 'outro']) document.getElementById(id).classList.toggle('on', id === kind);
+  const cap = document.getElementById('cap');
+  cap.style.display = kind === 'caption' ? 'block' : 'none';
+  const stamp = document.getElementById('stamp');
+  stamp.style.display = kind === 'stamp' ? 'flex' : 'none';
+  if (kind === 'stamp') document.getElementById('st').textContent = data.text;
+  if (kind === 'caption') {
+    document.getElementById('ck').textContent = data.kicker;
+    document.getElementById('ct').textContent = data.text;
+  }
+};
+</script>
+</body></html>
