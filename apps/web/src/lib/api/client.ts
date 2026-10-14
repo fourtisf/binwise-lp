@@ -13,8 +13,10 @@ import type {
   PoolDetail,
   PoolRow,
   Portfolio,
+  PortfolioShare,
   PositionView,
   Proposal,
+  PublicPortfolio,
   StrategySettings,
   StreamEvent,
   VaultBalance,
@@ -88,6 +90,10 @@ export interface KovraClient {
   overview(): Promise<VaultOverview>;
   /** Everything in the vault and how it did against holding (the owner's portfolio). */
   portfolio(): Promise<Portfolio>;
+  /** Switches the vault's public page on or off, and whether it shows dollar amounts (the owner only). */
+  setPublic(enabled: boolean, showAmounts?: boolean): Promise<PortfolioShare>;
+  /** A vault's public page, by its public id: no sign-in. */
+  publicPortfolio(publicId: string): Promise<PublicPortfolio>;
   /** The vault's idle funds; with a pool, the most Add LP puts into it now. */
   balance(poolId?: string): Promise<VaultBalance>;
   performance(range: PerformanceRange): Promise<PerformanceSeries>;

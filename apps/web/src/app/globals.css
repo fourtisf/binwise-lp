@@ -350,6 +350,24 @@ footer{margin-top:120px;border-top:1px solid var(--line);padding:56px 0 40px}
 .adock-next circle.v{stroke:var(--up);stroke-linecap:round;transition:stroke-dasharray .2s linear}
 .adock.paused .orb{filter:grayscale(1) brightness(.7)}
 .adock.paused .orb::after{display:none}
+/* Public portfolio (/p/<id>): the app's look without the app shell */
+.pub{min-height:100vh;background:radial-gradient(1100px 520px at 50% -16%,rgba(255,255,255,.065),transparent 70%),radial-gradient(800px 460px at 100% 105%,rgba(var(--up-rgb),.045),transparent 70%)}
+.pubbar{position:sticky;top:14px;z-index:40;width:min(1240px,calc(100% - 28px));margin:14px auto 0;display:flex;align-items:center;justify-content:space-between;gap:12px;height:62px;padding:0 10px 0 12px;border:1px solid var(--line2);border-radius:999px;background:rgba(10,10,11,.74);backdrop-filter:blur(20px) saturate(1.2);-webkit-backdrop-filter:blur(20px) saturate(1.2);box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 24px 50px -28px rgba(0,0,0,.9)}
+.pubwrap{max-width:1240px;margin:0 auto;padding:0 28px 80px}
+.pub-share{display:flex;gap:8px;flex-wrap:wrap}
+.ovh.pub-hero{grid-template-columns:minmax(0,1fr) 250px}
+.pub-side{display:flex;flex-direction:column;gap:12px;align-self:stretch;justify-content:center}
+.pub-side>div{padding:18px 20px;border-radius:20px;border:1px solid var(--line);background:rgba(255,255,255,.025)}
+.pub-side small{display:block;font-size:12.5px;color:var(--muted)}
+.pub-side b{display:block;font-family:var(--font-display);font-size:30px;font-weight:600;letter-spacing:-.045em;margin-top:4px;line-height:1.1}
+.pub-side span{font-size:12.5px;color:var(--muted)}
+.pub-rows div{flex-wrap:wrap}
+.pub-rows .pill{margin-left:4px}
+.pub-foot{display:flex;justify-content:space-between;align-items:center;gap:20px;flex-wrap:wrap;margin-top:28px;padding:24px 4px 0;border-top:1px solid var(--line)}
+.pub-foot p{font-size:13px;color:var(--dim);max-width:72ch;line-height:1.6}
+.pub-link{display:flex;justify-content:space-between;align-items:center;gap:10px 16px;flex-wrap:wrap;margin-top:14px;padding:12px 12px 12px 18px;border-radius:18px;border:1px solid var(--line2);background:rgba(255,255,255,.025)}
+.pub-link code{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:13.5px;color:var(--soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;user-select:all}
+.pub-link>div{display:flex;gap:8px;flex-wrap:wrap}
 .amini{display:none;align-items:center;gap:6px;height:38px;padding:0 10px 0 5px;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.025);font-size:12.5px;color:var(--muted)}
 .amini .orb{width:26px;height:26px;border-radius:50%}
 .amini .orb::after{border-radius:50%;inset:-3px}
@@ -707,6 +725,8 @@ html{scrollbar-color:#26262A transparent}
   .shell{grid-template-columns:1fr}
   .deck{padding:0 12px 120px}
   .deckbar{top:10px;margin-top:10px;height:56px;padding:0 8px 0 8px}
+  .pubwrap{padding:0 12px 60px}
+  .pubbar{top:10px;margin-top:10px;height:56px;padding:0 8px}
   .profiles,.g3{grid-template-columns:1fr}
 }
 @media (max-width:640px){
@@ -756,6 +776,15 @@ html{scrollbar-color:#26262A transparent}
   .kpi .spark{display:none}
   .ovh{grid-template-columns:1fr;padding:24px 20px}
   .ovh .rr{max-width:250px;order:-1;margin-bottom:-8px}
+  .ovh.pub-hero{grid-template-columns:1fr}
+  .pub-side{flex-direction:row}
+  .pub-side>div{flex:1;min-width:0}
+  .pub-share{width:100%}
+  .pub-share .btn{flex:1}
+  .pub-wide{display:none}
+  .pub .tbl th,.pub .tbl td{padding-left:6px;padding-right:6px}
+  .pub .tbl th:first-child,.pub .tbl td:first-child{padding-left:0}
+  .pub .tbl th:nth-child(3),.pub .tbl td:nth-child(3){padding-right:0}
   .ovh-big{margin-top:16px}
   .ovh-stats{grid-template-columns:1fr 1fr}
   .ovh-stats>div:first-child{grid-column:1/-1;padding:16px 0 16px;border-bottom:1px solid var(--line)}

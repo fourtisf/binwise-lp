@@ -29,8 +29,10 @@ export function createMockClient(): KovraClient {
     signIn: unsupported,
     signOut: () => Promise.resolve(),
     overview: () => call(() => engine.getOverview()),
-    // The portfolio and Add LP by hand need the real API.
+    // The portfolio, its public page and Add LP by hand need the real API.
     portfolio: unsupported,
+    setPublic: unsupported,
+    publicPortfolio: unsupported,
     balance: unsupported,
     performance: (range) => call(() => engine.getPerformance(range)),
     pools: () => call(() => engine.getPools()),

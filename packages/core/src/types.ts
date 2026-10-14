@@ -227,6 +227,48 @@ export interface Portfolio {
   beatHold: number;
   /** Deposits (+) and withdrawals (−) in USD at the time, newest first (up to 30) */
   flows: { ts: number; title: string; usd: number; txSig?: string }[];
+  /** The owner's public page settings; null for someone who only reads the vault (the demo) */
+  share: PortfolioShare | null;
+}
+
+/** A vault's public page, the owner's opt-in (off by default). */
+export interface PortfolioShare {
+  enabled: boolean;
+  /** The id in /p/<publicId>; null until the page is first switched on */
+  publicId: string | null;
+  /** Off: percentages and counts only, no dollar amounts */
+  showAmounts: boolean;
+}
+
+/**
+ * What a public page shows: results the owner chose to share, from the agent's records. Never the owner's wallet
+ * address or their own wallet's tokens. Dollar amounts are null (and masked in the activity) when the owner hides them.
+ */
+export interface PublicPortfolio {
+  name: string;
+  mode: VaultMode;
+  /** Unix ms the vault was created */
+  since: number;
+  showAmounts: boolean;
+  /** Idle funds + open positions, as of the agent's last cycle */
+  value: number | null;
+  /** The deposits, held instead, at today's prices */
+  holdValue: number | null;
+  /** Percent since the start; null until a deposit is recorded */
+  netVsHold: number | null;
+  fees: number | null;
+  closedCount: number;
+  /** Closed positions that ended ahead of holding */
+  beatHold: number;
+  open: { pair: string; tokenA: TokenRef; tokenB: TokenRef; inRange: boolean; netVsHold: number; value: number | null; openedAt: number }[];
+  /** Latest first (up to 20) */
+  closed: { pair: string; tokenA: TokenRef; tokenB: TokenRef; netVsHold: number; fees: number | null; openedAt: number; closedAt: number }[];
+  /** Deploys, rebalances, exits and compounds, newest first (up to 15) */
+  activity: Decision[];
+  /** Vault vs hold over the last 30 days; both indexed to 100 at the first point when amounts are hidden */
+  performance: PerformanceSeries;
+  /** Unix ms of the agent's last record for this vault */
+  updatedAt: number;
 }
 
 export interface Me {

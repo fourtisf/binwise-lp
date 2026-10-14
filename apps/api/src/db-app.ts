@@ -4,7 +4,7 @@ import rateLimit from '@fastify/rate-limit';
 import websocket from '@fastify/websocket';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import type { Redis } from 'ioredis';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { Connection, PublicKey } from '@solana/web3.js';
 import {
   BRAND,
@@ -31,6 +31,8 @@ import {
   type StrategySettings,
   type Portfolio,
   type PortfolioHolding,
+  type PortfolioShare,
+  type PublicPortfolio,
   type StreamEvent,
   type TokenRef,
   type VaultBalance,
@@ -137,7 +139,8 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
 
   // Only nginx on this machine may set X-Forwarded-For; otherwise clients could spoof their IP past rate limits.
   const app = Fastify({ logger: o.logger ?? false, trustProxy: '127.0.0.1' });
-  await app.register(cors, { origin: o.corsOrigins?.length ? o.corsOrigins : false, credentials: true });
+  // PUT too (strategy, public page): @fastify/cors only allows GET, HEAD and POST unless told otherwise.
+  await app.register(cors, { origin: o.corsOrigins?.length ? o.corsOrigins : false, credentials: true, methods: ['GET', 'HEAD', 'POST', 'PUT'] });
   await app.register(cookie);
   await app.register(rateLimit, { max: 300, timeWindow: '1 minute' });
   await app.register(websocket);
@@ -740,6 +743,104 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
       closedCount,
       beatHold,
       flows,
+      share: readOnly ? null : shareOf(vault),
+    };
+  });
+
+  // ---------- public portfolio (the owner's opt-in) ----------
+
+  const shareOf = (v: { publicOn: boolean; publicId: string | null; publicAmounts: boolean }): PortfolioShare => ({
+    enabled: v.publicOn,
+    publicId: v.publicId,
+    showAmounts: v.publicAmounts,
+  });
+
+  /** Switches the vault's public page on or off, and whether it shows dollar amounts. The link stays the same. */
+  app.put<VP & { Body: { enabled?: unknown; showAmounts?: unknown } }>('/vaults/:id/public', async (req): Promise<PortfolioShare> => {
+    const v = await writable(req, req.params.id);
+    const { enabled, showAmounts } = req.body ?? {};
+    if (typeof enabled !== 'boolean' || (showAmounts !== undefined && typeof showAmounts !== 'boolean'))
+      throw new ApiError(400, 'invalid_body', 'Send enabled (true or false) and, if you like, showAmounts.');
+    // 10 random bytes: a link nobody can guess (base64url, 14 characters).
+    const publicId = v.publicId ?? (enabled ? randomBytes(10).toString('base64url') : null);
+    const saved = await db.vault.update({
+      where: { id: v.id },
+      data: { publicOn: enabled, publicId, ...(typeof showAmounts === 'boolean' ? { publicAmounts: showAmounts } : {}) },
+    });
+    return shareOf(saved);
+  });
+
+  /** Dollar amounts and token amounts out of a sentence, for a page whose owner hides amounts. */
+  const maskAmounts = (text: string) =>
+    text.replace(/[−-]?\$\s?\d[\d,]*(?:\.\d+)?(?:[KMB]\b)?/g, '$•••').replace(/\b\d[\d,]*(?:\.\d+)?(?=\s[A-Z][A-Z0-9]{1,9}\b)/g, '•••');
+
+  /**
+   * A vault's public page: no sign-in, read from the agent's records (no wallet reads), never the owner's wallet
+   * address or their own wallet's tokens. 404 for an unknown id and for a page its owner switched off.
+   */
+  app.get<{ Params: { publicId: string } }>('/public/:publicId', async (req): Promise<PublicPortfolio> => {
+    const gone = new ApiError(404, 'not_found', 'This portfolio is private or does not exist.');
+    if (!/^[A-Za-z0-9_-]{6,40}$/.test(req.params.publicId)) throw gone;
+    const vault = await db.vault.findUnique({ where: { publicId: req.params.publicId } });
+    if (!vault || !vault.publicOn || vault.isDemo) throw gone;
+    const amounts = vault.publicAmounts;
+    const cash = await describeTokens(vault.cash as Record<string, number>);
+    const deposits = vault.deposits as Record<string, number>;
+    const depositInfo = await tokenInfo(Object.keys(deposits));
+    const holdValue = Object.entries(deposits).reduce((sum, [m, a]) => sum + a * (depositInfo.get(m)?.priceUsd ?? 0), 0);
+    const [open, closed, closedCount, beatHold, totals, acts, lastSnap, perf] = await Promise.all([
+      db.position.findMany({ where: { vaultId: vault.id, status: 'open' }, include: { pool: true }, orderBy: { openedAt: 'asc' } }),
+      db.position.findMany({ where: { vaultId: vault.id, status: 'closed' }, include: { pool: true }, orderBy: { closedAt: 'desc' }, take: 20 }),
+      db.position.count({ where: { vaultId: vault.id, status: 'closed' } }),
+      db.position.count({ where: { vaultId: vault.id, status: 'closed', netVsHold: { gt: 0 } } }),
+      db.position.aggregate({ where: { vaultId: vault.id }, _sum: { feesClaimedUsd: true, feesUnclaimedUsd: true } }),
+      db.decision.findMany({
+        where: { vaultId: vault.id, type: { in: ['deploy', 'rebalance', 'exit', 'compound'] }, NOT: [{ title: { startsWith: 'Deposited' } }, { title: { startsWith: 'Withdrew' } }] },
+        orderBy: { ts: 'desc' },
+        take: 15,
+      }),
+      db.vaultSnapshot.findFirst({ where: { vaultId: vault.id }, orderBy: { ts: 'desc' }, select: { ts: true } }),
+      performance(db, vault.id, 30),
+    ]);
+    const tokens = await tokenMap(db, [...open, ...closed].flatMap((p) => [p.pool.mintA, p.pool.mintB]));
+    const pairOf = (p: (typeof open)[number]) => ({
+      pair: `${p.pool.tokenA} / ${p.pool.tokenB}`,
+      tokenA: tokenRef(p.pool.tokenA, tokens.get(p.pool.mintA)),
+      tokenB: tokenRef(p.pool.tokenB, tokens.get(p.pool.mintB)),
+    });
+    const value = cash.totalUsd + open.reduce((sum, p) => sum + p.valueUsd + p.feesUnclaimedUsd, 0);
+    const usd = (n: number) => (amounts ? n : null);
+    // Hidden amounts: both lines start at 100, so the page still shows the gap without the size.
+    const index = (xs: number[]) => (xs[0] ? xs.map((x) => (x / xs[0]) * 100) : xs.map(() => 100));
+    const latest = Math.max(lastSnap?.ts.getTime() ?? 0, acts[0]?.ts.getTime() ?? 0);
+    return {
+      name: vault.name,
+      mode: vault.mode,
+      since: vault.createdAt.getTime(),
+      showAmounts: amounts,
+      value: usd(value),
+      holdValue: usd(holdValue),
+      netVsHold: holdValue > 0 ? (value / holdValue - 1) * 100 : null,
+      fees: usd((totals._sum.feesClaimedUsd ?? 0) + (totals._sum.feesUnclaimedUsd ?? 0)),
+      closedCount,
+      beatHold,
+      open: open.map((p) => ({ ...pairOf(p), inRange: p.inRange, netVsHold: p.netVsHold, value: usd(p.valueUsd + p.feesUnclaimedUsd), openedAt: p.openedAt.getTime() })),
+      closed: closed.map((p) => ({
+        ...pairOf(p),
+        netVsHold: p.netVsHold,
+        fees: usd(p.feesClaimedUsd + p.feesUnclaimedUsd),
+        openedAt: p.openedAt.getTime(),
+        closedAt: (p.closedAt ?? p.openedAt).getTime(),
+      })),
+      activity: acts.map((d) => {
+        const view = decisionView(d);
+        // The vault's own id stays private (the page goes by its public id), and so do transaction signatures:
+        // an explorer would show the wallet that signed them.
+        const { txSig: _sig, ...rest } = view;
+        return { ...rest, vaultId: vault.publicId!, title: amounts ? view.title : maskAmounts(view.title), reason: amounts ? view.reason : maskAmounts(view.reason) };
+      }),
+      performance: amounts ? perf : { ...perf, vault: index(perf.vault), hold: index(perf.hold) },
+      updatedAt: latest || Date.now(),
     };
   });
 

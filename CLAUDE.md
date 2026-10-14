@@ -25,6 +25,7 @@ The look is **Kovra direction B, "cinematic"** (owner's choice, Oct 2026; refere
 Pages:
 - **Landing**: hero (headline + live bin ring), live demo window (live chart + agent reasoning), "Built on" strip, bento features, how it works, metrics, pricing, FAQ, final CTA, footer.
 - **App**: top bar (name, nav, ⌘K search, mode, account), page head (vault, live positions), agent capsule (status, pause), Overview, Pools (+ score drawer), Positions, Strategy, Activity, Deposit modal, Command palette (⌘K).
+- **Public portfolio** `/p/<publicId>` (owner's opt-in, off by default; switch and "show dollar amounts" on Portfolio → Public portfolio): a read-only page anyone can open without a wallet. It never shows the owner's wallet, the vault id or transaction signatures (an explorer would lead back to the wallet), and leaves deposits and withdrawals out of the moves. With amounts hidden, dollar and token amounts are masked and the chart is indexed to 100. Demo vaults can't be shared. The link stays the same when switched off and on again.
 
 ---
 
@@ -124,6 +125,7 @@ VaultSnapshot(id, vaultId, ts, value, holdValue, feesTotal, netVsHold)
 - `GET /vaults/:id/decisions?type=` — activity feed
 - `PUT /vaults/:id/strategy`, `POST /vaults/:id/pause|resume`, `POST /vaults/:id/mode`
 - `POST /vaults/:id/deposit`, `POST /vaults/:id/withdraw`, `POST /positions/:id/claim|close`
+- `PUT /vaults/:id/public` (owner: `{enabled, showAmounts?}`), `GET /public/:publicId` (anyone; 404 when off or unknown)
 - `WS /stream?vault=` — price ticks for open positions, agent cycle steps (Scan → Score → Check positions → Decide → Execute), new decisions
 - Landing hero "live window": public read-only demo stream from a paper vault.
 

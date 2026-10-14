@@ -434,6 +434,66 @@ describe('portfolio', () => {
   });
 });
 
+describe('public portfolio', () => {
+  it('is off by default; the owner switches it on, hides amounts or switches it off; it never shows the wallet', async () => {
+    const { w, headers } = await signIn(wallet(), '10.9.9.8');
+    const id = (await app.inject({ url: '/me', headers })).json().vaults[0].id;
+    await app.inject({ method: 'POST', url: `/vaults/${id}/deposit`, headers, payload: { token: 'SOL', amount: 10 } });
+    await db.pool.create({ data: { id: 'PUB1', name: 'SOL-USDC', tokenA: 'SOL', tokenB: 'USDC', mintA: SOL, mintB: USDC, binStep: 10, baseFee: 0.1 } });
+    const base = { vaultId: id, poolId: 'PUB1', binStep: 10, lowerBin: 0, upperBin: 10, shape: 'spot' as const, entryAmountA: 1, entryAmountB: 150, entryPriceA: 150, entryPriceB: 1, entryValueUsd: 300, price: 150 };
+    await db.position.create({ data: { ...base, valueUsd: 300, feesUnclaimedUsd: 5, netVsHold: 1.5 } });
+    await db.position.create({
+      data: { ...base, valueUsd: 290, feesClaimedUsd: 7, netVsHold: 2, status: 'closed', openedAt: new Date(Date.now() - 86_400_000), closedAt: new Date() },
+    });
+    await db.decision.create({ data: { vaultId: id, poolId: 'PUB1', type: 'deploy', title: 'Deployed $300 to SOL / USDC', reason: 'Score 71. Put in 1 SOL and $150 of USDC.', inputs: {}, txSig: 'SigPublicTest111' } });
+
+    // Off until the owner switches it on: no link yet.
+    expect((await app.inject({ url: `/vaults/${id}/portfolio`, headers })).json().share).toEqual({ enabled: false, publicId: null, showAmounts: true });
+    // Only the owner can switch it, with a proper body.
+    expect((await app.inject({ method: 'PUT', url: `/vaults/${id}/public`, payload: { enabled: true } })).statusCode).toBe(401);
+    const other = await signIn(wallet(), '10.9.9.9');
+    expect((await app.inject({ method: 'PUT', url: `/vaults/${id}/public`, headers: other.headers, payload: { enabled: true } })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'PUT', url: `/vaults/${id}/public`, headers, payload: { enabled: 'yes' } })).statusCode).toBe(400);
+
+    const on = (await app.inject({ method: 'PUT', url: `/vaults/${id}/public`, headers, payload: { enabled: true } })).json();
+    expect(on).toMatchObject({ enabled: true, showAmounts: true });
+    expect(on.publicId).toMatch(/^[A-Za-z0-9_-]{14}$/);
+
+    // Anyone can read it, without signing in.
+    const res = await app.inject({ url: `/public/${on.publicId}` });
+    expect(res.statusCode).toBe(200);
+    const pub = res.json();
+    expect(pub).toMatchObject({ name: 'Main vault', mode: 'paper', showAmounts: true, closedCount: 1, beatHold: 1 });
+    expect(pub.value).toBeCloseTo(1805);
+    expect(pub.netVsHold).toBeCloseTo((1805 / 1500 - 1) * 100);
+    expect(pub.fees).toBeCloseTo(12);
+    expect(pub.open[0]).toMatchObject({ pair: 'SOL / USDC', inRange: true, netVsHold: 1.5, value: 305 });
+    expect(pub.closed[0]).toMatchObject({ pair: 'SOL / USDC', netVsHold: 2, fees: 7 });
+    // Agent moves only: the deposit is not on the page.
+    expect(pub.activity.map((d: { title: string }) => d.title)).toEqual(['Deployed $300 to SOL / USDC']);
+    // Never the owner's wallet, the vault's own id, or a transaction (an explorer would show the wallet).
+    expect(res.body).not.toContain(w.address);
+    expect(res.body).not.toContain(id);
+    expect(res.body).not.toContain('SigPublicTest111');
+
+    // Amounts hidden: percentages and counts stay, dollars and token amounts go.
+    expect((await app.inject({ method: 'PUT', url: `/vaults/${id}/public`, headers, payload: { enabled: true, showAmounts: false } })).json()).toMatchObject({ showAmounts: false, publicId: on.publicId });
+    const hidden = (await app.inject({ url: `/public/${on.publicId}` })).json();
+    expect(hidden).toMatchObject({ showAmounts: false, value: null, holdValue: null, fees: null, closedCount: 1 });
+    expect(hidden.netVsHold).toBeCloseTo((1805 / 1500 - 1) * 100);
+    expect(hidden.open[0].value).toBeNull();
+    expect(hidden.closed[0].fees).toBeNull();
+    expect(hidden.activity[0]).toMatchObject({ title: 'Deployed $••• to SOL / USDC', reason: 'Score 71. Put in ••• SOL and $••• of USDC.' });
+
+    // Switched off: gone; on again: the same link.
+    await app.inject({ method: 'PUT', url: `/vaults/${id}/public`, headers, payload: { enabled: false } });
+    expect((await app.inject({ url: `/public/${on.publicId}` })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'PUT', url: `/vaults/${id}/public`, headers, payload: { enabled: true } })).json().publicId).toBe(on.publicId);
+    expect((await app.inject({ url: '/public/nope' })).statusCode).toBe(404);
+    expect((await app.inject({ url: '/public/AAAAAAAAAAAAAA' })).statusCode).toBe(404);
+  });
+});
+
 describe('portfolio (live)', () => {
   it('reads the vault wallet on Solana, flags funds not yet recorded, and shows the owner wallet apart', async () => {
     const owner = wallet();

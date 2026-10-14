@@ -93,6 +93,10 @@ model Vault {
   cycle         Int             @default(0)
   /// agent: Kovra signs with the vault wallet's key; wallet: funds stay in the owner's own wallet (no key here)
   custody       VaultCustody    @default(agent)
+  /// Public portfolio (the owner's opt-in, off by default): the share id in /p/<publicId>, whether it is on, and whether it shows dollar amounts.
+  publicId      String?         @unique
+  publicOn      Boolean         @default(false)
+  publicAmounts Boolean         @default(true)
   agentPubkey   String?
   /// Agent secret key, sealed with AGENT_KEY_ENCRYPTION_SECRET. Never plaintext. Never set for custody 'wallet'.
   encSecret     Bytes?

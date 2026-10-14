@@ -11,6 +11,7 @@ import { BOT_URL } from '@/lib/site';
 import { useAppData } from '@/lib/store';
 import { useUi } from '@/lib/ui';
 import { shortWallet } from '@/components/app/Wallet';
+import { PublicShare } from '@/components/app/PublicShare';
 
 const SOLSCAN = 'https://solscan.io';
 /** Token amounts: more decimals for small ones (0.0421 SOL, 12.50 USDC, 1,250 BONK). */
@@ -168,6 +169,8 @@ export default function PortfolioPage() {
           </div>
         </div>
       </div>
+
+      {p?.share && <PublicShare share={p.share} onChange={(share) => setP((x) => (x ? { ...x, share } : x))} />}
 
       {p && p.ownWallet.length > 0 && me && (
         <div className="panel card" id="pfOwn" style={{ marginTop: 12 }}>
