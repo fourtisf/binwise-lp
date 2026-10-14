@@ -399,6 +399,8 @@ footer{margin-top:120px;border-top:1px solid var(--line);padding:56px 0 40px}
 .lp-val{grid-area:val}
 .lp-fees{grid-area:fees}
 .lp-pos{grid-area:pos}
+.lp-you{display:inline-flex;align-items:center;height:20px;padding:0 8px;margin-left:8px;border-radius:999px;font-family:var(--font);font-size:11px;font-weight:600;letter-spacing:0;vertical-align:3px;color:var(--up);background:var(--up-a);border:1px solid rgba(var(--up-rgb),.3)}
+.lp-join.lp-me{margin:0 0 16px;background:radial-gradient(420px 160px at 100% 0%,rgba(var(--up-rgb),.08),transparent 70%),linear-gradient(180deg,var(--card2),var(--card))}
 .lp-empty{padding:48px 22px;text-align:center}
 .lp-empty h3{font-size:18px;font-weight:600;letter-spacing:-.02em}
 .lp-empty p{margin:8px auto 0;max-width:52ch;font-size:14px;color:var(--muted)}

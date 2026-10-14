@@ -2,13 +2,14 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import type { PublicList, PublicListRow } from '@kovra/core';
+import type { PortfolioShare, PublicList, PublicListRow } from '@kovra/core';
 import { BRAND } from '@kovra/core/brand';
 import { Chips } from '@/components/Chips';
 import { Icon } from '@/components/Sprite';
 import { PairIcon } from '@/components/Tokens';
 import { pct, usd } from '@/lib/format';
 import { useAppData } from '@/lib/store';
+import { useUi } from '@/lib/ui';
 
 type Sort = 'nvh' | 'value' | 'new';
 
@@ -25,10 +26,15 @@ const sorted = (rows: PublicListRow[], sort: Sort) =>
 
 /** Every LP who made their portfolio public, ranked by net vs hold. Readable without a wallet. */
 export default function PublicPage() {
-  const { client } = useAppData();
+  const { client, me } = useAppData();
+  const { toast } = useUi();
   const [list, setList] = useState<PublicList | null>(null);
   const [state, setState] = useState<'loading' | 'ok' | 'offline'>('loading');
   const [sort, setSort] = useState<Sort>('nvh');
+  // The signed-in owner's own switch, so they can join the list from here.
+  const [share, setShare] = useState<PortfolioShare | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [tick, setTick] = useState(0);
 
   useEffect(() => {
     if (!client) return;
@@ -50,15 +56,64 @@ export default function PublicPage() {
       live = false;
       clearInterval(t);
     };
-  }, [client]);
+  }, [client, tick]);
+
+  useEffect(() => {
+    if (!client || client.kind !== 'http' || !me) return void setShare(null);
+    let live = true;
+    client
+      .portfolio()
+      .then((p) => live && setShare(p.share))
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [client, me]);
+
+  const goPublic = async () => {
+    if (!client || busy) return;
+    setBusy(true);
+    try {
+      setShare(await client.setPublic(true));
+      setTick((n) => n + 1);
+      toast('Your portfolio is public');
+    } catch {
+      toast('Could not make your portfolio public. Try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const rows = sorted(list?.rows ?? [], sort);
   const ahead = rows.filter((r) => (r.netVsHold ?? 0) > 0).length;
   const open = rows.reduce((n, r) => n + r.open, 0);
   const inRange = rows.reduce((n, r) => n + r.inRange, 0);
+  const mine = share?.enabled ? rows.find((r) => r.publicId === share.publicId) : undefined;
 
   return (
     <div className="page on" id="p-public">
+      {share && !share.enabled && (
+        <div className="card lp-join lp-me">
+          <div>
+            <h3>Your portfolio is private</h3>
+            <p>
+              Make it public and your vault joins this list under a made-up name, never your wallet address. You can hide dollar amounts or switch it off
+              again any time in Portfolio.
+            </p>
+          </div>
+          <button className="btn btn-white btn-sm" disabled={busy} onClick={() => void goPublic()}>
+            {busy ? 'Saving…' : 'Make my portfolio public'}
+          </button>
+        </div>
+      )}
+      {share?.enabled && list && !mine && (
+        <div className="card lp-join lp-me">
+          <div>
+            <h3>Your portfolio is public</h3>
+            <p>It shows here once the {BRAND} agent has added liquidity for your vault on mainnet.</p>
+          </div>
+        </div>
+      )}
       <div className="card lp-sum">
         <div>
           <small>Public LPs</small>
@@ -100,7 +155,10 @@ export default function PublicPage() {
                   {r.label.slice(3, 5)}
                 </span>
                 <span>
-                  <b>{r.label}</b>
+                  <b>
+                    {r.label}
+                    {r === mine && <span className="lp-you">You</span>}
+                  </b>
                   <small>
                     Since {day(r.since)}
                     {r.lastMoveAt ? ` · moved ${ago(r.lastMoveAt)}` : ''}
@@ -159,18 +217,21 @@ export default function PublicPage() {
         )}
       </div>
 
-      <div className="card lp-join">
-        <div>
-          <h3>Put your results here</h3>
-          <p>
-            Open Portfolio and switch on Public portfolio. You show under a made-up name, never your wallet address, and you choose whether dollar amounts
-            show. Switch it off any time.
-          </p>
+      {/* Signed in, the card at the top does this. */}
+      {!share && (
+        <div className="card lp-join">
+          <div>
+            <h3>Put your results here</h3>
+            <p>
+              Open Portfolio and switch on Public portfolio. You show under a made-up name, never your wallet address, and you choose whether dollar amounts
+              show. Switch it off any time.
+            </p>
+          </div>
+          <Link className="btn btn-white btn-sm" href="/app/portfolio#pfPublic">
+            Open Portfolio
+          </Link>
         </div>
-        <Link className="btn btn-white btn-sm" href="/app/portfolio#pfPublic">
-          Open Portfolio
-        </Link>
-      </div>
+      )}
       <p className="dim" style={{ fontSize: 13, marginTop: 12 }}>
         Figures come from {BRAND}&apos;s records and update every agent cycle. Past results don&apos;t guarantee future returns. DeFi carries risk, including
         total loss of funds. Not financial advice.
