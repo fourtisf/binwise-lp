@@ -1,0 +1,167 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<!-- "The Kovra token is live": one page whose render(t) draws the frame at time t (17 s), like intro.html.
+     The video names no contract address (owner's call). Render: node ../video.mjs silent.mp4 60 17 token/token-live.html -->
+<style>
+@font-face{font-family:SG;src:url(../sg.woff2) format("woff2");font-weight:300 700}
+@font-face{font-family:IN;src:url(../inter.woff2) format("woff2");font-weight:100 900}
+:root{--bg:#030303;--text:#F5F5F6;--soft:#CFCFD4;--muted:#95959D;--dim:#5D5D65;--hi:#E7E9EE;--up:#3DDC97;--line2:rgba(255,255,255,.13)}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:1920px;height:1080px;overflow:hidden;background:var(--bg);color:var(--text);font-family:IN,sans-serif;-webkit-font-smoothing:antialiased}
+.abs{position:absolute;inset:0}
+.blob{position:absolute;border-radius:50%;filter:blur(110px)}
+.grain{position:absolute;inset:-120px;opacity:.075;mix-blend-mode:overlay;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+.vig{position:absolute;inset:0;background:radial-gradient(ellipse 75% 70% at 50% 50%,transparent 55%,rgba(0,0,0,.72))}
+.scene{position:absolute;inset:0;opacity:0}
+.grad{background:linear-gradient(180deg,#fff 35%,#9EA2AB);-webkit-background-clip:text;background-clip:text;color:transparent}
+.mint{background:linear-gradient(180deg,#B8F5D9 10%,#3DDC97 90%);-webkit-background-clip:text;background-clip:text;color:transparent}
+h1,h2{font-family:SG;font-weight:600;letter-spacing:-.058em;line-height:1;padding-bottom:10px}
+.kick{display:inline-flex;align-items:center;gap:12px;height:52px;padding:0 24px 0 19px;border-radius:999px;border:1px solid var(--line2);background:rgba(255,255,255,.035);font-size:23px;font-weight:500;color:var(--soft)}
+.kick i{width:10px;height:10px;border-radius:50%;background:var(--up);box-shadow:0 0 16px var(--up)}
+.center{position:absolute;left:0;right:0;text-align:center;display:flex;flex-direction:column;align-items:center}
+.chip{display:flex;align-items:center;gap:18px;height:78px;padding:0 30px 0 22px;border-radius:24px;border:1px solid rgba(255,255,255,.12);background:linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.015));box-shadow:inset 0 1px 0 rgba(255,255,255,.08);font-size:30px;font-weight:500;margin-top:16px;width:fit-content}
+.chip b{display:grid;place-items:center;width:42px;height:42px;border-radius:13px;background:rgba(61,220,151,.13);border:1px solid rgba(61,220,151,.35)}
+.chip b svg{width:22px;height:22px}
+.glass{border-radius:30px;border:1px solid rgba(255,255,255,.13);background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.015));box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 50px 100px -40px rgba(0,0,0,.95)}
+.pills{display:flex;gap:14px;justify-content:center}
+.pills span{display:inline-flex;align-items:center;gap:12px;height:58px;padding:0 24px;border-radius:999px;border:1px solid var(--line2);background:rgba(255,255,255,.035);font-size:24px;font-weight:500}
+.pills svg{width:21px;height:21px}
+.pills i{width:9px;height:9px;border-radius:50%;background:var(--up);box-shadow:0 0 14px var(--up)}
+.fine{position:absolute;left:0;right:0;bottom:50px;text-align:center;font-size:19px;color:var(--dim)}
+</style></head><body>
+<div class="abs" id="bg">
+  <div class="blob" id="blobA" style="width:900px;height:900px;background:rgba(255,255,255,.07)"></div>
+  <div class="blob" id="blobB" style="width:800px;height:560px;background:rgba(61,220,151,.12)"></div>
+</div>
+<svg id="ring" style="position:absolute;left:0;top:0;width:1920px;height:1080px" viewBox="0 0 1920 1080"></svg>
+
+<!-- 1: the token is live -->
+<div class="scene" id="s1">
+  <div class="center" style="top:792px">
+    <span class="kick" id="k1"><i id="dot1"></i>Live on Solana</span>
+    <h1 class="grad" id="h1" style="font-size:104px;margin-top:22px">The Kovra token is <span class="mint">live.</span></h1>
+  </div>
+</div>
+
+<!-- 2: what Kovra is -->
+<div class="scene" id="s2">
+  <div style="position:absolute;left:930px;top:230px;width:900px">
+    <span class="kick" id="k2"><i></i>What Kovra is</span>
+    <h2 class="grad" id="h2" style="font-size:78px;margin-top:24px">An autonomous LP agent<br>for Meteora DLMM.</h2>
+    <div id="chips" style="margin-top:22px"></div>
+  </div>
+</div>
+
+<!-- 3: the scoreboard -->
+<div class="scene" id="s3">
+  <div class="center" style="top:250px">
+    <span class="kick" id="k3"><i></i>One scoreboard</span>
+    <h1 class="grad" id="h3" style="font-size:180px;margin-top:26px">Net vs <span class="mint">hold.</span></h1>
+    <div id="sub3" style="font-size:34px;color:var(--muted);margin-top:14px">Not APR. Your return against simply holding the same tokens.</div>
+    <div class="glass" id="fx3" style="margin-top:46px;padding:22px 34px 24px;font-family:SG;font-weight:500;font-size:34px;letter-spacing:-.02em;color:var(--hi)">net vs hold = (position + fees) ÷ hold <span style="color:var(--up)">− 1</span></div>
+  </div>
+</div>
+
+<!-- 4: end card -->
+<div class="scene" id="s4">
+  <div class="center" style="top:230px">
+    <div id="lock4" style="display:flex;align-items:center;gap:22px"><svg id="mark4" width="96" height="96" viewBox="-36 -36 72 72"></svg><span class="grad" style="font-family:SG;font-weight:600;font-size:88px;letter-spacing:-.055em;line-height:1;padding-bottom:6px">Kovra</span></div>
+    <h1 id="h4" style="font-size:132px;margin-top:40px"><span class="grad">Live </span><span class="mint">now.</span></h1>
+    <div class="pills" id="p4" style="margin-top:46px">
+      <span><i></i>kovra.live</span>
+      <span><svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>@kovrasol</span>
+    </div>
+  </div>
+  <div class="fine" id="fine4">Crypto is risky; nothing here is financial advice.</div>
+</div>
+<div class="vig"></div><div class="grain" id="grain"></div>
+
+<script>
+const $ = (id) => document.getElementById(id), NS = 'http://www.w3.org/2000/svg', MINT = '#3DDC97';
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v)), lerp = (a, b, t) => a + (b - a) * t;
+const pr = (t, a, b) => clamp((t - a) / (b - a), 0, 1);
+const eo = (x) => 1 - Math.pow(1 - x, 3), eio = (x) => (x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+const env = (t, a, b, fi, fo) => Math.min(pr(t, a, a + fi), 1 - pr(t, b - fo, b));
+const noise = (i) => .5 + .5 * Math.sin(i * 12.9898) * Math.cos(i * 4.1414);
+const set = (el, o, x = 0, y = 0, s = 1, blur = 0) => { el.style.opacity = o.toFixed(3); el.style.transform = `translate(${x.toFixed(1)}px,${y.toFixed(1)}px) scale(${s.toFixed(4)})`; el.style.filter = blur > .05 ? `blur(${blur.toFixed(2)}px)` : 'none'; };
+const rise = (el, t, a, d, dy, blur) => { const e = eo(pr(t, a, a + d)); set(el, e, 0, lerp(dy, 0, e), 1, lerp(blur, 0, e)); };
+
+// ---------- the big ring of bins: assembles in scene 1, moves aside in 2, stays faint behind 3 and 4 ----------
+const NB = 96, R0 = 122, BINS = [];
+const ARC = -Math.PI / 2 + 0.95; // the in-range arc, up and to the right
+let head = 0, best = 9;
+for (let i = 0; i < NB; i++) { const a = i / NB * 2 * Math.PI - Math.PI / 2; const d = Math.abs(Math.atan2(Math.sin(a - ARC - .2), Math.cos(a - ARC - .2))); if (d < best) { best = d; head = i; } }
+$('ring').innerHTML = `<defs><radialGradient id="core" cx=".34" cy=".26" r=".85"><stop offset="0" stop-color="#fff"/><stop offset=".3" stop-color="#D5D8DF"/><stop offset=".62" stop-color="#6B6E78"/><stop offset=".9" stop-color="#141416"/></radialGradient><radialGradient id="sheen" cx=".5" cy=".5" r=".5"><stop offset=".72" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#fff" stop-opacity=".22"/></radialGradient><filter id="bl" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="8"/></filter><filter id="bl2" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="26"/></filter></defs>
+<g id="rg"><circle r="300" fill="none" stroke="rgba(255,255,255,.06)" stroke-width="1.5" stroke-dasharray="3 11"/><g id="glow" filter="url(#bl)" opacity=".55"></g><g id="bins"></g>
+<circle id="halo" r="112" fill="#fff" opacity=".1" filter="url(#bl2)"/><circle id="coreC" r="104" fill="url(#core)"/><circle id="sheenC" r="104" fill="url(#sheen)"/><circle id="rimC" r="104" fill="none" stroke="rgba(255,255,255,.28)" stroke-width="1"/></g>`;
+for (let i = 0; i < NB; i++) {
+  const a = i / NB * 2 * Math.PI - Math.PI / 2, d = Math.atan2(Math.sin(a - ARC), Math.cos(a - ARC)), inr = Math.abs(d) < .8;
+  const L = inr ? 60 + 104 * Math.exp(-Math.pow(d / .45, 2)) + 18 * noise(i) : 22 + 26 * noise(i);
+  const col = i === head ? '#fff' : inr ? MINT : '#C9CDD6', op = i === head ? 1 : inr ? .92 : .3;
+  const mk = (g) => { const l = document.createElementNS(NS, 'line'); l.setAttribute('stroke', col); l.setAttribute('stroke-opacity', op); l.setAttribute('stroke-width', i === head ? 5 : 4); l.setAttribute('stroke-linecap', 'round'); $(g).appendChild(l); return l; };
+  BINS.push({ a, L, el: mk('bins'), gl: inr || i === head ? mk('glow') : null });
+}
+function drawRing(t, cx, cy, s, o, coreO = 1) {
+  $('rg').setAttribute('transform', `translate(${cx.toFixed(1)} ${cy.toFixed(1)}) rotate(${(t * 3).toFixed(2)}) scale(${s.toFixed(4)})`);
+  $('ring').style.opacity = o.toFixed(3);
+  BINS.forEach((b, i) => {
+    const g = eo(pr(t, .15 + i * .0115, .75 + i * .0115)) * (1 + .05 * Math.sin(t * 2.2 + i * .5));
+    const L = Math.max(.01, b.L * g);
+    const x1 = Math.cos(b.a) * R0, y1 = Math.sin(b.a) * R0, x2 = Math.cos(b.a) * (R0 + L), y2 = Math.sin(b.a) * (R0 + L);
+    for (const el of [b.el, b.gl]) if (el) { el.setAttribute('x1', x1.toFixed(2)); el.setAttribute('y1', y1.toFixed(2)); el.setAttribute('x2', x2.toFixed(2)); el.setAttribute('y2', y2.toFixed(2)); el.style.opacity = g > .02 ? 1 : 0; }
+  });
+  const c = eo(pr(t, .05, 1.1));
+  for (const id of ['coreC', 'sheenC', 'rimC']) { $(id).setAttribute('r', (104 * lerp(.4, 1, c)).toFixed(2)); $(id).style.opacity = (c * coreO).toFixed(3); }
+  $('halo').style.opacity = (.1 * c * coreO).toFixed(3);
+}
+
+// ---------- the small mark on the end card ----------
+(function mark(svg) {
+  const n = 28, a0 = 3, a1 = 12, hd = 8, r0 = 15.5;
+  let lines = '';
+  for (let i = 0; i < n; i++) {
+    const a = i / n * Math.PI * 2 - Math.PI / 2, inr = i >= a0 && i <= a1, L = inr ? 9 + 7 * noise(i) : 5 + 3 * noise(i);
+    lines += `<line x1="${(Math.cos(a) * r0).toFixed(2)}" y1="${(Math.sin(a) * r0).toFixed(2)}" x2="${(Math.cos(a) * (r0 + L)).toFixed(2)}" y2="${(Math.sin(a) * (r0 + L)).toFixed(2)}" stroke="${i === hd ? '#fff' : inr ? MINT : '#C9CDD6'}" stroke-opacity="${i === hd ? 1 : inr ? .92 : .36}" stroke-width="2.6" stroke-linecap="round"/>`;
+  }
+  svg.innerHTML = `<defs><radialGradient id="cm" cx=".34" cy=".28" r=".85"><stop offset="0" stop-color="#fff"/><stop offset=".42" stop-color="#C9CDD6"/><stop offset=".8" stop-color="#55585F"/><stop offset="1" stop-color="#1C1D20"/></radialGradient></defs>${lines}<circle r="11" fill="url(#cm)"/>`;
+})($('mark4'));
+
+// ---------- scene 2 chips ----------
+const CHECK = `<svg viewBox="0 0 24 24" fill="none" stroke="${MINT}" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>`;
+const CHIPS = ['Scores every pool, every minute', 'Moves only when fees beat 1.5× the cost', 'Exits when the trend breaks', 'Your keys never leave your wallet'];
+$('chips').innerHTML = CHIPS.map((c, i) => `<div class="chip" id="chip${i}"><b>${CHECK}</b>${c}</div>`).join('');
+
+function render(t, frame = 0) {
+  $('blobA').style.left = (960 - 450 + 240 * Math.sin(t * .23)) + 'px'; $('blobA').style.top = (-260 + 80 * Math.cos(t * .19)) + 'px';
+  $('blobB').style.left = (1260 - 400 + 220 * Math.cos(t * .21)) + 'px'; $('blobB').style.top = (520 + 110 * Math.sin(t * .25)) + 'px';
+  $('grain').style.transform = `translate(${(frame * 37) % 100 - 50}px,${(frame * 53) % 100 - 50}px)`;
+
+  // The ring: centre stage, then aside for scene 2, then a faint backdrop.
+  const m2 = eio(pr(t, 3.55, 4.35)), m3 = eio(pr(t, 8.2, 9.0));
+  const cx = lerp(lerp(960, 470, m2), 960, m3), cy = lerp(lerp(445, 540, m2), 540, m3);
+  const sc = lerp(lerp(1, 1.08, m2), 1.9, m3);
+  // As a backdrop (scenes 3 and 4) only the bins stay: the core would sit right behind the words.
+  drawRing(t, cx, cy, sc, lerp(1, .16, m3), 1 - m3);
+
+  // 1
+  { const o = env(t, 0, 3.9, .01, .5); $('s1').style.opacity = o;
+    rise($('k1'), t, 1.25, .6, 18, 8); rise($('h1'), t, 1.55, .8, 40, 16);
+    $('dot1').style.transform = `scale(${(1 + .35 * Math.max(0, Math.sin(t * 5))).toFixed(3)})`; }
+  // 2
+  { const o = env(t, 3.75, 8.55, .3, .45); $('s2').style.opacity = o;
+    rise($('k2'), t, 3.95, .6, 18, 8); rise($('h2'), t, 4.1, .8, 34, 14);
+    CHIPS.forEach((_, i) => rise($('chip' + i), t, 4.75 + i * .38, .7, 26, 10)); }
+  // 3
+  { const o = env(t, 8.45, 12.45, .3, .45); $('s3').style.opacity = o;
+    rise($('k3'), t, 8.6, .6, 18, 8); rise($('h3'), t, 8.75, .85, 46, 18); rise($('sub3'), t, 9.35, .7, 22, 8); rise($('fx3'), t, 9.85, .8, 30, 10); }
+  // 4
+  { const o = env(t, 12.2, 99, .35, .1); $('s4').style.opacity = o;
+    rise($('lock4'), t, 12.3, .7, 22, 10); rise($('h4'), t, 12.5, .85, 40, 16);
+    rise($('p4'), t, 13.1, .7, 20, 8); rise($('fine4'), t, 13.6, .7, 10, 4);
+    const end = pr(t, 16.2, 17); document.body.style.filter = end > 0 ? `brightness(${(1 - .85 * end).toFixed(3)})` : 'none'; }
+}
+window.render = render;
+window.DURATION = 17;
+render(0);
+</script>
+</body></html>

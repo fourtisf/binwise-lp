@@ -14,3 +14,8 @@ Needs Node, Playwright's Chromium and ffmpeg. Fonts: Space Grotesk and Inter (SI
 Figures in the video are examples and say so on screen; keep those labels.
 
 `live/` makes a different video: a recording of the real site with captions and its own soundtrack (see its README).
+
+`token/token-live.html` is "The Kovra token is live" (17 s), drawn the same way as the intro:
+`node video.mjs silent.mp4 60 17 token/token-live.html`, then `python3 live/music_live.py cues.json music.wav` with
+`{"total": 17, "cuts": [3.75, 8.45, 12.2], "outro": 12.25}` and the same ffmpeg line. It shows no contract address
+(the owner's call). The rendered video is `token/kovra-token-live.mp4`.
