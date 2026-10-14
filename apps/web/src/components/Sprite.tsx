@@ -6,6 +6,7 @@ export function Sprite() {
       <symbol id="i-pools" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="M4 16V9M8 16V5M12 16v-8M16 16V3"/></symbol>
       <symbol id="i-pos" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><circle cx="10" cy="10" r="7"/><path d="M10 3v7l5 4"/></symbol>
       <symbol id="i-strat" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="M3 6h8M15 6h2M3 14h2M9 14h8"/><circle cx="13" cy="6" r="2"/><circle cx="7" cy="14" r="2"/></symbol>
+      <symbol id="i-people" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><circle cx="7.5" cy="7" r="2.8"/><path d="M2.5 16.5c.5-2.9 2.5-4.5 5-4.5s4.5 1.6 5 4.5"/><circle cx="14" cy="6.5" r="2.2"/><path d="M14 11c1.9.1 3.2 1.4 3.6 3.5"/></symbol>
       <symbol id="i-act" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M2.5 10h3l2.5-6 4 12 2.5-6h3"/></symbol>
       <symbol id="i-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3.5 8.5l3 3 6-7"/></symbol>
       <symbol id="i-spin" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M8 2a6 6 0 1 1-6 6"/></symbol>
@@ -35,7 +36,7 @@ export function Sprite() {
 export type IconId =
   | 'i-home' | 'i-pools' | 'i-pos' | 'i-strat' | 'i-act' | 'i-check' | 'i-spin' | 'i-dot'
   | 'i-plus' | 'i-swap' | 'i-exit' | 'i-comp' | 'i-search' | 'i-x' | 'i-pause' | 'i-play' | 'i-chev'
-  | 'i-updown' | 'i-lock' | 'i-bolt' | 'i-copy' | 'i-ext' | 'i-send' | 'i-down' | 'i-wallet' | 'i-xlogo';
+  | 'i-updown' | 'i-lock' | 'i-bolt' | 'i-copy' | 'i-ext' | 'i-send' | 'i-down' | 'i-wallet' | 'i-xlogo' | 'i-people';
 
 export function Icon({ id, className }: { id: IconId; className?: string }) {
   return (

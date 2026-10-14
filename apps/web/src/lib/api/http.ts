@@ -62,6 +62,7 @@ export function createHttpClient(api: string, ws: string): KovraClient {
     portfolio: () => req(`${v()}/portfolio`),
     setPublic: (enabled, showAmounts) => req(`${v()}/public`, { method: 'PUT', body: { enabled, ...(showAmounts !== undefined ? { showAmounts } : {}) } }),
     publicPortfolio: (id) => req(`/public/${encodeURIComponent(id)}`),
+    publicList: () => req('/public'),
     balance: (poolId) => req(`${v()}/balance${poolId ? `?pool=${encodeURIComponent(poolId)}` : ''}`),
     performance: (range) => req(`${v()}/performance?range=${range}`),
     pools: () => req(`/pools?vault=${vault}`),

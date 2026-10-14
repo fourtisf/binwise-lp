@@ -368,6 +368,47 @@ footer{margin-top:120px;border-top:1px solid var(--line);padding:56px 0 40px}
 .pub-link{display:flex;justify-content:space-between;align-items:center;gap:10px 16px;flex-wrap:wrap;margin-top:14px;padding:12px 12px 12px 18px;border-radius:18px;border:1px solid var(--line2);background:rgba(255,255,255,.025)}
 .pub-link code{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:13.5px;color:var(--soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;user-select:all}
 .pub-link>div{display:flex;gap:8px;flex-wrap:wrap}
+/* Public list: every LP who shares their results, ranked by net vs hold */
+.ph p a,.lp-join p a{color:var(--text);text-decoration:underline;text-underline-offset:3px}
+.lp-sum{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));padding:8px 0;margin-bottom:16px;background:radial-gradient(520px 220px at 0% 0%,rgba(var(--up-rgb),.07),transparent 70%),linear-gradient(180deg,var(--card2),var(--card))}
+.lp-sum>div{display:flex;flex-direction:column;gap:6px;padding:18px 26px}
+.lp-sum>div+div{border-left:1px solid var(--line)}
+.lp-sum small{font-size:12.5px;color:var(--muted)}
+.lp-sum b{font-family:var(--font-display);font-size:34px;font-weight:600;letter-spacing:-.035em;line-height:1.05}
+.lp-sum span{font-size:12.5px;color:var(--dim)}
+.lp-list{padding:6px}
+.lp-row{display:grid;grid-template-columns:40px minmax(170px,1.25fr) minmax(150px,1.1fr) repeat(4,minmax(96px,.8fr)) 16px;grid-template-areas:"rk id pools nvh val fees pos go";align-items:center;gap:14px;padding:16px 18px;border-radius:18px;transition:background .15s}
+.lp-row+.lp-row{box-shadow:inset 0 1px 0 var(--line)}
+.lp-row:hover{background:rgba(255,255,255,.03)}
+.lp-row>svg{grid-area:go;width:16px;height:16px;color:var(--dim)}
+.lp-rk{grid-area:rk;color:var(--dim);font-family:var(--font-display);font-weight:500}
+.lp-id{grid-area:id;display:flex;align-items:center;gap:12px;min-width:0}
+.lp-id>span:last-child{display:flex;flex-direction:column;gap:3px;min-width:0}
+.lp-id b{font-family:var(--font-display);font-size:17px;font-weight:600;letter-spacing:-.02em}
+.lp-id small{font-size:12px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lp-av{flex:none;width:38px;height:38px;border-radius:50%;display:grid;place-items:center;font-family:var(--font-display);font-size:13px;font-weight:600;color:var(--bg);background:linear-gradient(145deg,var(--accent-hi),var(--accent) 55%,var(--muted));box-shadow:0 0 0 3px var(--card),0 0 0 4px rgba(var(--up-rgb),.45)}
+.lp-pools{grid-area:pools;min-width:0;font-size:13.5px}
+.lp-pools .pairname{white-space:nowrap}
+.lp-pools small{font-size:12px;color:var(--dim);font-weight:400}
+.lp-stat{display:flex;flex-direction:column;gap:4px;min-width:0;text-align:right}
+.lp-stat small{font-size:11.5px;color:var(--dim)}
+.lp-stat b{font-size:14.5px;font-weight:500;white-space:nowrap}
+.lp-stat em,.lp-stat em i{font-style:normal;color:var(--dim);font-weight:400}
+.lp-nvh{grid-area:nvh}
+.lp-nvh b{font-family:var(--font-display);font-size:20px;font-weight:600;letter-spacing:-.02em}
+.lp-val{grid-area:val}
+.lp-fees{grid-area:fees}
+.lp-pos{grid-area:pos}
+.lp-empty{padding:48px 22px;text-align:center}
+.lp-empty h3{font-size:18px;font-weight:600;letter-spacing:-.02em}
+.lp-empty p{margin:8px auto 0;max-width:52ch;font-size:14px;color:var(--muted)}
+.lp-join{display:flex;justify-content:space-between;align-items:center;gap:14px 24px;flex-wrap:wrap;margin-top:12px;padding:20px 22px}
+.lp-join h3{font-size:15px;font-weight:600;letter-spacing:-.02em}
+.lp-join p{font-size:13px;color:var(--muted);margin-top:3px;max-width:76ch}
+.lbl-sm{display:none}
+.pub-back{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);margin:22px 0 -6px}
+.pub-back:hover{color:var(--text)}
+.pub-back svg{width:14px;height:14px;transform:rotate(180deg)}
 .amini{display:none;align-items:center;gap:6px;height:38px;padding:0 10px 0 5px;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.025);font-size:12.5px;color:var(--muted)}
 .amini .orb{width:26px;height:26px;border-radius:50%}
 .amini .orb::after{border-radius:50%;inset:-3px}
@@ -697,7 +738,7 @@ html{scrollbar-color:#26262A transparent}
   .deck-tabs{display:none}
   .deckbar{grid-template-columns:auto 1fr}
   .deck{padding-bottom:120px}
-  .bnav{display:grid;grid-template-columns:repeat(5,1fr);position:fixed;left:50%;transform:translateX(-50%);width:min(560px,calc(100% - 24px));bottom:calc(12px + env(safe-area-inset-bottom));z-index:35;background:rgba(14,14,16,.82);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border:1px solid var(--line2);border-radius:999px;padding:6px;box-shadow:0 20px 50px -20px rgba(0,0,0,.9),inset 0 1px 0 rgba(255,255,255,.05)}
+  .bnav{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;position:fixed;left:50%;transform:translateX(-50%);width:min(560px,calc(100% - 24px));bottom:calc(12px + env(safe-area-inset-bottom));z-index:35;background:rgba(14,14,16,.82);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border:1px solid var(--line2);border-radius:999px;padding:6px;box-shadow:0 20px 50px -20px rgba(0,0,0,.9),inset 0 1px 0 rgba(255,255,255,.05)}
   .bnav button,.bnav a{display:flex;flex-direction:column;align-items:center;gap:3px;font-size:10.5px;font-weight:500;color:var(--dim);padding:7px 0;border-radius:999px}
   .bnav button svg,.bnav a svg{width:20px;height:20px}
   .bnav button[aria-current=page],.bnav a[aria-current=page]{color:#050506;background:linear-gradient(180deg,#FFFFFF,#DADCE1)}
@@ -706,6 +747,11 @@ html{scrollbar-color:#26262A transparent}
   .toast{bottom:calc(92px + env(safe-area-inset-bottom))}
 }
 @media (max-width:860px){
+  .lp-row{grid-template-columns:22px repeat(3,minmax(0,1fr));grid-template-areas:"rk id id nvh" ". pools pools pools" ". val fees pos";gap:10px 12px;padding:16px 14px}
+  .lp-row>svg{display:none}
+  .lp-val,.lp-fees,.lp-pos{text-align:left}
+  .lp-pos em{display:block;font-size:12px;margin-top:2px}
+  .lp-pos em i{display:none}
   .nav-links,.nav-r .btn-dark{display:none}
   .steps3,.plans{grid-template-columns:1fr}
   .st .n{margin-bottom:20px}
@@ -762,6 +808,7 @@ html{scrollbar-color:#26262A transparent}
   .final .ctas .btn{flex:1}
   .deckbar .acts .modeseg{display:none}
   .deckbar .acts .btn .lbl{display:none}
+  .deckbar .acts .btn .lbl-sm{display:inline}
   .deck-search{width:38px;padding:0;justify-content:center}
   .deck-search .lbl,.deck-search .kbd{display:none}
   .deck-brand{padding-right:8px}
@@ -782,6 +829,9 @@ html{scrollbar-color:#26262A transparent}
   .pub-share{width:100%}
   .pub-share .btn{flex:1}
   .pub-wide{display:none}
+  .lp-sum>div{padding:14px 14px;justify-content:space-between}
+  .lp-sum b{font-size:24px}
+  .lp-sum span{display:none}
   .pub .tbl th,.pub .tbl td{padding-left:6px;padding-right:6px}
   .pub .tbl th:first-child,.pub .tbl td:first-child{padding-left:0}
   .pub .tbl th:nth-child(3),.pub .tbl td:nth-child(3){padding-right:0}

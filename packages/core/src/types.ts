@@ -246,6 +246,8 @@ export interface PortfolioShare {
  */
 export interface PublicPortfolio {
   name: string;
+  /** A made-up tag from the public id ("LP 3F9A"), the same on the list; never anything from the owner's wallet */
+  label: string;
   mode: VaultMode;
   /** Unix ms the vault was created */
   since: number;
@@ -268,6 +270,34 @@ export interface PublicPortfolio {
   /** Vault vs hold over the last 30 days; both indexed to 100 at the first point when amounts are hidden */
   performance: PerformanceSeries;
   /** Unix ms of the agent's last record for this vault */
+  updatedAt: number;
+}
+
+/** One LP on the public list: a mainnet vault that added liquidity and whose owner made its portfolio public. */
+export interface PublicListRow {
+  /** The id in /p/<publicId> */
+  publicId: string;
+  /** A made-up tag from the public id ("LP 3F9A"); never anything from the owner's wallet */
+  label: string;
+  since: number;
+  showAmounts: boolean;
+  value: number | null;
+  netVsHold: number | null;
+  fees: number | null;
+  /** Open positions now, and how many of them are in range */
+  open: number;
+  inRange: number;
+  closedCount: number;
+  beatHold: number;
+  /** Pools of the open positions (up to 4) */
+  pools: { pair: string; tokenA: TokenRef; tokenB: TokenRef }[];
+  /** Unix ms of the agent's last deploy, rebalance, exit or compound */
+  lastMoveAt: number | null;
+}
+
+/** Every public LP, best net vs hold first. */
+export interface PublicList {
+  rows: PublicListRow[];
   updatedAt: number;
 }
 

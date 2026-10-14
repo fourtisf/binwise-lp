@@ -27,7 +27,7 @@ export function TopNav({ current }: { current: PageKey }) {
       <nav className="deck-tabs" aria-label="App">
         {PAGES.map((p) => (
           <Link className="dtab" key={p.key} href={p.href} aria-current={p.key === current ? 'page' : undefined}>
-            {p.title}
+            {p.nav ?? p.title}
             {counts[p.key] ? <span className="cnt">{counts[p.key]}</span> : null}
           </Link>
         ))}
@@ -65,7 +65,8 @@ export function TopNav({ current }: { current: PageKey }) {
         )}
         {!WALLET_LOGIN ? null : api && !me ? (
           <button className="btn btn-white btn-sm" onClick={openConnect}>
-            Connect wallet
+            <span className="lbl">Connect wallet</span>
+            <span className="lbl-sm">Connect</span>
           </button>
         ) : (
           <AccountMenu />

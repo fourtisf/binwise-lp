@@ -464,6 +464,7 @@ describe('public portfolio', () => {
     expect(res.statusCode).toBe(200);
     const pub = res.json();
     expect(pub).toMatchObject({ name: 'Main vault', mode: 'paper', showAmounts: true, closedCount: 1, beatHold: 1 });
+    expect(pub.label).toMatch(/^LP [0-9A-F]{4}$/);
     expect(pub.value).toBeCloseTo(1805);
     expect(pub.netVsHold).toBeCloseTo((1805 / 1500 - 1) * 100);
     expect(pub.fees).toBeCloseTo(12);
@@ -491,6 +492,71 @@ describe('public portfolio', () => {
     expect((await app.inject({ method: 'PUT', url: `/vaults/${id}/public`, headers, payload: { enabled: true } })).json().publicId).toBe(on.publicId);
     expect((await app.inject({ url: '/public/nope' })).statusCode).toBe(404);
     expect((await app.inject({ url: '/public/AAAAAAAAAAAAAA' })).statusCode).toBe(404);
+  });
+
+  it('lists the mainnet LPs who made their portfolio public, best net vs hold first, with the page figures', async () => {
+    await db.pool.create({ data: { id: 'PUB2', name: 'SOL-USDC', tokenA: 'SOL', tokenB: 'USDC', mintA: SOL, mintB: USDC, binStep: 10, baseFee: 0.1 } });
+    const base = { poolId: 'PUB2', binStep: 10, lowerBin: 0, upperBin: 10, shape: 'spot' as const, entryAmountA: 1, entryAmountB: 150, entryPriceA: 150, entryPriceB: 1, entryValueUsd: 300, price: 150 };
+    // A vault with 10 SOL deposited; `lp` adds an open position worth `worth` (+5 unclaimed fees) and one closed one.
+    const vault = async (ip: string, o: { worth?: number; live?: boolean; share?: boolean | { showAmounts: boolean } } = {}) => {
+      const { w, headers } = await signIn(wallet(), ip);
+      const id = (await app.inject({ url: '/me', headers })).json().vaults[0].id as string;
+      await app.inject({ method: 'POST', url: `/vaults/${id}/deposit`, headers, payload: { token: 'SOL', amount: 10 } });
+      if (o.worth !== undefined) {
+        await db.position.create({ data: { ...base, vaultId: id, valueUsd: o.worth, feesUnclaimedUsd: 5, netVsHold: 1, inRange: false } });
+        await db.position.create({ data: { ...base, vaultId: id, valueUsd: 290, feesClaimedUsd: 7, netVsHold: -1, status: 'closed', closedAt: new Date() } });
+        await db.decision.create({ data: { vaultId: id, poolId: 'PUB2', type: 'deploy', title: 'Deployed $300 to SOL / USDC', reason: 'Score 71.', inputs: {}, txSig: 'SigListTest222' } });
+      }
+      if (o.live !== false) await db.vault.update({ where: { id }, data: { mode: 'live' } });
+      let publicId: string | null = null;
+      if (o.share) {
+        const showAmounts = typeof o.share === 'object' ? o.share.showAmounts : true;
+        publicId = (await app.inject({ method: 'PUT', url: `/vaults/${id}/public`, headers, payload: { enabled: true, showAmounts } })).json().publicId;
+      }
+      return { w, id, publicId };
+    };
+    const ahead = await vault('10.9.8.1', { worth: 595, share: true }); // 1500 idle + 600 → +40% vs 1500 held
+    const behind = await vault('10.9.8.2', { worth: 145, share: { showAmounts: false } }); // 1500 + 150 → +10%
+    const quiet = await vault('10.9.8.3', { worth: 300 }); // never switched on
+    const empty = await vault('10.9.8.4', { share: true }); // public, but never added LP
+    const paper = await vault('10.9.8.5', { worth: 300, live: false, share: true }); // simulated funds
+
+    const res = await app.inject({ url: '/public' });
+    expect(res.statusCode).toBe(200);
+    const rows = res.json().rows as { publicId: string; label: string; [k: string]: unknown }[];
+    const ids = rows.map((r) => r.publicId);
+    expect(ids.indexOf(ahead.publicId!)).toBeGreaterThanOrEqual(0);
+    expect(ids.indexOf(ahead.publicId!)).toBeLessThan(ids.indexOf(behind.publicId!));
+    for (const out of [empty.publicId, paper.publicId]) expect(ids).not.toContain(out);
+    expect(rows).toHaveLength(2);
+
+    const top = rows.find((r) => r.publicId === ahead.publicId)!;
+    expect(top).toMatchObject({ showAmounts: true, fees: 12, open: 1, inRange: 0, closedCount: 1, beatHold: 0 });
+    expect(top.value).toBeCloseTo(2100);
+    expect(top.netVsHold).toBeCloseTo(40);
+    expect(top.pools).toEqual([expect.objectContaining({ pair: 'SOL / USDC' })]);
+    expect(typeof top.lastMoveAt).toBe('number');
+    // The same name and figures as the vault's own page.
+    const page = (await app.inject({ url: `/public/${ahead.publicId}` })).json();
+    expect(top.label).toBe(page.label);
+    expect(top.netVsHold).toBeCloseTo(page.netVsHold);
+    expect(top.value).toBeCloseTo(page.value);
+
+    const hidden = rows.find((r) => r.publicId === behind.publicId)!;
+    expect(hidden).toMatchObject({ showAmounts: false, value: null, fees: null });
+    expect(hidden.netVsHold).toBeCloseTo(10);
+
+    // Nothing that leads back to an owner: no wallets, vault ids or transactions.
+    for (const v of [ahead, behind, quiet, empty, paper]) {
+      expect(res.body).not.toContain(v.w.address);
+      expect(res.body).not.toContain(v.id);
+    }
+    expect(res.body).not.toContain('SigListTest222');
+
+    // Switched off: off the list.
+    const off = await signIn(ahead.w, '10.9.8.1');
+    await app.inject({ method: 'PUT', url: `/vaults/${ahead.id}/public`, headers: off.headers, payload: { enabled: false } });
+    expect((await app.inject({ url: '/public' })).json().rows.map((r: { publicId: string }) => r.publicId)).toEqual([behind.publicId]);
   });
 });
 

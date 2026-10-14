@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useState } from 'react';
 import { BRAND } from '@kovra/core/brand';
 import type { PortfolioShare } from '@kovra/core';
@@ -39,9 +40,12 @@ export function PublicShare({ share, onChange }: { share: PortfolioShare; onChan
   return (
     <div className="panel card" id="pfPublic" style={{ marginTop: 12 }}>
       <div className="ph" style={{ alignItems: 'center', marginBottom: share.enabled ? 16 : 0 }}>
-        <div>
+        <div style={{ flex: '1 1 320px' }}>
           <h3>Public portfolio</h3>
-          <p>A read-only page anyone can open: net vs hold, positions and the agent&apos;s moves. Never your wallet address or what else your wallet holds.</p>
+          <p>
+            Puts your vault on the <Link href="/app/public">Public</Link> list and gives it a read-only page anyone can open, under a made-up name: net vs
+            hold, positions and the agent&apos;s moves. Never your wallet address or what else your wallet holds.
+          </p>
         </div>
         <Switch label="Public page" checked={share.enabled} onChange={(v) => void set(v)} />
       </div>

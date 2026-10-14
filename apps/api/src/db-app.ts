@@ -4,7 +4,7 @@ import rateLimit from '@fastify/rate-limit';
 import websocket from '@fastify/websocket';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import type { Redis } from 'ioredis';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { Connection, PublicKey } from '@solana/web3.js';
 import {
   BRAND,
@@ -32,6 +32,8 @@ import {
   type Portfolio,
   type PortfolioHolding,
   type PortfolioShare,
+  type PublicList,
+  type PublicListRow,
   type PublicPortfolio,
   type StreamEvent,
   type TokenRef,
@@ -770,6 +772,14 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     return shareOf(saved);
   });
 
+  /** How the public names an LP: a tag made from the random public id, so nothing leads back to the owner's wallet. */
+  const alias = (publicId: string) => `LP ${createHash('sha256').update(publicId).digest('hex').slice(0, 4).toUpperCase()}`;
+  /** The agent's moves a public page shows: no deposits or withdrawals (those are the owner's own money). */
+  const MOVES = {
+    type: { in: ['deploy', 'rebalance', 'exit', 'compound'] as DecisionType[] },
+    NOT: [{ title: { startsWith: 'Deposited' } }, { title: { startsWith: 'Withdrew' } }],
+  };
+
   /** Dollar amounts and token amounts out of a sentence, for a page whose owner hides amounts. */
   const maskAmounts = (text: string) =>
     text.replace(/[−-]?\$\s?\d[\d,]*(?:\.\d+)?(?:[KMB]\b)?/g, '$•••').replace(/\b\d[\d,]*(?:\.\d+)?(?=\s[A-Z][A-Z0-9]{1,9}\b)/g, '•••');
@@ -794,11 +804,7 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
       db.position.count({ where: { vaultId: vault.id, status: 'closed' } }),
       db.position.count({ where: { vaultId: vault.id, status: 'closed', netVsHold: { gt: 0 } } }),
       db.position.aggregate({ where: { vaultId: vault.id }, _sum: { feesClaimedUsd: true, feesUnclaimedUsd: true } }),
-      db.decision.findMany({
-        where: { vaultId: vault.id, type: { in: ['deploy', 'rebalance', 'exit', 'compound'] }, NOT: [{ title: { startsWith: 'Deposited' } }, { title: { startsWith: 'Withdrew' } }] },
-        orderBy: { ts: 'desc' },
-        take: 15,
-      }),
+      db.decision.findMany({ where: { vaultId: vault.id, ...MOVES }, orderBy: { ts: 'desc' }, take: 15 }),
       db.vaultSnapshot.findFirst({ where: { vaultId: vault.id }, orderBy: { ts: 'desc' }, select: { ts: true } }),
       performance(db, vault.id, 30),
     ]);
@@ -815,6 +821,7 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
     const latest = Math.max(lastSnap?.ts.getTime() ?? 0, acts[0]?.ts.getTime() ?? 0);
     return {
       name: vault.name,
+      label: alias(vault.publicId!),
       mode: vault.mode,
       since: vault.createdAt.getTime(),
       showAmounts: amounts,
@@ -842,6 +849,65 @@ export async function buildDbApp(o: DbAppOptions): Promise<FastifyInstance> {
       performance: amounts ? perf : { ...perf, vault: index(perf.vault), hold: index(perf.hold) },
       updatedAt: latest || Date.now(),
     };
+  });
+
+  /**
+   * The public list: every mainnet vault that added liquidity and whose owner made its portfolio public, best net vs
+   * hold first. The same figures as each vault's page (the agent's records at today's prices) and the same privacy:
+   * a made-up tag instead of a wallet, no vault ids or transactions, and no dollar amounts for owners who hide them.
+   */
+  app.get('/public', async (): Promise<PublicList> => {
+    const vaults = await db.vault.findMany({
+      where: { publicOn: true, publicId: { not: null }, isDemo: false, mode: 'live', positions: { some: {} } },
+      orderBy: { createdAt: 'asc' },
+      take: 500,
+    });
+    const ids = vaults.map((v) => v.id);
+    const [open, closedBy, beatBy, feesBy, lastBy] = await Promise.all([
+      db.position.findMany({ where: { vaultId: { in: ids }, status: 'open' }, include: { pool: true }, orderBy: { openedAt: 'asc' } }),
+      db.position.groupBy({ by: ['vaultId'], where: { vaultId: { in: ids }, status: 'closed' }, _count: { _all: true } }),
+      db.position.groupBy({ by: ['vaultId'], where: { vaultId: { in: ids }, status: 'closed', netVsHold: { gt: 0 } }, _count: { _all: true } }),
+      db.position.groupBy({ by: ['vaultId'], where: { vaultId: { in: ids } }, _sum: { feesClaimedUsd: true, feesUnclaimedUsd: true } }),
+      db.decision.groupBy({ by: ['vaultId'], where: { vaultId: { in: ids }, ...MOVES }, _max: { ts: true } }),
+    ]);
+    const amountsOf = (j: unknown) => j as Record<string, number>;
+    const info = await tokenInfo([...new Set(vaults.flatMap((v) => [...Object.keys(amountsOf(v.cash)), ...Object.keys(amountsOf(v.deposits))]))]);
+    const priced = (amounts: Record<string, number>, skipDust = false) =>
+      Object.entries(amounts).reduce((sum, [m, a]) => sum + (skipDust && a <= 1e-12 ? 0 : a * (info.get(m)?.priceUsd ?? 0)), 0);
+    const tokens = await tokenMap(db, open.flatMap((p) => [p.pool.mintA, p.pool.mintB]));
+    const by = <T extends { vaultId: string }>(rows: T[]) => new Map(rows.map((r) => [r.vaultId, r]));
+    const [closedMap, beatMap, feesMap, lastMap] = [by(closedBy), by(beatBy), by(feesBy), by(lastBy)];
+    const rows = vaults.map((v): PublicListRow => {
+      const mine = open.filter((p) => p.vaultId === v.id);
+      // The same sums as the vault's own page: idle funds (no dust) + open positions, against the deposits held.
+      const value = priced(amountsOf(v.cash), true) + mine.reduce((sum, p) => sum + p.valueUsd + p.feesUnclaimedUsd, 0);
+      const holdValue = priced(amountsOf(v.deposits));
+      const fees = feesMap.get(v.id)?._sum;
+      const usd = (n: number) => (v.publicAmounts ? n : null);
+      return {
+        publicId: v.publicId!,
+        label: alias(v.publicId!),
+        since: v.createdAt.getTime(),
+        showAmounts: v.publicAmounts,
+        value: usd(value),
+        netVsHold: holdValue > 0 ? (value / holdValue - 1) * 100 : null,
+        fees: usd((fees?.feesClaimedUsd ?? 0) + (fees?.feesUnclaimedUsd ?? 0)),
+        open: mine.length,
+        inRange: mine.filter((p) => p.inRange).length,
+        closedCount: closedMap.get(v.id)?._count._all ?? 0,
+        beatHold: beatMap.get(v.id)?._count._all ?? 0,
+        pools: mine.slice(0, 4).map((p) => ({
+          pair: `${p.pool.tokenA} / ${p.pool.tokenB}`,
+          tokenA: tokenRef(p.pool.tokenA, tokens.get(p.pool.mintA)),
+          tokenB: tokenRef(p.pool.tokenB, tokens.get(p.pool.mintB)),
+        })),
+        lastMoveAt: lastMap.get(v.id)?._max.ts?.getTime() ?? null,
+      };
+    });
+    // Best net vs hold first; owners with no recorded deposit yet go last.
+    const rank = (r: PublicListRow) => r.netVsHold ?? -Infinity;
+    rows.sort((a, b) => (rank(a) === rank(b) ? a.since - b.since : rank(b) > rank(a) ? 1 : -1));
+    return { rows, updatedAt: Date.now() };
   });
 
   app.get<VP & { Querystring: { range?: string } }>('/vaults/:id/performance', async (req) => {

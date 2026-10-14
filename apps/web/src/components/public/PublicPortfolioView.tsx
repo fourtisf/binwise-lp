@@ -132,6 +132,11 @@ export function PublicPortfolioView({ id }: { id: string }) {
                   ? 'Its owner switched the public page off, or the link is wrong.'
                   : 'We could not reach the server. Try again in a moment.'}
             </p>
+            {state !== 'loading' && (
+              <Link className="btn btn-dark btn-sm" href="/app/public" style={{ marginTop: 20 }}>
+                See all public portfolios
+              </Link>
+            )}
           </div>
         </div>
       </div>
@@ -142,14 +147,18 @@ export function PublicPortfolioView({ id }: { id: string }) {
     <div className="pub">
       {bar}
       <div className="pubwrap">
+        <Link className="pub-back" href="/app/public">
+          <Icon id="i-chev" />
+          All public portfolios
+        </Link>
         <div className="phead">
           <div className="phead-t">
             <span className="kicker">
               <i className={p.mode === 'live' ? undefined : 'paper'}></i>
               Public portfolio · {p.mode === 'live' ? 'Mainnet, real funds' : 'Paper, simulated funds'} · since {day(p.since)}
             </span>
-            <h1>{p.name}</h1>
-            <p>A {BRAND} vault, shared by its owner. Every number comes from the agent&apos;s own records.</p>
+            <h1>{p.label}</h1>
+            <p>An LP on {BRAND}, shared by its owner. Every number comes from the agent&apos;s own records.</p>
           </div>
           <div className="pub-share">
             <button className="btn btn-dark btn-sm" onClick={() => void copy()}>

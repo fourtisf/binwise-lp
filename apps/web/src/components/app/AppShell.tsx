@@ -57,7 +57,7 @@ function Shell({ children }: { children: ReactNode }) {
           {PAGES.map((p) => (
             <Link key={p.key} href={p.href} aria-current={p.key === page.key ? 'page' : undefined}>
               <Icon id={p.icon} />
-              {p.title}
+              {p.nav ?? p.title}
             </Link>
           ))}
         </nav>

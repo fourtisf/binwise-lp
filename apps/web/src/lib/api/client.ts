@@ -16,6 +16,7 @@ import type {
   PortfolioShare,
   PositionView,
   Proposal,
+  PublicList,
   PublicPortfolio,
   StrategySettings,
   StreamEvent,
@@ -94,6 +95,8 @@ export interface KovraClient {
   setPublic(enabled: boolean, showAmounts?: boolean): Promise<PortfolioShare>;
   /** A vault's public page, by its public id: no sign-in. */
   publicPortfolio(publicId: string): Promise<PublicPortfolio>;
+  /** Every LP who made their portfolio public: no sign-in. */
+  publicList(): Promise<PublicList>;
   /** The vault's idle funds; with a pool, the most Add LP puts into it now. */
   balance(poolId?: string): Promise<VaultBalance>;
   performance(range: PerformanceRange): Promise<PerformanceSeries>;

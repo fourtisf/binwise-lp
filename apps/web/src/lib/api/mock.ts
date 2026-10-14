@@ -33,6 +33,7 @@ export function createMockClient(): KovraClient {
     portfolio: unsupported,
     setPublic: unsupported,
     publicPortfolio: unsupported,
+    publicList: unsupported,
     balance: unsupported,
     performance: (range) => call(() => engine.getPerformance(range)),
     pools: () => call(() => engine.getPools()),

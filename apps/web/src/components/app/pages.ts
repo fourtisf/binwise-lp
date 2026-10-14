@@ -1,13 +1,22 @@
 import type { IconId } from '../Sprite';
 
-export type PageKey = 'overview' | 'pools' | 'positions' | 'strategy' | 'activity' | 'report' | 'portfolio';
+export type PageKey = 'overview' | 'pools' | 'positions' | 'strategy' | 'activity' | 'public' | 'report' | 'portfolio';
 
-export const PAGES: { key: PageKey; href: string; icon: IconId; title: string; sub: string }[] = [
+/** `nav`: a shorter name for the tabs, when the page title is long. */
+export const PAGES: { key: PageKey; href: string; icon: IconId; title: string; nav?: string; sub: string }[] = [
   { key: 'overview', href: '/app', icon: 'i-home', title: 'Overview', sub: 'Your vault and what the agent is doing right now.' },
   { key: 'pools', href: '/app/pools', icon: 'i-pools', title: 'Pools', sub: 'Every pool the agent tracks, ranked by its score.' },
   { key: 'positions', href: '/app/positions', icon: 'i-pos', title: 'Positions', sub: 'Your open liquidity, live.' },
   { key: 'strategy', href: '/app/strategy', icon: 'i-strat', title: 'Strategy', sub: 'Set the limits. The agent works inside them.' },
   { key: 'activity', href: '/app/activity', icon: 'i-act', title: 'Activity', sub: 'Every action the agent took, and why.' },
+  {
+    key: 'public',
+    href: '/app/public',
+    icon: 'i-people',
+    title: 'Public portfolios',
+    nav: 'Public',
+    sub: 'LPs who share their results, ranked by how they did against simply holding.',
+  },
 ];
 
 /** Pages reachable from ⌘K (and the account menu) but not shown in the navigation. */
