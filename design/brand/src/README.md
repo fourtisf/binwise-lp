@@ -3,6 +3,8 @@
 - `brandlib.py` draws the three X headers (`python3 brandlib.py` writes `a-skyline.html`, `b-horizon.html`, `c-monolith.html`)
   and holds the shared pieces (the Bin Ring mark, the pills).
 - `x-posts.py` draws the "How it works" and "Everything Kovra does" post images.
+- `x-article.py` draws the X Article cover "Judged by one number" (5:2, 1500×600 at 2×); the article text is in
+  `../x-article-introducing-kovra.md`.
 - `x-how-it-works-steps.py` draws the four-part "How it works" thread (1/4 to 4/4); it needs the wallet logos and token icons from `apps/web/public` in `assets/`.
 
 Render any of the HTML files with Playwright (1500×500 headers, 1600×900 posts, at 2×). They read the fonts from
