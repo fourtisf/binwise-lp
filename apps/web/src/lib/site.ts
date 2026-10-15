@@ -31,7 +31,7 @@ export const X_HANDLE = '@kovrasol';
 export const X_URL = 'https://x.com/kovrasol';
 
 /** The Kovra token's contract address on Solana (pump.fun), from the owner, Oct 2026. */
-export const KOVRA_CA = 'DzBCYzmGHEVdh5HK8tFBgS72iNaCEqkSHDeCCTLSpump';
+export const KOVRA_CA = 'GLtn4KiZAh2yW3M8j1zfCSn8QreVo18Ws3vGA36spump';
 
 /**
  * The contract address the site shows, in full with a copy button. NEXT_PUBLIC_TOKEN_CA overrides it; when neither
